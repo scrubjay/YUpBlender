@@ -1,0 +1,97 @@
+OpenShadingLanguage 1.00
+# Compiled by oslc 1.14.7.0
+# options: -q -O2 -ID:/blender-build/blender/intern/cycles/kernel/osl/shaders -ID:/blender-build/blender/lib/windows_x64/osl/share/OSL/shaders -o D:/blender-build/build_windows_x64_vc17_Release/intern/cycles/kernel/osl/shaders/node_raycast.oso
+shader node_raycast
+param	point	Position	0 0 0		%read{16,16} %write{0,0} %derivs %initexpr
+param	normal	Direction	0 0 0		%read{16,16} %write{1,1} %derivs %initexpr
+param	float	Length	1		%read{2,16} %write{2147483647,-1}
+param	int	only_local	0		%read{13,13} %write{2147483647,-1}
+param	float	bump_filter_width	0		%read{4,11} %write{2147483647,-1}
+oparam	float	IsHit	0		%read{2147483647,-1} %write{18,18}
+oparam	float	SelfHit	0		%read{2147483647,-1} %write{19,19}
+oparam	float	HitDistance	0		%read{2147483647,-1} %write{2,20} %initexpr
+oparam	point	HitPosition	0 0 0		%read{2147483647,-1} %write{21,21}
+oparam	normal	HitNormal	0 0 0		%read{2147483647,-1} %write{22,22}
+global	point	P	%read{0,8} %write{2147483647,-1} %derivs
+global	normal	N	%read{1,1} %write{2147483647,-1} %derivs
+local	float	mindist	%read{16,16} %write{3,12}
+const	float	$const1	0		%read{3,4} %write{2147483647,-1}
+temp	int	$tmp1	%read{5,5} %write{4,4}
+temp	float	$tmp2	%read{11,11} %write{10,10}
+temp	float	$tmp3	%read{10,10} %write{7,7}
+temp	vector	$tmp4	%read{7,7} %write{6,6}
+temp	float	$tmp5	%read{10,10} %write{9,9}
+temp	vector	$tmp6	%read{9,9} %write{8,8}
+temp	float	$tmp7	%read{12,12} %write{11,11}
+const	float	$const2	1.10000002		%read{12,12} %write{2147483647,-1}
+temp	int	$tmp8	%read{17,17} %write{16,16}
+const	string	$const3	"maxdist"		%read{16,16} %write{2147483647,-1}
+const	string	$const4	"mindist"		%read{16,16} %write{2147483647,-1}
+const	string	$const5	"traceset"		%read{16,16} %write{2147483647,-1}
+temp	string	$tmp9	%read{16,16} %write{14,15}
+const	string	$const6	"__only_local__"		%read{14,14} %write{2147483647,-1}
+const	string	$const7	""		%read{15,15} %write{2147483647,-1}
+const	float	$const8	1		%read{18,18} %write{2147483647,-1}
+temp	int	$tmp10	%read{2147483647,-1} %write{19,19}
+const	string	$const9	"trace"		%read{19,22} %write{2147483647,-1}
+const	string	$const10	"hitself"		%read{19,19} %write{2147483647,-1}
+temp	int	$tmp11	%read{2147483647,-1} %write{20,20}
+const	string	$const11	"hitdist"		%read{20,20} %write{2147483647,-1}
+temp	int	$tmp12	%read{2147483647,-1} %write{21,21}
+const	string	$const12	"P"		%read{21,21} %write{2147483647,-1}
+temp	int	$tmp13	%read{2147483647,-1} %write{22,22}
+const	string	$const13	"N"		%read{22,22} %write{2147483647,-1}
+code Position
+# D:/blender-build/blender/intern/cycles/kernel/osl/shaders/node_raycast.osl:7
+# shader node_raycast(point Position = P,
+	assign		Position P 	%filename{"D:/blender-build/blender/intern/cycles/kernel/osl/shaders/node_raycast.osl"} %line{7} %argrw{"wr"}
+code Direction
+# D:/blender-build/blender/intern/cycles/kernel/osl/shaders/node_raycast.osl:8
+#                     normal Direction = N,
+	assign		Direction N 	%filename{"D:/blender-build/blender/intern/cycles/kernel/osl/shaders/node_raycast.osl"} %line{8} %argrw{"wr"}
+code HitDistance
+# D:/blender-build/blender/intern/cycles/kernel/osl/shaders/node_raycast.osl:14
+#                     output float HitDistance = Length,
+	assign		HitDistance Length 	%filename{"D:/blender-build/blender/intern/cycles/kernel/osl/shaders/node_raycast.osl"} %line{14} %argrw{"wr"}
+code ___main___
+# D:/blender-build/blender/intern/cycles/kernel/osl/shaders/node_raycast.osl:18
+#   float mindist = 0.0;
+	assign		mindist $const1 	%filename{"D:/blender-build/blender/intern/cycles/kernel/osl/shaders/node_raycast.osl"} %line{18} %argrw{"wr"}
+# D:/blender-build/blender/intern/cycles/kernel/osl/shaders/node_raycast.osl:19
+#   if (bump_filter_width > 0.0) {
+	gt		$tmp1 bump_filter_width $const1 	%line{19} %argrw{"wrr"}
+	if		$tmp1 13 13 	%argrw{"r"}
+# D:/blender-build/blender/intern/cycles/kernel/osl/shaders/node_raycast.osl:23
+#     mindist = bump_filter_width * max(length(Dx(P)), length(Dy(P))) * 1.1;
+	Dx		$tmp4 P 	%line{23} %argrw{"wr"} %argderivs{1}
+	length		$tmp3 $tmp4 	%argrw{"wr"}
+	Dy		$tmp6 P 	%argrw{"wr"} %argderivs{1}
+	length		$tmp5 $tmp6 	%argrw{"wr"}
+	max		$tmp2 $tmp3 $tmp5 	%argrw{"wrr"}
+	mul		$tmp7 bump_filter_width $tmp2 	%argrw{"wrr"}
+	mul		mindist $tmp7 $const2 	%argrw{"wrr"}
+# D:/blender-build/blender/intern/cycles/kernel/osl/shaders/node_raycast.osl:33
+#             only_local ? "__only_local__" : ""))
+	if		only_local 15 16 	%line{33} %argrw{"r"}
+	assign		$tmp9 $const6 	%argrw{"wr"}
+	assign		$tmp9 $const7 	%argrw{"wr"}
+# D:/blender-build/blender/intern/cycles/kernel/osl/shaders/node_raycast.osl:26
+#   if (trace(Position,
+	trace		$tmp8 Position Direction $const3 Length $const4 mindist $const5 $tmp9 	%line{26} %argrw{"wrrrrrrrr"} %argderivs{1,2}
+	if		$tmp8 23 23 	%argrw{"r"}
+# D:/blender-build/blender/intern/cycles/kernel/osl/shaders/node_raycast.osl:35
+#     IsHit = 1.0;
+	assign		IsHit $const8 	%line{35} %argrw{"wr"}
+# D:/blender-build/blender/intern/cycles/kernel/osl/shaders/node_raycast.osl:36
+#     getmessage("trace", "hitself", SelfHit);
+	getmessage	$tmp10 $const9 $const10 SelfHit 	%line{36} %argrw{"wrrw"}
+# D:/blender-build/blender/intern/cycles/kernel/osl/shaders/node_raycast.osl:37
+#     getmessage("trace", "hitdist", HitDistance);
+	getmessage	$tmp11 $const9 $const11 HitDistance 	%line{37} %argrw{"wrrw"}
+# D:/blender-build/blender/intern/cycles/kernel/osl/shaders/node_raycast.osl:38
+#     getmessage("trace", "P", HitPosition);
+	getmessage	$tmp12 $const9 $const12 HitPosition 	%line{38} %argrw{"wrrw"}
+# D:/blender-build/blender/intern/cycles/kernel/osl/shaders/node_raycast.osl:39
+#     getmessage("trace", "N", HitNormal);
+	getmessage	$tmp13 $const9 $const13 HitNormal 	%line{39} %argrw{"wrrw"}
+	end

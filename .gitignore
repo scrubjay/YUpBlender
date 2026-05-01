@@ -1,0 +1,30 @@
+# Build output
+build_windows_x64_vc17_Release/
+
+# Precompiled libraries (huge)
+blender/lib/
+
+# IDE and temp files
+.vs/
+*.user
+*.suo
+*.sln
+*.pdb
+*.ilk
+*.lib
+*.exp
+*.obj
+*.iobj
+*.ipdb
+
+# Keep the release folder but exclude debug info
+release/*.pdb
+release/*.ilk
+release/*.lib
+release/*.exp
+
+# Blender specific ignores from source
+blender/**/__pycache__/
+blender/**/*.py[cod]
+blender/doc/python_api/sphinx-out/
+blender/tests/data/
