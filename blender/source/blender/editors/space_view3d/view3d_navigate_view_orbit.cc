@@ -92,8 +92,8 @@ static wmOperatorStatus vieworbit_exec(bContext *C, wmOperator *op)
       angle = -angle;
     }
 
-    /* z-axis */
-    axis_angle_to_quat_single(quat_mul, 'Z', angle);
+    /* Y-up: orbit around Y axis. */
+    axis_angle_to_quat_single(quat_mul, 'Y', angle);
   }
   else {
     if (orbitdir == V3D_VIEW_STEPDOWN) {

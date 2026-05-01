@@ -253,12 +253,11 @@ static SpaceLink *view3d_create(const ScrArea * /*area*/, const Scene *scene)
   region->regiontype = RGN_TYPE_WINDOW;
 
   RegionView3D *rv3d = MEM_new<RegionView3D>("region view3d");
-  /* Y-up default: identity quaternion = camera at +Z looking toward -Z, Y is up.
-   * This is the natural "front" view in a Y-up coordinate system. */
-  rv3d->viewquat[0] = 1.0f;
-  rv3d->viewquat[1] = 0.0f;
-  rv3d->viewquat[2] = 0.0f;
-  rv3d->viewquat[3] = 0.0f;
+  /* Y-up default perspective: 3/4 view looking from +X, +Y, +Z towards origin. */
+  rv3d->viewquat[0] = 0.8204737f;
+  rv3d->viewquat[1] = 0.4247082f;
+  rv3d->viewquat[2] = 0.1759232f;
+  rv3d->viewquat[3] = 0.3398511f;
   rv3d->persp = RV3D_PERSP;
   rv3d->view = RV3D_VIEW_FRONT;
   rv3d->dist = 10.0;

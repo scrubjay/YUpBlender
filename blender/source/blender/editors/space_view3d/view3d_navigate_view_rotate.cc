@@ -60,7 +60,7 @@ static void viewrotate_apply_snap(ViewOpsData *vod)
   RegionView3D *rv3d = vod->rv3d;
 
   float viewquat_inv[4];
-  float zaxis[3] = {0, 0, 1};
+  float zaxis[3] = {0, 1, 0}; /* Y is up in Y-up system. */
   float zaxis_best[3];
   int x, y, z;
   bool found = false;

@@ -25,10 +25,12 @@ void main()
       out_color = theme.colors.grid_axis_x;
     }
     else if (flag_test(grid_flag, AXIS_Y) && grid::is_zero(vertex_out.pos.xz, 2e-6f)) {
-      out_color = theme.colors.grid_axis_y;
+      /* Y-up: Y axis (vertical) is now Blue (theme.colors.grid_axis_z). */
+      out_color = theme.colors.grid_axis_z;
     }
     else if (flag_test(grid_flag, AXIS_Z) && grid::is_zero(vertex_out.pos.xy, 2e-6f)) {
-      out_color = theme.colors.grid_axis_z;
+      /* Y-up: Z axis (horizontal floor) is now Green (theme.colors.grid_axis_y). */
+      out_color = theme.colors.grid_axis_y;
     }
   }
 
@@ -44,9 +46,9 @@ void main()
     float dist = length(V);
     V /= dist;
 
-    /* Add fade at steep angles for contents of the floor plane. */
-    if (vertex_out.pos.z == 0.0f) {
-      out_color.a *= 1.0f - pow3f(1.0f - abs(V.z));
+    /* Add fade at steep angles for contents of the floor plane (Y-up: XZ plane). */
+    if (vertex_out.pos.y == 0.0f) {
+      out_color.a *= 1.0f - pow3f(1.0f - abs(V.y));
     }
 
     /* Add fade towards camera clip plane. */
@@ -60,10 +62,10 @@ void main()
       out_color.a *= pow2f(length_fade);
     }
 
-    /* Add fade at steep angles for contents of the floor plane. */
-    if (flag_test(grid_flag, PLANE_XY)) {
+    /* Add fade at steep angles for contents of the floor plane (Y-up: XZ plane). */
+    if (flag_test(grid_flag, PLANE_XZ)) {
       float3 V = -drw_view_forward();
-      out_color.a *= 1.0f - pow3f(1.0f - abs(V.z));
+      out_color.a *= 1.0f - pow3f(1.0f - abs(V.y));
     }
   }
 

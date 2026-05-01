@@ -341,7 +341,8 @@ static void view3d_ndof_orbit(const wmNDOFMotionData &ndof,
     rv3d->ndof_rot_axis[1] = 0;
     rv3d->ndof_rot_axis[2] = 1;
 
-    axis_angle_to_quat_single(quat, 'Z', angle);
+    /* Y-up: orbit around Y. */
+    axis_angle_to_quat_single(quat, 'Y', angle);
     mul_qt_qtqt(rv3d->viewquat, rv3d->viewquat, quat);
   }
   else {

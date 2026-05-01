@@ -1196,7 +1196,8 @@ static int walkApply(bContext *C, WalkInfo *walk, bool is_confirm)
         x *= walk->mouse_speed;
 
         /* Rotate about the relative up vector */
-        axis_angle_to_quat_single(tmp_quat, 'Z', x);
+        /* Y-up: rotate around Y. */
+        axis_angle_to_quat_single(tmp_quat, 'Y', x);
         mul_qt_qtqt(rv3d->viewquat, rv3d->viewquat, tmp_quat);
         changed_viewquat = true;
       }
