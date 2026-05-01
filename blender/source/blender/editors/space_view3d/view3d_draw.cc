@@ -994,8 +994,8 @@ static void draw_view_axis(RegionView3D *rv3d, const rcti *rect)
     axis_pos[i][0] = startx + vec[0] * k;
     axis_pos[i][1] = starty + vec[1] * k;
 
-    /* get color of each axis - keeping default colors (Y=Green, Z=Blue)
-     * but we will swap labels so the vertical axis (Y) is labeled 'Z'. */
+    /* Y-up: keep default colors (X=Red, Y=Green, Z=Blue).
+     * In Y-up world, Y (Green) naturally points up - no color swap needed. */
     ui::theme::get_color_shade_3fv(TH_AXIS_X + i, bright, axis_col[i]); /* rgb */
     axis_col[i][3] = hypotf(vec[0], vec[1]);                            /* alpha */
   }
@@ -1029,9 +1029,8 @@ static void draw_view_axis(RegionView3D *rv3d, const rcti *rect)
   for (int axis_i = 0; axis_i < 3; axis_i++) {
     int i = axis_order[axis_i];
 
-    /* Y-up: swap Y(1) and Z(2) labels. */
-    int label_i = (i == 1) ? 2 : (i == 2) ? 1 : i;
-    const char axis_text[2] = {char('x' + label_i), '\0'};
+    /* Y-up: keep default labels (X, Y, Z). Y is vertical, which is correct. */
+    const char axis_text[2] = {char('x' + i), '\0'};
     BLF_color4fv(BLF_default(), axis_col[i]);
     BLF_draw_default(axis_pos[i][0] + 2, axis_pos[i][1] + 2, 0.0f, axis_text, 1);
   }
@@ -2644,7 +2643,6 @@ void ED_view3d_depth_override(Depsgraph *depsgraph,
                             nullptr,
                             nullptr);
 
-  /* get surface depth without bias */
   rv3d->rflag |= RV3D_ZOFFSET_DISABLED;
 
   /* Needed in cases the 3D Viewport isn't already setup. */

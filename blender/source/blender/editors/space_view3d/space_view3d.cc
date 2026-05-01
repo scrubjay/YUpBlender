@@ -253,11 +253,12 @@ static SpaceLink *view3d_create(const ScrArea * /*area*/, const Scene *scene)
   region->regiontype = RGN_TYPE_WINDOW;
 
   RegionView3D *rv3d = MEM_new<RegionView3D>("region view3d");
-  /* Y-up default perspective: 3/4 view looking from +X, +Y, +Z towards origin. */
-  rv3d->viewquat[0] = 0.8204737f;
-  rv3d->viewquat[1] = 0.4247082f;
-  rv3d->viewquat[2] = 0.1759232f;
-  rv3d->viewquat[3] = 0.3398511f;
+  /* Y-up level 3/4 perspective: looking from +X, +Y, +Z with level horizon.
+   * Calculated to ensure xy + wz = 0 for level horizon in Y-up. */
+  rv3d->viewquat[0] = 0.89241f;
+  rv3d->viewquat[1] = -0.23912f;
+  rv3d->viewquat[2] = 0.36964f;
+  rv3d->viewquat[3] = 0.09904f;
   rv3d->persp = RV3D_PERSP;
   rv3d->view = RV3D_VIEW_FRONT;
   rv3d->dist = 10.0;

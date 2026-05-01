@@ -25,12 +25,12 @@ void main()
       out_color = theme.colors.grid_axis_x;
     }
     else if (flag_test(grid_flag, AXIS_Y) && grid::is_zero(vertex_out.pos.xz, 2e-6f)) {
-      /* Y-up: Y axis (vertical) is now Blue (theme.colors.grid_axis_z). */
-      out_color = theme.colors.grid_axis_z;
+      /* Y-up: Y axis is Green (natural theme color). */
+      out_color = theme.colors.grid_axis_y;
     }
     else if (flag_test(grid_flag, AXIS_Z) && grid::is_zero(vertex_out.pos.xy, 2e-6f)) {
-      /* Y-up: Z axis (horizontal floor) is now Green (theme.colors.grid_axis_y). */
-      out_color = theme.colors.grid_axis_y;
+      /* Y-up: Z axis is Blue (natural theme color). */
+      out_color = theme.colors.grid_axis_z;
     }
   }
 
