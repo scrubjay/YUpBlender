@@ -52,19 +52,29 @@ jobs:
         with:
           fetch-depth: 1
 
-      # All LFS objects (737 MB) are now on GitHub LFS.
-      # Pull only what the build needs (datafiles, assets, darwin resources, scripts).
-      # Skipping test blend files and Windows-only assets keeps this fast.
+      # GitHub requires auth for LFS API calls even on public repos.
+      # actions/checkout without lfs:true doesn't configure the LFS credential
+      # helper, so git lfs pull silently no-ops. We configure it manually here
+      # (same as what actions/checkout@v4 does internally with lfs:true).
       - name: Pull required LFS files
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Configure LFS auth — identical to what actions/checkout lfs:true does
+          git config --local lfs.https://github.com/.extraheader \
+            "AUTHORIZATION: basic $(echo -n "x-access-token:${GITHUB_TOKEN}" | base64)"
+
           git lfs pull --include="blender/release/datafiles/**"
           git lfs pull --include="blender/assets/**"
           git lfs pull --include="blender/release/darwin/**"
           git lfs pull --include="blender/scripts/startup/**"
+
           # Verify the file CMake checks at CMakeLists.txt:93
           SIZE=$(wc -c < "blender/release/datafiles/startup.blend")
           echo "startup.blend: $SIZE bytes"
           [ "$SIZE" -ge 1024 ] || (echo "FATAL: startup.blend still a pointer!" && exit 1)
+          echo "LFS pull OK."
+
 
 
       # -----------------------------------------------------------------------
