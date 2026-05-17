@@ -52,30 +52,86 @@ jobs:
         with:
           fetch-depth: 1
 
-      # The blender/ LFS objects were never pushed to GitHub LFS for this fork.
-      # startup.blend is unmodified from upstream Blender, so it has the same
-      # content OID. Git LFS fetches by OID (not path), so pointing it at
-      # projects.blender.org as a fallback remote lets it download the real file.
-      - name: Pull required LFS files (via blender.org fallback)
+      # Git LFS objects for blender/ were never pushed to GitHub LFS for this fork.
+      # Bypass git-lfs entirely: scan for pointer files and download them directly
+      # from projects.blender.org's public LFS HTTP API (no auth required).
+      - name: Download LFS files from blender.org (direct HTTP)
         run: |
-          # Add the official Blender repo as a fallback LFS source
-          git remote add blender-upstream \
-            https://projects.blender.org/blender/blender.git
-          git config lfs.remote.searchall true
+          python3 << 'PYEOF'
+          import urllib.request, json, os, sys
 
-          # Pull only the datafiles that CMake checks — not the full LFS store
-          git lfs pull --include="blender/release/datafiles/**"
+          SCAN_DIR  = "blender/release"
+          LFS_API   = "https://projects.blender.org/blender/blender.git/info/lfs/objects/batch"
+          LFS_HDR   = {"Accept": "application/vnd.git-lfs+json",
+                       "Content-Type": "application/vnd.git-lfs+json"}
 
-          # Hard-verify that startup.blend is a real file (> 1 KB)
-          FILE="blender/release/datafiles/startup.blend"
-          SIZE=$(wc -c < "$FILE")
-          echo "startup.blend size: $SIZE bytes"
-          if [ "$SIZE" -lt 1000 ]; then
-            echo "ERROR: startup.blend is still a pointer. LFS fetch failed!"
-            cat "$FILE"
-            exit 1
-          fi
-          echo "OK: startup.blend confirmed real ($SIZE bytes)."
+          # ---- Find every LFS pointer file under blender/release/ ----
+          pointers = []
+          for root, _, files in os.walk(SCAN_DIR):
+              for fname in files:
+                  path = os.path.join(root, fname)
+                  try:
+                      if os.path.getsize(path) > 500:
+                          continue          # real file, skip
+                      raw = open(path, "rb").read(300).decode("utf-8", errors="ignore")
+                      if "git-lfs.github.com/spec/v1" not in raw:
+                          continue
+                      oid, size = None, None
+                      for line in raw.splitlines():
+                          if line.startswith("oid sha256:"):
+                              oid = line.split(":", 1)[1].strip()
+                          elif line.startswith("size "):
+                              size = int(line.split()[1])
+                      if oid and size:
+                          pointers.append((path, oid, size))
+                          print(f"  pointer: {path} ({size} bytes)")
+                  except Exception as e:
+                      print(f"  skip {path}: {e}")
+
+          if not pointers:
+              print("No LFS pointers found — nothing to download.")
+              sys.exit(0)
+
+          # ---- Batch-request download URLs from blender.org LFS ----
+          body = json.dumps({
+              "operation": "download",
+              "transfers": ["basic"],
+              "objects": [{"oid": oid, "size": sz} for _, oid, sz in pointers]
+          }).encode()
+          req = urllib.request.Request(LFS_API, data=body, headers=LFS_HDR)
+          try:
+              resp = json.loads(urllib.request.urlopen(req, timeout=60).read())
+          except Exception as e:
+              print(f"LFS batch API error: {e}", file=sys.stderr)
+              sys.exit(1)
+
+          oid_url = {}
+          for obj in resp.get("objects", []):
+              url = obj.get("actions", {}).get("download", {}).get("href")
+              if url:
+                  oid_url[obj["oid"]] = url
+              else:
+                  print(f"  WARNING: no download URL for oid {obj['oid'][:16]}...")
+
+          # ---- Download each file, replacing the pointer in-place ----
+          ok = True
+          for path, oid, expected_size in pointers:
+              url = oid_url.get(oid)
+              if not url:
+                  print(f"  SKIP {path}: no URL returned by LFS API")
+                  ok = False
+                  continue
+              print(f"  downloading {path} ...")
+              urllib.request.urlretrieve(url, path)
+              actual = os.path.getsize(path)
+              if actual < 1000:
+                  print(f"  ERROR: {path} still tiny ({actual} B)", file=sys.stderr)
+                  ok = False
+              else:
+                  print(f"  OK: {path} -> {actual} bytes")
+
+          sys.exit(0 if ok else 1)
+          PYEOF
 
       # -----------------------------------------------------------------------
       # 3. Install build tools
