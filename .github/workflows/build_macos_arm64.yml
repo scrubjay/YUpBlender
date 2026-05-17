@@ -52,9 +52,17 @@ jobs:
         with:
           fetch-depth: 1
 
-      # Git LFS objects for blender/ were never pushed to GitHub LFS for this fork.
-      # Bypass git-lfs entirely: scan for pointer files and download them directly
-      # from projects.blender.org's public LFS HTTP API (no auth required).
+      # startup.blend is fork-modified (Y-Up startup scene) — its LFS OID lives
+      # on GitHub LFS for this repo, not on projects.blender.org.
+      # Pull it directly from GitHub LFS before the blender.org script runs.
+      - name: Pull fork-specific LFS files from GitHub
+        run: |
+          git lfs pull --include="blender/release/datafiles/startup.blend"
+          SIZE=$(wc -c < "blender/release/datafiles/startup.blend")
+          echo "startup.blend after GitHub LFS pull: $SIZE bytes"
+
+      # All other LFS pointer files in blender/release/ are unmodified from
+      # upstream Blender — download them directly from projects.blender.org.
       - name: Download LFS files from blender.org (direct HTTP)
         run: |
           python3 << 'PYEOF'
