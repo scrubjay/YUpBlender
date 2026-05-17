@@ -52,28 +52,93 @@ jobs:
         with:
           fetch-depth: 1
 
-      # GitHub requires auth for LFS API calls even on public repos.
-      # actions/checkout without lfs:true doesn't configure the LFS credential
-      # helper, so git lfs pull silently no-ops. We configure it manually here
-      # (same as what actions/checkout@v4 does internally with lfs:true).
-      - name: Pull required LFS files
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # git lfs pull --include is broken on this runner (silent no-op regardless
+      # of auth config). Use the LFS HTTP batch API directly instead — verified
+      # to work without auth (returns S3 pre-signed URLs).
+      - name: Download LFS files via HTTP batch API
         run: |
-          # Configure LFS auth — identical to what actions/checkout lfs:true does
-          git config --local lfs.https://github.com/.extraheader \
-            "AUTHORIZATION: basic $(echo -n "x-access-token:${GITHUB_TOKEN}" | base64)"
+          python3 << 'PYEOF'
+          import urllib.request, json, os, sys
 
-          git lfs pull --include="blender/release/datafiles/**"
-          git lfs pull --include="blender/assets/**"
-          git lfs pull --include="blender/release/darwin/**"
-          git lfs pull --include="blender/scripts/startup/**"
+          SCAN_DIRS = [
+              "blender/release/datafiles",
+              "blender/assets",
+              "blender/release/darwin",
+              "blender/scripts/startup",
+          ]
+          GH_LFS  = "https://github.com/scrubjay/YUpBlender.git/info/lfs/objects/batch"
+          BL_LFS  = "https://projects.blender.org/blender/blender.git/info/lfs/objects/batch"
+          HDR     = {"Accept": "application/vnd.git-lfs+json",
+                     "Content-Type": "application/vnd.git-lfs+json"}
 
-          # Verify the file CMake checks at CMakeLists.txt:93
-          SIZE=$(wc -c < "blender/release/datafiles/startup.blend")
-          echo "startup.blend: $SIZE bytes"
-          [ "$SIZE" -ge 1024 ] || (echo "FATAL: startup.blend still a pointer!" && exit 1)
-          echo "LFS pull OK."
+          # ---- Collect all LFS pointer files in the dirs we care about ----
+          pointers = []
+          for scan_dir in SCAN_DIRS:
+              if not os.path.isdir(scan_dir):
+                  continue
+              for root, _, files in os.walk(scan_dir):
+                  for fname in files:
+                      path = os.path.join(root, fname)
+                      try:
+                          if os.path.getsize(path) > 512:
+                              continue
+                          raw = open(path, "rb").read(300).decode("utf-8", errors="ignore")
+                          if "git-lfs.github.com/spec/v1" not in raw:
+                              continue
+                          oid = size = None
+                          for line in raw.splitlines():
+                              if line.startswith("oid sha256:"):
+                                  oid = line.split(":", 1)[1].strip()
+                              elif line.startswith("size "):
+                                  size = int(line.split()[1])
+                          if oid and size:
+                              pointers.append((path, oid, size))
+                      except Exception:
+                          pass
+
+          if not pointers:
+              print("No LFS pointers found.")
+              sys.exit(0)
+          print(f"Found {len(pointers)} LFS pointer(s).")
+
+          def batch_urls(api_url, objects):
+              body = json.dumps({"operation": "download",
+                                 "transfers": ["basic"],
+                                 "objects": objects}).encode()
+              req = urllib.request.Request(api_url, data=body, headers=HDR)
+              try:
+                  resp = json.loads(urllib.request.urlopen(req, timeout=60).read())
+                  return {o["oid"]: o.get("actions", {}).get("download", {}).get("href")
+                          for o in resp.get("objects", [])}
+              except Exception as e:
+                  print(f"  batch API error ({api_url}): {e}")
+                  return {}
+
+          objects = [{"oid": oid, "size": sz} for _, oid, sz in pointers]
+
+          # Try GitHub LFS first (has fork-specific objects), then blender.org
+          gh_urls = batch_urls(GH_LFS, objects)
+          bl_urls = batch_urls(BL_LFS, objects)
+
+          for path, oid, expected_size in pointers:
+              url = gh_urls.get(oid) or bl_urls.get(oid)
+              if not url:
+                  print(f"  WARN: no URL for {path} (oid {oid[:12]}...)")
+                  continue
+              print(f"  downloading {path} ({expected_size} B) ...")
+              urllib.request.urlretrieve(url, path)
+              actual = os.path.getsize(path)
+              status = "OK" if actual == expected_size else f"WARN size={actual}"
+              print(f"    {status}")
+
+          # Hard-check startup.blend
+          critical = "blender/release/datafiles/startup.blend"
+          sz = os.path.getsize(critical)
+          if sz < 1024:
+              print(f"FATAL: {critical} is still a pointer ({sz} B)!", file=sys.stderr)
+              sys.exit(1)
+          print(f"startup.blend OK: {sz} bytes.")
+          PYEOF
 
 
 
