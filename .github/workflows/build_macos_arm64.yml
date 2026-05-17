@@ -124,8 +124,8 @@ jobs:
               print(f"  downloading {path} ...")
               urllib.request.urlretrieve(url, path)
               actual = os.path.getsize(path)
-              if actual < 1000:
-                  print(f"  ERROR: {path} still tiny ({actual} B)", file=sys.stderr)
+              if actual != expected_size:
+                  print(f"  ERROR: {path} size mismatch (got {actual} B, expected {expected_size} B)", file=sys.stderr)
                   ok = False
               else:
                   print(f"  OK: {path} -> {actual} bytes")
