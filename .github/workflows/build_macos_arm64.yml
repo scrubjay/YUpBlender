@@ -101,18 +101,23 @@ jobs:
               sys.exit(0)
           print(f"Found {len(pointers)} LFS pointer(s).")
 
-          def batch_urls(api_url, objects):
-              body = json.dumps({"operation": "download",
-                                 "transfers": ["basic"],
-                                 "objects": objects}).encode()
-              req = urllib.request.Request(api_url, data=body, headers=HDR)
-              try:
-                  resp = json.loads(urllib.request.urlopen(req, timeout=60).read())
-                  return {o["oid"]: o.get("actions", {}).get("download", {}).get("href")
-                          for o in resp.get("objects", [])}
-              except Exception as e:
-                  print(f"  batch API error ({api_url}): {e}")
-                  return {}
+          def batch_urls(api_url, objects, chunk=10):
+              """Request download URLs in small chunks to avoid 413 from GitHub."""
+              result = {}
+              for i in range(0, len(objects), chunk):
+                  body = json.dumps({"operation": "download",
+                                     "transfers": ["basic"],
+                                     "objects": objects[i:i+chunk]}).encode()
+                  req = urllib.request.Request(api_url, data=body, headers=HDR)
+                  try:
+                      resp = json.loads(urllib.request.urlopen(req, timeout=60).read())
+                      for o in resp.get("objects", []):
+                          url = o.get("actions", {}).get("download", {}).get("href")
+                          if url:
+                              result[o["oid"]] = url
+                  except Exception as e:
+                      print(f"  batch chunk error ({api_url}): {e}")
+              return result
 
           objects = [{"oid": oid, "size": sz} for _, oid, sz in pointers]
 
