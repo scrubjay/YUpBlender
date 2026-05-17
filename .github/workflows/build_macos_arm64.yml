@@ -1,0 +1,200 @@
+# =============================================================================
+# build_macos_arm64.yml
+#
+# Builds Y-Up Blender for Apple Silicon (arm64) on a native macOS-14 runner
+# (GitHub-hosted M1 Mac — free for public repos).
+#
+# Triggers on every push to main and is also manually dispatchable.
+# Publishes the resulting Blender.app as a tar.xz to a rolling GitHub Release.
+#
+# Binary format: Mach-O 64-bit executable arm64 (verified in the workflow).
+# No code-signing: users right-click → Open to bypass Gatekeeper on first run.
+# =============================================================================
+
+name: Build — macOS Apple Silicon (ARM64)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-macos-arm64:
+    name: macOS ARM64 · Full Release
+    runs-on: macos-14          # Native Apple Silicon M1 (3 vCPU, 7 GB RAM)
+    timeout-minutes: 360       # 6-hour hard limit
+
+    steps:
+      # -----------------------------------------------------------------------
+      # 1. Free up disk space — the runner ships with ~14 GB, Blender needs ~12 GB
+      # -----------------------------------------------------------------------
+      - name: Free disk space
+        run: |
+          echo "=== Disk before cleanup ==="
+          df -h /
+          # Remove heavy pre-installed Xcode simulators & documentation
+          sudo rm -rf /Library/Developer/CoreSimulator
+          sudo rm -rf /Applications/Xcode.app/Contents/Developer/Platforms/AppleTVOS.platform
+          sudo rm -rf /Applications/Xcode.app/Contents/Developer/Platforms/WatchOS.platform
+          sudo rm -rf /Applications/Xcode.app/Contents/Developer/Platforms/WatchSimulator.platform
+          sudo rm -rf /Applications/Xcode.app/Contents/Developer/Platforms/AppleTVSimulator.platform
+          sudo rm -rf /Applications/Xcode.app/Contents/Developer/Documentation
+          sudo rm -rf /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0
+          sudo rm -rf /usr/local/lib/android /usr/local/share/powershell /usr/share/dotnet
+          echo "=== Disk after cleanup ==="
+          df -h /
+
+      # -----------------------------------------------------------------------
+      # 2. Checkout — blender/ is tracked as committed files, not a submodule
+      # -----------------------------------------------------------------------
+      - name: Checkout YUpBlender
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # -----------------------------------------------------------------------
+      # 3. Install build tools
+      #    git-lfs is needed by make_update.py to fetch LFS-tracked lib files
+      # -----------------------------------------------------------------------
+      - name: Install build dependencies
+        run: |
+          brew update --quiet
+          brew install cmake ninja git-lfs
+          git lfs install --skip-repo
+
+      # -----------------------------------------------------------------------
+      # 4. Cache the precompiled macOS ARM64 libraries
+      #    Key: hash of the versions file that controls which lib commit is used.
+      #    The lib repo is ~2–3 GB; caching saves ~15 minutes per run.
+      # -----------------------------------------------------------------------
+      - name: Cache lib/macos_arm64
+        id: cache-libs
+        uses: actions/cache@v4
+        with:
+          path: blender/lib/macos_arm64
+          key: blender-macos-arm64-libs-${{ hashFiles('blender/build_files/build_environment/cmake/versions.cmake') }}
+          restore-keys: |
+            blender-macos-arm64-libs-
+
+      # -----------------------------------------------------------------------
+      # 5. Fetch the precompiled libraries (skipped if cache hit)
+      #    make_update.py --no-blender detects macOS + arm64, enables the
+      #    lib/macos_arm64 submodule, and does `git submodule update --init`.
+      # -----------------------------------------------------------------------
+      - name: Fetch precompiled libraries (macos_arm64)
+        if: steps.cache-libs.outputs.cache-hit != 'true'
+        working-directory: blender
+        run: |
+          echo "=== Disk before lib fetch ==="
+          df -h /
+          python3 build_files/utils/make_update.py \
+            --no-blender \
+            --architecture arm64
+          echo "=== Disk after lib fetch ==="
+          df -h /
+
+      # -----------------------------------------------------------------------
+      # 6. Configure CMake with the official release preset
+      #    blender_release.cmake enables: Cycles + Metal, OIDN, USD, OpenVDB,
+      #    Embree, OSL, path guiding, all codecs, and every other release flag.
+      #    CUDA/OptiX/HIP are automatically excluded on Apple (cmake config
+      #    guards them with NOT APPLE).
+      # -----------------------------------------------------------------------
+      - name: Configure CMake
+        run: |
+          cmake \
+            -S blender \
+            -B build \
+            -C blender/build_files/cmake/config/blender_release.cmake \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=arm64
+
+      # -----------------------------------------------------------------------
+      # 7. Build — uses all available cores on the M1 runner
+      # -----------------------------------------------------------------------
+      - name: Build Blender
+        run: |
+          echo "=== Disk before build ==="
+          df -h /
+          ninja -C build -j$(sysctl -n hw.logicalcpu) install
+          echo "=== Disk after build ==="
+          df -h /
+
+      # -----------------------------------------------------------------------
+      # 8. Verify the output is genuinely a Mach-O arm64 binary
+      # -----------------------------------------------------------------------
+      - name: Verify Mach-O arm64
+        run: |
+          BLENDER_BIN="build/bin/Blender.app/Contents/MacOS/Blender"
+          echo "--- file ---"
+          file "$BLENDER_BIN"
+          echo "--- lipo ---"
+          lipo -info "$BLENDER_BIN"
+          # Hard-fail if the binary is not arm64
+          file "$BLENDER_BIN" | grep -q "arm64" || \
+            (echo "ERROR: Binary is not arm64!" && exit 1)
+
+      # -----------------------------------------------------------------------
+      # 9. Package as a tar.xz archive
+      # -----------------------------------------------------------------------
+      - name: Package Blender.app
+        run: |
+          cd build/bin
+          tar -cJf ../../blender_yup_macos_arm64.tar.xz Blender.app
+          ls -lh ../../blender_yup_macos_arm64.tar.xz
+
+      # -----------------------------------------------------------------------
+      # 10. Free build intermediates to avoid hitting artifact upload limits
+      # -----------------------------------------------------------------------
+      - name: Clean build tree
+        run: |
+          rm -rf build
+          df -h /
+
+      # -----------------------------------------------------------------------
+      # 11. Publish to GitHub Releases (rolling "latest" tag for macOS)
+      #     Force-pushes the tag so each build overwrites the previous one.
+      #     GITHUB_TOKEN has repo write access automatically in Actions.
+      # -----------------------------------------------------------------------
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-macos-arm64
+          name: "Blender Y-Up — macOS Apple Silicon (Latest)"
+          prerelease: true
+          make_latest: false
+          files: blender_yup_macos_arm64.tar.xz
+          body: |
+            ## Blender Y-Up — macOS Apple Silicon (ARM64 · M1/M2/M3/M4)
+
+            **Auto-built** from [`${{ github.sha }}`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}) on ${{ github.event.head_commit.timestamp }}
+
+            ---
+
+            ### What's included
+            | Feature | Status |
+            |---------|--------|
+            | Y-Up viewport | ✅ Y axis is up, Z is forward (Unity/Unreal-style) |
+            | Metal GPU rendering | ✅ Hardware-accelerated Cycles on Apple Silicon |
+            | OpenImageDenoise | ✅ AI denoising |
+            | Cycles + Embree | ✅ CPU path tracing |
+            | USD / OpenVDB / Alembic | ✅ Full pipeline formats |
+            | OSL shaders | ✅ Open Shading Language |
+            | Python scripting | ✅ Bundled Python |
+
+            ---
+
+            ### First Launch — Gatekeeper Warning
+            > This binary is **not code-signed**. macOS Gatekeeper will block it on first open.
+            >
+            > **To bypass:** Right-click `Blender.app` → **Open** → click **Open** in the dialog.
+            > You only need to do this once.
+
+            ---
+
+            ### Requirements
+            - macOS 13 Ventura or later
+            - Apple Silicon Mac (M1, M2, M3, or M4)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
