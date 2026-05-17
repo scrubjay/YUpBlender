@@ -54,13 +54,13 @@ jobs:
 
       # -----------------------------------------------------------------------
       # 3. Install build tools
-      #    git-lfs is needed by make_update.py to fetch LFS-tracked lib files
+      #    git-lfs is required to pull the LFS-tracked binaries in the lib repo
       # -----------------------------------------------------------------------
       - name: Install build dependencies
         run: |
           brew update --quiet
           brew install cmake ninja git-lfs
-          git lfs install --skip-repo
+          git lfs install
 
       # -----------------------------------------------------------------------
       # 4. Cache the precompiled macOS ARM64 libraries
@@ -78,18 +78,30 @@ jobs:
 
       # -----------------------------------------------------------------------
       # 5. Fetch the precompiled libraries (skipped if cache hit)
-      #    make_update.py --no-blender detects macOS + arm64, enables the
-      #    lib/macos_arm64 submodule, and does `git submodule update --init`.
+      #
+      # WHY NOT make_update.py:
+      #   make_update.py runs `git rev-parse --show-toplevel` and resolves the
+      #   git root as the YUpBlender repo — which has no lib submodules in its
+      #   .gitmodules. Only blender/.gitmodules knows about lib-macos_arm64.
+      #   This causes exit code 2 ("Skipping libraries update: no configured
+      #   submodule").
+      #
+      # FIX: Clone the lib repo directly from its URL (declared in
+      #   blender/.gitmodules) and place it where CMake expects it.
+      #   LFS objects are fetched automatically by `git lfs pull`.
       # -----------------------------------------------------------------------
       - name: Fetch precompiled libraries (macos_arm64)
         if: steps.cache-libs.outputs.cache-hit != 'true'
-        working-directory: blender
         run: |
           echo "=== Disk before lib fetch ==="
           df -h /
-          python3 build_files/utils/make_update.py \
-            --no-blender \
-            --architecture arm64
+          git clone \
+            --depth=1 \
+            --branch main \
+            https://projects.blender.org/blender/lib-macos_arm64.git \
+            blender/lib/macos_arm64
+          cd blender/lib/macos_arm64
+          git lfs pull
           echo "=== Disk after lib fetch ==="
           df -h /
 
