@@ -51,6 +51,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+          lfs: true    # pull LFS blobs (startup.blend etc.) as real files
 
       # -----------------------------------------------------------------------
       # 3. Install build tools
@@ -61,6 +62,10 @@ jobs:
           brew update --quiet
           brew install cmake ninja git-lfs
           git lfs install
+          # Ensure Xcode toolchain is selected — CMake needs this on macos-14
+          sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+          xcodebuild -version
+          clang --version
 
       # -----------------------------------------------------------------------
       # 4. Cache the precompiled macOS ARM64 libraries
@@ -95,7 +100,8 @@ jobs:
         run: |
           echo "=== Disk before lib fetch ==="
           df -h /
-          git clone \
+          # Clone without LFS smudge first (faster), then pull LFS objects explicitly
+          GIT_LFS_SKIP_SMUDGE=1 git clone \
             --depth=1 \
             --branch main \
             https://projects.blender.org/blender/lib-macos_arm64.git \
@@ -106,6 +112,31 @@ jobs:
           df -h /
 
       # -----------------------------------------------------------------------
+      # Verify the lib dir has real files (not just LFS pointer stubs)
+      # A pointer file is ~130 bytes; real .a libs are megabytes.
+      # -----------------------------------------------------------------------
+      - name: Verify lib/macos_arm64 contents
+        run: |
+          echo "=== Top-level lib dir ==="
+          ls -lh blender/lib/macos_arm64/ | head -30
+          echo "=== Checking for real vs pointer files ==="
+          # Find the first .a file and check its size
+          SAMPLE=$(find blender/lib/macos_arm64 -name '*.a' | head -1)
+          if [ -n "$SAMPLE" ]; then
+            SIZE=$(wc -c < "$SAMPLE")
+            echo "Sample lib: $SAMPLE  ($SIZE bytes)"
+            if [ "$SIZE" -lt 1000 ]; then
+              echo "ERROR: File looks like an LFS pointer stub (< 1 KB). LFS pull failed!"
+              cat "$SAMPLE"
+              exit 1
+            else
+              echo "OK: Real binary file confirmed."
+            fi
+          else
+            echo "WARNING: No .a files found in lib/macos_arm64"
+          fi
+
+      # -----------------------------------------------------------------------
       # 6. Configure CMake with the official release preset
       #    blender_release.cmake enables: Cycles + Metal, OIDN, USD, OpenVDB,
       #    Embree, OSL, path guiding, all codecs, and every other release flag.
@@ -114,13 +145,20 @@ jobs:
       # -----------------------------------------------------------------------
       - name: Configure CMake
         run: |
+          echo "=== CMake version ==="
+          cmake --version
+          echo "=== Xcode path ==="
+          xcode-select -p
+          echo "=== lib/macos_arm64 exists? ==="
+          ls blender/lib/macos_arm64/ | head -5
           cmake \
             -S blender \
             -B build \
             -C blender/build_files/cmake/config/blender_release.cmake \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_OSX_ARCHITECTURES=arm64
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            --log-level=VERBOSE
 
       # -----------------------------------------------------------------------
       # 7. Build — uses all available cores on the M1 runner
