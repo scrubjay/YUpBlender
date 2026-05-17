@@ -51,24 +51,31 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          # lfs: false (default) — we do a targeted pull below instead of
-          # pulling all LFS objects (which includes GBs of test .blend files)
 
-      # Pull only the LFS files CMake needs: startup.blend, icons, datafiles.
-      # Much faster than `lfs: true` which downloads the entire LFS store.
-      - name: Pull required LFS files
+      # The blender/ LFS objects were never pushed to GitHub LFS for this fork.
+      # startup.blend is unmodified from upstream Blender, so it has the same
+      # content OID. Git LFS fetches by OID (not path), so pointing it at
+      # projects.blender.org as a fallback remote lets it download the real file.
+      - name: Pull required LFS files (via blender.org fallback)
         run: |
+          # Add the official Blender repo as a fallback LFS source
+          git remote add blender-upstream \
+            https://projects.blender.org/blender/blender.git
+          git config lfs.remote.searchall true
+
+          # Pull only the datafiles that CMake checks — not the full LFS store
           git lfs pull --include="blender/release/datafiles/**"
-          # Verify the key file CMake checks at line 96
+
+          # Hard-verify that startup.blend is a real file (> 1 KB)
           FILE="blender/release/datafiles/startup.blend"
           SIZE=$(wc -c < "$FILE")
           echo "startup.blend size: $SIZE bytes"
           if [ "$SIZE" -lt 1000 ]; then
-            echo "ERROR: startup.blend is still an LFS pointer!"
+            echo "ERROR: startup.blend is still a pointer. LFS fetch failed!"
             cat "$FILE"
             exit 1
           fi
-          echo "OK: startup.blend is a real file."
+          echo "OK: startup.blend confirmed real ($SIZE bytes)."
 
       # -----------------------------------------------------------------------
       # 3. Install build tools
