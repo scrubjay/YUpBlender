@@ -282,7 +282,16 @@ jobs:
             (echo "ERROR: Binary is not arm64!" && exit 1)
 
       # -----------------------------------------------------------------------
-      # 9. Package as a tar.xz archive
+      # 9. Ad-hoc codesign — prevents macOS "damaged" Gatekeeper warning.
+      #    Signing with "-" requires no Apple Developer account.
+      # -----------------------------------------------------------------------
+      - name: Ad-hoc codesign
+        run: |
+          codesign --deep --force --sign - build/bin/Blender.app
+          echo "Codesign complete."
+
+      # -----------------------------------------------------------------------
+      # 10. Package as a tar.xz archive
       # -----------------------------------------------------------------------
       - name: Package Blender.app
         run: |
