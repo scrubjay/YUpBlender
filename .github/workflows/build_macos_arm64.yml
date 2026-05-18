@@ -291,7 +291,19 @@ jobs:
           ls -lh ../../blender_yup_macos_arm64.tar.xz
 
       # -----------------------------------------------------------------------
-      # 10. Free build intermediates to avoid hitting artifact upload limits
+      # 10. Save artifact — backup in case GitHub Release publish fails
+      #     Downloadable from the Actions run page for 7 days.
+      # -----------------------------------------------------------------------
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: blender-yup-macos-arm64
+          path: blender_yup_macos_arm64.tar.xz
+          retention-days: 7
+
+      # -----------------------------------------------------------------------
+      # 11. Free build intermediates
       # -----------------------------------------------------------------------
       - name: Clean build tree
         run: |
