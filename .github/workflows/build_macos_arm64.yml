@@ -23,6 +23,8 @@ jobs:
     name: macOS ARM64 · Full Release
     runs-on: macos-15          # Apple Silicon M1, Xcode 16.x (Blender 5.2 requires ≥16.0)
     timeout-minutes: 360       # 6-hour hard limit
+    permissions:
+      contents: write          # required to create/update GitHub Releases
 
     steps:
       # -----------------------------------------------------------------------
