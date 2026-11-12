@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include "DNA_screen_types.h"
 #include "DNA_space_types.h"
 #include "DNA_userdef_types.h"
@@ -17,12 +19,13 @@
 
 #include "WM_types.hh"
 
-#include "BLI_compiler_attrs.h"
+#include "BLI_compiler_attrs.hh"
 
 namespace blender {
 
 struct ARegion;
 struct AZone;
+enum AZEdge : int;
 struct Depsgraph;
 struct IDProperty;
 struct Main;
@@ -35,6 +38,7 @@ struct bContext;
 struct bScreen;
 struct rcti;
 struct wmKeyConfig;
+struct wmKeyMap;
 struct wmMsgSubscribeKey;
 struct wmMsgSubscribeValue;
 struct wmNotifier;
@@ -78,6 +82,14 @@ void ED_region_tag_redraw_partial(ARegion *region, const rcti *rct, bool rebuild
 void ED_region_tag_redraw_cursor(ARegion *region);
 void ED_region_tag_redraw_no_rebuild(ARegion *region);
 void ED_region_tag_refresh_ui(ARegion *region);
+/**
+ * Attempt to activate an button referencing an RNA property in the \a region, it may redraw the
+ * region so it can try one more time.
+ */
+void ED_region_activate_rna_prop(bContext *C,
+                                 ARegion *region,
+                                 const void *data,
+                                 StringRefNull prop_name);
 /**
  * Tag editor overlays to be redrawn. If in doubt about which parts need to be redrawn (partial
  * clipping rectangle set), redraw everything.
@@ -180,6 +192,12 @@ void ED_region_info_draw_multiline(ARegion *region,
 void ED_region_image_metadata_panel_draw(ImBuf *ibuf, ui::Layout *layout);
 void ED_region_grid_draw(ARegion *region, float zoomx, float zoomy, float x0, float y0);
 float ED_region_blend_alpha(ARegion *region);
+/**
+ * The region's on-screen rectangle, accounting for its current blend animation slide offset (see
+ * #ED_region_blend_alpha). Equal to `region->winrct` when the region isn't currently blending
+ * in/out.
+ */
+void ED_region_blend_rect(ARegion *region, rcti *r_rect);
 const rcti *ED_region_visible_rect(ARegion *region);
 /**
  * Overlapping regions only in the following restricted cases.
@@ -243,6 +261,9 @@ void ED_area_tag_redraw(ScrArea *area);
 void ED_area_tag_redraw_no_rebuild(ScrArea *area);
 void ED_area_tag_redraw_regiontype(ScrArea *area, int regiontype);
 void ED_area_tag_refresh(ScrArea *area);
+void ED_area_hud_region_set_padding_flag(ScrArea *area,
+                                         ARegion *changed_region,
+                                         const bool set_padding = false);
 /**
  * For regions that change the region size in their #ARegionType.layout() callback: Mark the area
  * as having a changed region size, requiring refitting of regions within the area.
@@ -302,12 +323,12 @@ ScrArea *ED_screen_areas_iter_next(const bScreen *screen, const ScrArea *area);
   for (ScrArea *area_name = ED_screen_areas_iter_first(win, screen); area_name != NULL; \
        area_name = ED_screen_areas_iter_next(screen, area_name))
 #define ED_screen_verts_iter(win, screen, vert_name) \
-  for (ScrVert *vert_name = (win)->global_areas.vertbase.first ? \
-                                (ScrVert *)(win)->global_areas.vertbase.first : \
-                                (ScrVert *)(screen)->vertbase.first; \
+  for (ScrVert *vert_name = (win)->global_areas.vertbase.first_ ? \
+                                (ScrVert *)(win)->global_areas.vertbase.first_ : \
+                                (ScrVert *)(screen)->vertbase.first_; \
        vert_name != NULL; \
-       vert_name = (vert_name == (win)->global_areas.vertbase.last) ? \
-                       (ScrVert *)(screen)->vertbase.first : \
+       vert_name = (vert_name == (win)->global_areas.vertbase.last()) ? \
+                       (ScrVert *)(screen)->vertbase.first_ : \
                        vert_name->next)
 
 /**
@@ -355,7 +376,20 @@ void ED_screen_exit(bContext *C, wmWindow *window, bScreen *screen);
  */
 void ED_screen_animation_timer(
     bContext *C, Scene *scene, ViewLayer *view_layer, int redraws, int sync, int enable);
+/**
+ * Remove the animation timer, same as calling ED_screen_animation_timer(..., enable=0).
+ */
+void ED_screen_animation_timer_remove(wmWindowManager *wm, wmWindow *win);
 void ED_screen_animation_timer_update(bScreen *screen, int redraws);
+/**
+ * Stop the animation in all screens where should_stop_fn(screen) returns true.
+ *
+ * The callback is only called for screens that have an animation timer.
+ */
+void ED_screen_animation_stop(Main *bmain,
+                              wmWindowManager *wm,
+                              FunctionRef<bool(const bScreen &screen)> should_stop_fn);
+
 void ED_screen_restore_temp_type(bContext *C, ScrArea *area);
 ScrArea *ED_screen_full_newspace(bContext *C, ScrArea *area, int type);
 /**
@@ -384,13 +418,12 @@ bScreen *ED_screen_state_maximized_create(bContext *C);
  *
  * \warning \a area may be freed.
  */
-ScrArea *ED_screen_state_toggle(bContext *C, wmWindow *win, ScrArea *area, short state);
+ScrArea *ED_screen_state_toggle(bContext *C, wmWindow *win, ScrArea *area, eScreen_State state);
 /**
  * Wrapper to open a temporary space either as full-screen space, or as separate window,
  * as defined by \a display_type.
  *
  * \param title: Title to set for the window, if a window is spawned.
- * \param rect_unscaled: Position & size of the window, if a window is spawned.
  */
 ScrArea *ED_screen_temp_space_open(bContext *C,
                                    const char *title,
@@ -519,6 +552,16 @@ class WorkspaceStatus {
    *   [V] X-Ray
    */
   void opmodal(std::string text, const wmOperatorType *ot, int propvalue, bool inverted = false);
+
+  /**
+   * Add a dynamic status entry for a given property in a modal keymap.
+   * Example:
+   *   [V] X-Ray
+   */
+  void modal_keymap(std::string text,
+                    const wmKeyMap &keymap,
+                    int propvalue,
+                    bool inverted = false);
 };
 
 void ED_workspace_do_listen(bContext *C, const wmNotifier *note);
@@ -534,6 +577,26 @@ void ED_update_for_newframe(Main *bmain, Depsgraph *depsgraph);
  */
 void ED_reset_audio_device(bContext *C);
 wmOperatorStatus ED_screen_animation_play(bContext *C, int sync, int mode);
+
+/**
+ * Start scrubbing, returns optional playback state.
+ * \param C: The current context, which is used to find the screen that is currently managing the
+ * animation playback.
+ * \param screen: The screen that is currently being used to scrub.
+ */
+std::optional<PreScrubbingState> ED_screen_scrubbing_enable(bContext &C, bScreen &screen);
+/**
+ * Stop scrubbing, optionally resumes playback.
+ * \param C: The current context, which is used to find the screen that is currently managing the
+ * animation playback.
+ * \param screen: The screen that is currently being used to scrub.
+ * \param resume: Optional saved playback data - if it has a value, playback is started with the
+ * given settings.
+ */
+void ED_screen_scrubbing_disable(bContext &C,
+                                 bScreen &screen,
+                                 const std::optional<PreScrubbingState> &resume);
+
 /**
  * Find window that owns the animation timer.
  */
@@ -589,6 +652,7 @@ bool ED_operator_region_gizmo_active(bContext *C);
  * Generic for any view2d which uses anim_ops.
  */
 bool ED_operator_animview_active(bContext *C);
+bool ED_operator_region_animview_active(bContext *C);
 bool ED_operator_outliner_active(bContext *C);
 bool ED_operator_region_outliner_active(bContext *C);
 bool ED_operator_outliner_active_no_editobject(bContext *C);
@@ -598,6 +662,7 @@ bool ED_operator_outliner_active_no_editobject(bContext *C);
  * #ED_operator_asset_browsing_active() (asset browsing only).
  */
 bool ED_operator_file_active(bContext *C);
+bool ED_operator_region_file_active(bContext *C);
 /**
  * \note Will only return true if the file space is in file browsing mode, not asset browsing! See
  * #ED_operator_file_active() (file or asset browsing) and
@@ -607,29 +672,41 @@ bool ED_operator_file_browsing_active(bContext *C);
 bool ED_operator_asset_browsing_active(bContext *C);
 bool ED_operator_spreadsheet_active(bContext *C);
 bool ED_operator_action_active(bContext *C);
+bool ED_operator_region_action_active(bContext *C);
 bool ED_operator_buttons_active(bContext *C);
 bool ED_operator_node_active(bContext *C);
 bool ED_operator_node_editable(bContext *C);
 bool ED_operator_graphedit_active(bContext *C);
+bool ED_operator_region_graphedit_active(bContext *C);
 bool ED_operator_sequencer_active(bContext *C);
 bool ED_operator_sequencer_active_editable(bContext *C);
 bool ED_operator_image_active(bContext *C);
 bool ED_operator_nla_active(bContext *C);
+bool ED_operator_region_nla_active(bContext *C);
 bool ED_operator_info_active(bContext *C);
+bool ED_operator_region_info_active(bContext *C);
 bool ED_operator_console_active(bContext *C);
 bool ED_operator_preferences_active(bContext *C);
 
 /** Only check there is an active object (no visibility check). */
 bool ED_operator_object_active_only(bContext *C);
 bool ED_operator_object_active(bContext *C);
+bool ED_operator_object_active_objectmode(bContext *C);
 bool ED_operator_object_active_editable_ex(bContext *C, const Object *ob);
 bool ED_operator_object_active_editable(bContext *C);
+
+/** Use in cases where it's essential the object is the active object in the current view layer. */
+bool ED_operator_object_active_only_from_view_layer(bContext *C);
+bool ED_operator_object_active_from_view_layer(bContext *C);
+
 /**
  * Object must be editable and fully local (i.e. not an override).
  */
 bool ED_operator_object_active_local_editable_ex(bContext *C, const Object *ob);
 bool ED_operator_object_active_local_editable(bContext *C);
 bool ED_operator_object_active_editable_mesh(bContext *C);
+bool ED_operator_object_active_editable_obdata_from_view_layer_ex(bContext *C, short obtype);
+bool ED_operator_object_active_editable_mesh_from_view_layer(bContext *C);
 bool ED_operator_object_active_editable_font(bContext *C);
 bool ED_operator_editable_mesh(bContext *C);
 bool ED_operator_editmesh(bContext *C);

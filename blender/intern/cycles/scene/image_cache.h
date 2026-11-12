@@ -104,7 +104,6 @@ class ImageCache {
   unordered_map<DeviceImageKey, size_t, DeviceImageKey::Hash> images_first_free;
 
   unordered_set<device_image *> deferred_updates;
-  unordered_set<device_image *> deferred_gpu_updates;
 
  public:
   ImageCache();
@@ -117,9 +116,10 @@ class ImageCache {
                                 const float texture_resolution,
                                 KernelImageTexture &tex);
 
-  void load_image_tiled(DeviceScene &dscene,
-                        const ImageMetaData &metadata,
-                        KernelImageTexture &tex);
+  void load_image_tiled(const ImageMetaData &metadata, KernelImageTexture &tex);
+
+  void load_image_tiled_descriptors(DeviceScene &dscene,
+                                    std::span<KernelImageTexture> image_textures);
 
   void free_image(DeviceScene &dscene, const KernelImageTexture &tex);
 
@@ -129,6 +129,7 @@ class ImageCache {
                             const KernelImageTexture &tex,
                             ImageLoader &loader,
                             const ImageMetaData &metadata,
+                            int miplevel_offset,
                             const uint8_t *access_state);
 
   void load_requested_tile(Device &device,
@@ -139,13 +140,13 @@ class ImageCache {
                            int x,
                            int y,
                            ImageLoader &loader,
-                           const ImageMetaData &metadata);
+                           const ImageMetaData &metadata,
+                           int miplevel_offset);
 
   /* Copy image cache data to device if modified. Either for all devices, or a single
    * device whose queue is provided. */
   void copy_to_device(DeviceScene &dscene);
   void copy_to_device(DeviceScene &dscene, DeviceQueue &queue);
-  void copy_images_to_device(const bool for_cpu_cache_miss = false);
 
   /* Collect statistics about image cache. */
   void collect_statistics(DeviceScene &dscene,
@@ -196,21 +197,22 @@ class ImageCache {
                            ImageDataType type,
                            InterpolationType interpolation,
                            const int tile_size_padded,
-                           const bool for_cpu_cache_miss,
                            KernelTileDescriptor &r_tile_descriptor);
-  void free_tile(const KernelTileDescriptor tile);
+  void free_tile(const KernelTileDescriptor tile, const bool free_empty_image = true);
 
-  KernelTileDescriptor load_tile(Device &device,
-                                 DeviceScene &dscene,
-                                 ImageLoader &loader,
-                                 const ImageMetaData &metadata,
-                                 InterpolationType interpolation,
-                                 ExtensionType extension,
-                                 int miplevel,
-                                 int x,
-                                 int y,
-                                 const bool for_cpu_cache_miss,
-                                 const size_t bit_index);
+  void load_tile(Device &device,
+                 DeviceScene &dscene,
+                 ImageLoader &loader,
+                 const ImageMetaData &metadata,
+                 InterpolationType interpolation,
+                 ExtensionType extension,
+                 int miplevel,
+                 int x,
+                 int y,
+                 const size_t bit_index,
+                 KernelTileDescriptor &r_tile_descriptor);
+
+  void copy_images_to_device_no_lock();
 
   ImageCacheStats stats;
 };

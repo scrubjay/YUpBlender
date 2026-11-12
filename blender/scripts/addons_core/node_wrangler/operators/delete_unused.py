@@ -12,7 +12,6 @@ from ..utils.nodes import (
     nw_check,
     nw_check_not_empty,
     nw_check_space_type,
-    get_nodes_links,
 )
 
 
@@ -41,8 +40,8 @@ class NODE_OT_delete_unused(Operator, NWBase):
         if node.type in end_types:
             return False
 
-        for output in node.outputs:
-            if output.links:
+        for output_socket in node.outputs:
+            if output_socket.links:
                 return False
         return True
 
@@ -55,7 +54,8 @@ class NODE_OT_delete_unused(Operator, NWBase):
                                         'TextureNodeTree', 'GeometryNodeTree'}))
 
     def execute(self, context):
-        nodes, links = get_nodes_links(context)
+        tree = context.space_data.edit_tree
+        nodes = tree.nodes
 
         # Store selection
         selection = []
@@ -122,7 +122,8 @@ class NODE_OT_delete_unused(Operator, NWBase):
             self.report({'INFO'}, message)
 
         # Restore selection
-        nodes, links = get_nodes_links(context)
+        tree = context.space_data.edit_tree
+        nodes = tree.nodes
         for node in nodes:
             if node.name in selection:
                 node.select = True

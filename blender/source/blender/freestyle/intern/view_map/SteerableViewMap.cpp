@@ -18,8 +18,8 @@
 #include "../image/Image.h"
 #include "../image/ImagePyramid.h"
 
-#include "BLI_math_base.h"
-#include "BLI_sys_types.h"
+#include "BLI_math_base_c.hh"
+#include "BLI_sys_types.hh"
 
 #include "BKE_global.hh"
 
@@ -231,7 +231,7 @@ void SteerableViewMap::saveSteerableViewMap() const
   for (uint i = 0; i <= _nbOrientations; ++i) {
     if (_imagesPyramids[i] == nullptr) {
       cerr << "SteerableViewMap warning: orientation " << i
-           << " of steerable View Map whas not been computed yet" << endl;
+           << " of steerable View Map has not been computed yet" << endl;
       continue;
     }
     int ow = _imagesPyramids[i]->width(0);
@@ -244,7 +244,7 @@ void SteerableViewMap::saveSteerableViewMap() const
     for (int j = 0; j < _imagesPyramids[i]->getNumberOfLevels(); ++j) {  // soc
       float coeff = 1.0f;  // 1 / 255.0f; // 100 * 255; // * pow(2, j);
       // soc QImage qtmp(ow, oh, QImage::Format_RGB32);
-      blender::ImBuf *ibuf = IMB_allocImBuf(ow, oh, 32, blender::IB_byte_data);
+      blender::ImBuf *ibuf = IMB_allocImBuf(ow, oh, blender::ImBufFlags::ByteData);
       int rowbytes = ow * 4;
       uchar *pix;
 
@@ -267,7 +267,7 @@ void SteerableViewMap::saveSteerableViewMap() const
       filepath << base;
       filepath << i << "-" << j << ".png";
       ibuf->ftype = blender::IMB_FTYPE_PNG;
-      IMB_save_image(ibuf, const_cast<char *>(filepath.str().c_str()), 0);
+      IMB_save_image(ibuf, const_cast<char *>(filepath.str().c_str()), blender::ImBufFlags::Zero);
     }
 #if 0
     QString base("SteerableViewMap");

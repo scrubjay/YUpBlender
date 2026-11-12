@@ -2,9 +2,13 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup shdnodes
+ */
+
 #include "node_shader_util.hh"
 
-#include "BLI_string.h"
+#include "BLI_string.hh"
 
 #include "UI_interface_layout.hh"
 #include "UI_resources.hh"
@@ -22,7 +26,7 @@ static void node_declare(NodeDeclarationBuilder &b)
 
   b.add_input<decl::Color>("Color"_ustr).default_value({0.8f, 0.8f, 0.8f, 1.0f});
   b.add_input<decl::Float>("Scale"_ustr)
-      .default_value(0.05f)
+      .default_value(0.005f)
       .min(0.0f)
       .max(1000.0f)
       .description("Scale factor of the subsurface scattering radius");
@@ -74,12 +78,28 @@ static int node_shader_gpu_subsurface_scattering(GPUMaterial *mat,
                                                  GPUNodeStack *out)
 {
   if (!in[6].link) {
-    GPU_link(mat, "world_normals_get", &in[6].link);
+    GPU_link(mat, "world_normals_get", GPU_shading_data(), &in[6].link);
   }
 
   GPU_material_flag_set(mat, GPU_MATFLAG_DIFFUSE | GPU_MATFLAG_SUBSURFACE);
 
-  return GPU_stack_link(mat, node, "node_subsurface_scattering", in, out);
+  /* EEVEE's subsurface closure still uses the legacy approximation where the radius is scaled by
+   * 1/(4pi) (e.g., SHD_SUBSURFACE_RANDOM_WALK_LEGACY) */
+  GPUNodeLink *random_walk_radius_scale = nullptr;
+  float random_walk_scale = 1.0f;
+  if (node->custom1 == SHD_SUBSURFACE_RANDOM_WALK) {
+    random_walk_scale = 4.0f * M_PI;
+  }
+  random_walk_radius_scale = GPU_constant(&random_walk_scale);
+
+  return GPU_stack_link(mat,
+                        node,
+                        "node_subsurface_scattering",
+                        in,
+                        out,
+                        random_walk_radius_scale,
+                        GPU_kernel_globals(),
+                        GPU_shading_data());
 }
 
 static void node_shader_update_subsurface_scattering(bNodeTree *ntree, bNode *node)
@@ -147,7 +167,7 @@ void register_node_type_sh_subsurface_scattering()
   ntype.gather_link_search_ops = search_link_ops_for_shader_bsdf_node;
   ntype.add_ui_poll = object_shader_nodes_poll;
   ntype.draw_buttons = file_ns::node_shader_buts_subsurface;
-  bke::node_type_size_preset(ntype, bke::eNodeSizePreset::Middle);
+  ntype.default_width = bke::NodeWidth::_160;
   ntype.initfunc = file_ns::node_shader_init_subsurface_scattering;
   ntype.gpu_fn = file_ns::node_shader_gpu_subsurface_scattering;
   ntype.updatefunc = file_ns::node_shader_update_subsurface_scattering;

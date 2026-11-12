@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup nodes
+ */
+
 #pragma once
 
 #include <optional>
@@ -47,7 +51,8 @@ class SocketUsageInferencer {
   bool is_disabled_output(const SocketInContext &socket);
   bool is_disabled_group_output(int output_i);
 
-  /** This can be used when detecting the usage of all input sockets in a node tree, instead of
+  /**
+   * This can be used when detecting the usage of all input sockets in a node tree, instead of
    * just the inputs of the group as a whole.
    */
   void mark_top_level_node_outputs_as_used();
@@ -86,6 +91,7 @@ class SocketUsageParams {
    * Utility for the case when the socket depends on a specific menu input to have a certain value.
    */
   bool menu_input_may_be(UString identifier, int enum_value) const;
+  bool bool_input_may_be(UString identifier, bool bool_value) const;
 };
 
 /**

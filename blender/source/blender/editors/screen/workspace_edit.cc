@@ -11,12 +11,12 @@
 
 #include <fmt/format.h>
 
-#include "BLI_fileops.h"
-#include "BLI_listbase.h"
+#include "BLI_fileops.hh"
+#include "BLI_listbase.hh"
 #include "BLI_path_utils.hh"
-#include "BLI_string.h"
-#include "BLI_string_utf8.h"
-#include "BLI_utildefines.h"
+#include "BLI_string.hh"
+#include "BLI_string_utf8.hh"
+#include "BLI_utildefines.hh"
 
 #include "BKE_appdir.hh"
 #include "BKE_blendfile.hh"
@@ -171,7 +171,7 @@ static WorkSpaceLayout *workspace_change_get_new_layout(Main *bmain,
   else {
     layout_new = BKE_workspace_active_layout_for_workspace_get(win->workspace_hook, workspace_new);
     if (!layout_new) {
-      layout_new = static_cast<WorkSpaceLayout *>(workspace_new->layouts.first);
+      layout_new = workspace_new->layouts.first();
     }
   }
 
@@ -245,8 +245,8 @@ WorkSpace *ED_workspace_duplicate(WorkSpace *workspace_old, Main *bmain, wmWindo
 
   /* Try to keep active the layout from the new workspace matching the current active one from
    * the old workspace. */
-  WorkSpaceLayout *layout_old = static_cast<WorkSpaceLayout *>(workspace_old->layouts.first);
-  WorkSpaceLayout *layout_new = static_cast<WorkSpaceLayout *>(workspace_new->layouts.first);
+  WorkSpaceLayout *layout_old = workspace_old->layouts.first();
+  WorkSpaceLayout *layout_new = workspace_new->layouts.first();
   for (; layout_old && layout_new; layout_old = layout_old->next, layout_new = layout_new->next) {
     if (layout_old == layout_active_old) {
       win->workspace_hook->temp_layout_store = layout_new;
@@ -257,7 +257,7 @@ WorkSpace *ED_workspace_duplicate(WorkSpace *workspace_old, Main *bmain, wmWindo
 
 bool ED_workspace_delete(WorkSpace *workspace, Main *bmain, bContext *C, wmWindowManager *wm)
 {
-  if (BLI_listbase_is_single(&bmain->workspaces)) {
+  if (bmain->workspaces.is_single()) {
     return false;
   }
 
@@ -397,6 +397,11 @@ static wmOperatorStatus workspace_append_activate_exec(bContext *C, wmOperator *
   }
   RNA_string_get(op->ptr, "idname", idname);
   RNA_string_get(op->ptr, "filepath", filepath);
+  /* Not expected, but a blank filename causes an assert
+   * (trips up the "importing from self" assert as both paths are blank). */
+  if (idname[0] == '\0' || filepath[0] == '\0') {
+    return OPERATOR_CANCELLED;
+  }
 
   WorkSpace *appended_workspace = nullptr;
   /* NOTE: Need to check `filepath`, in the rare case where the usual source of work-spaces
@@ -605,7 +610,7 @@ static void workspace_add_menu_draw(ui::Layout &layout)
     layout.menu_fn_argN_free(display_name, ICON_NONE, workspace_add_menu, app_template);
   }
 
-  BLI_freelistN(&templates);
+  templates.free_no_destruct();
 
   layout.separator();
   layout.op("WORKSPACE_OT_duplicate",

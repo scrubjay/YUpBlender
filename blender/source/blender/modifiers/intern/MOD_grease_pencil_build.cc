@@ -97,14 +97,15 @@ static void blend_read(BlendDataReader *reader, ModifierData *md)
   modifier::greasepencil::read_influence_data(reader, &mmd->influence);
 }
 
-static Array<int> point_counts_to_keep_concurrent(const bke::CurvesGeometry &curves,
-                                                  const IndexMask &selection,
-                                                  const int time_alignment,
-                                                  const int transition,
-                                                  const float factor,
-                                                  const bool clamp_points,
-                                                  int &r_curves_num,
-                                                  int &r_points_num)
+static Array<int> point_counts_to_keep_concurrent(
+    const bke::CurvesGeometry &curves,
+    const IndexMask &selection,
+    const GreasePencilBuildTimeAlignment time_alignment,
+    const GreasePencilBuildTransition transition,
+    const float factor,
+    const bool clamp_points,
+    int &r_curves_num,
+    int &r_points_num)
 {
   const int stroke_count = curves.curves_num();
   const OffsetIndices<int> points_by_curve = curves.points_by_curve();
@@ -169,8 +170,8 @@ static Array<int> point_counts_to_keep_concurrent(const bke::CurvesGeometry &cur
 static bke::CurvesGeometry build_concurrent(bke::greasepencil::Drawing &drawing,
                                             bke::CurvesGeometry &curves,
                                             const IndexMask &selection,
-                                            const int time_alignment,
-                                            const int transition,
+                                            const GreasePencilBuildTimeAlignment time_alignment,
+                                            const GreasePencilBuildTransition transition,
                                             const float factor,
                                             const float factor_start,
                                             const float factor_opacity,
@@ -282,7 +283,7 @@ static bke::CurvesGeometry build_concurrent(bke::greasepencil::Drawing &drawing,
 
 static void points_info_sequential(const bke::CurvesGeometry &curves,
                                    const IndexMask &selection,
-                                   const int transition,
+                                   const GreasePencilBuildTransition transition,
                                    const float factor,
                                    const bool clamp_points,
                                    int &r_curves_num,
@@ -325,7 +326,7 @@ static void points_info_sequential(const bke::CurvesGeometry &curves,
 static bke::CurvesGeometry build_sequential(bke::greasepencil::Drawing &drawing,
                                             bke::CurvesGeometry &curves,
                                             const IndexMask &selection,
-                                            const int transition,
+                                            const GreasePencilBuildTransition transition,
                                             const float factor,
                                             const float factor_start,
                                             const float factor_opacity,
@@ -374,6 +375,9 @@ static bke::CurvesGeometry build_sequential(bke::greasepencil::Drawing &drawing,
     next_curve++;
   });
 
+  const int untouched_curves_num = next_curve - 1;
+  const int untouched_points_num = next_point;
+
   const int stroke_count = curves.curves_num();
   bool done_scanning = false;
   selection.foreach_index([&](const int i) {
@@ -413,10 +417,30 @@ static bke::CurvesGeometry build_sequential(bke::greasepencil::Drawing &drawing,
       }
     }
     dst_offsets[next_curve] = next_point;
-    dst_to_src_curve[next_curve - 1] = i;
+    dst_to_src_curve[next_curve - 1] = stroke;
     next_curve++;
   });
   weights.finish();
+
+  if (is_vanishing) {
+    /* The selected strokes were built last-to-first with reversed points (to pick which points
+     * to keep). Flip the built range back so the kept strokes keep their original order and
+     * point direction. */
+    MutableSpan<int> built_points = dst_to_src_point.as_mutable_span().drop_front(
+        untouched_points_num);
+    MutableSpan<int> built_curves = dst_to_src_curve.as_mutable_span().drop_front(
+        untouched_curves_num);
+    std::reverse(built_points.begin(), built_points.end());
+    std::reverse(built_curves.begin(), built_curves.end());
+    MutableSpan<int> built_offsets = dst_offsets.drop_front(untouched_curves_num);
+    Array<int> sizes(built_curves.size());
+    for (const int i : sizes.index_range()) {
+      sizes[i] = built_offsets[i + 1] - built_offsets[i];
+    }
+    std::reverse(sizes.begin(), sizes.end());
+    built_offsets.take_front(sizes.size()).copy_from(sizes);
+    offset_indices::accumulate_counts_to_offsets(built_offsets, untouched_points_num);
+  }
 
   BLI_assert(next_curve == (dst_curves_num + 1));
   BLI_assert(next_point == dst_points_num);
@@ -657,9 +681,12 @@ static void build_drawing(const GreasePencilBuildModifierData &mmd,
     std::swap(factor, factor_start);
   }
 
-  const float use_time_alignment = mmd.transition != MOD_GREASE_PENCIL_BUILD_TRANSITION_GROW ?
-                                       !mmd.time_alignment :
-                                       mmd.time_alignment;
+  const GreasePencilBuildTimeAlignment use_time_alignment =
+      mmd.transition != MOD_GREASE_PENCIL_BUILD_TRANSITION_GROW ?
+          ((mmd.time_alignment == MOD_GREASE_PENCIL_BUILD_TIMEALIGN_START) ?
+               MOD_GREASE_PENCIL_BUILD_TIMEALIGN_END :
+               MOD_GREASE_PENCIL_BUILD_TIMEALIGN_START) :
+          mmd.time_alignment;
   switch (mmd.mode) {
     default:
     case MOD_GREASE_PENCIL_BUILD_MODE_SEQUENTIAL:

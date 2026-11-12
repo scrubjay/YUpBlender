@@ -53,6 +53,7 @@ set(SRC
   tree/tree_element_id.cc
   tree/tree_element_id_action.cc
   tree/tree_element_id_armature.cc
+  tree/tree_element_id_base.cc
   tree/tree_element_id_collection.cc
   tree/tree_element_id_curve.cc
   tree/tree_element_id_gpencil_legacy.cc
@@ -76,6 +77,7 @@ set(SRC
   tree/tree_element_rna.cc
   tree/tree_element_scene_objects.cc
   tree/tree_element_seq.cc
+  tree/tree_element_shapekey.cc
   tree/tree_element_view_collection.cc
   tree/tree_element_view_layer.cc
   tree/tree_iterator.cc
@@ -99,6 +101,7 @@ set(SRC
   tree/tree_element_id.hh
   tree/tree_element_id_action.hh
   tree/tree_element_id_armature.hh
+  tree/tree_element_id_base.hh
   tree/tree_element_id_collection.hh
   tree/tree_element_id_curve.hh
   tree/tree_element_id_gpencil_legacy.hh
@@ -122,6 +125,7 @@ set(SRC
   tree/tree_element_rna.hh
   tree/tree_element_scene_objects.hh
   tree/tree_element_seq.hh
+  tree/tree_element_shapekey.hh
   tree/tree_element_view_collection.hh
   tree/tree_element_view_layer.hh
   tree/tree_iterator.hh

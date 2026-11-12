@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup modifiers
+ */
+
 #pragma once
 
 #include <memory>
@@ -11,6 +15,7 @@
 
 namespace blender {
 
+struct Main;
 struct NodesModifierData;
 struct NodesModifierDataBlock;
 struct Object;
@@ -29,7 +34,7 @@ class NodesEvalLog;
  * inputs. If any properties correspond to the old properties by name and type, carry over
  * the values.
  */
-void MOD_nodes_update_interface(Object *object, NodesModifierData *nmd);
+void MOD_nodes_update_interface(Main &bmain, Object *object, NodesModifierData *nmd);
 
 class NodesModifierUsageInferenceCache {
  private:
@@ -65,6 +70,8 @@ struct NodesModifierRuntime {
 };
 
 void nodes_modifier_data_block_destruct(NodesModifierDataBlock *data_block, bool do_id_user);
+void nodes_modifier_packed_bake_copy(NodesModifierBake &bake_dst,
+                                     const NodesModifierBake &bake_src);
 void nodes_modifier_packed_bake_free(NodesModifierPackedBake *packed_bake);
 void nodes_modifier_bake_destruct(NodesModifierBake *bake, bool do_id_user);
 

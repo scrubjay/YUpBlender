@@ -27,7 +27,7 @@ class ColorSpaceManager {
  public:
   /* Convert used specified colorspace to a colorspace that we are able to
    * convert to and from. If the colorspace is u_colorspace_auto, we auto
-   * detect a colospace. */
+   * detect a colorspace. */
   static ustring detect_known_colorspace(ustring colorspace,
                                          const char *file_colorspace,
                                          const char *file_format,
@@ -65,7 +65,7 @@ class ColorSpaceManager {
   static Transform get_xyz_to_rec2020();
   static Transform get_xyz_to_acescg();
   /* Compute unique string for texture cache hashing and metadata. */
-  static const string &get_xyz_to_scene_linear_rgb_string();
+  static string get_xyz_to_scene_linear_rgb_string();
   /* Determine if scene linear is a common known space. */
   static const char *get_scene_linear_interop_id(const bool srgb_encoded = false);
 

@@ -46,13 +46,13 @@
 #include "BKE_report.hh"
 #include "BKE_scene.hh"
 
-#include "BLI_fileops.h"
+#include "BLI_fileops.hh"
 #include "BLI_math_matrix.hh"
 #include "BLI_math_matrix_types.hh"
-#include "BLI_math_rotation.h"
-#include "BLI_math_vector.h"
+#include "BLI_math_rotation_c.hh"
+#include "BLI_math_vector_c.hh"
 #include "BLI_path_utils.hh"
-#include "BLI_string.h"
+#include "BLI_string.hh"
 #include "BLI_timeit.hh"
 
 #include "ED_util.hh"
@@ -404,12 +404,12 @@ std::string cache_image_color(const float color[4])
     return file_path;
   }
 
-  ImBuf *ibuf = IMB_allocImBuf(1, 1, 32, IB_float_data);
+  ImBuf *ibuf = IMB_allocImBuf(1, 1, ImBufFlags::FloatData);
   IMB_rectfill(ibuf, color);
   ibuf->ftype = IMB_FTYPE_OPENEXR;
   ibuf->foptions.flag = R_IMF_EXR_CODEC_RLE;
 
-  if (IMB_save_image(ibuf, file_path.c_str(), IB_float_data)) {
+  if (IMB_save_image(ibuf, file_path.c_str(), ImBufFlags::FloatData)) {
     CLOG_INFO(&LOG, "%s", file_path.c_str());
   }
   else {
@@ -539,6 +539,7 @@ pxr::UsdStageRefPtr export_to_stage(const USDExportParams &params,
   /* Set up the stage for animated data. */
   if (params.export_animation) {
     usd_stage->SetTimeCodesPerSecond(scene->frames_per_second());
+    usd_stage->SetFramesPerSecond(scene->frames_per_second());
     usd_stage->SetStartTimeCode(scene->r.sfra);
     usd_stage->SetEndTimeCode(scene->r.efra);
   }
@@ -574,6 +575,7 @@ pxr::UsdStageRefPtr export_to_stage(const USDExportParams &params,
   if (params.export_animation) {
     /* Writing the animated frames is not 100% of the work, here it's assumed to be 75% of it. */
     float progress_per_frame = 0.75f / std::max(1, (scene->r.efra - scene->r.sfra + 1));
+    int exported_frame_count = 0;
 
     for (float frame = scene->r.sfra; frame <= scene->r.efra; frame++) {
       if (G.is_break || worker_status->stop) {
@@ -587,6 +589,13 @@ pxr::UsdStageRefPtr export_to_stage(const USDExportParams &params,
 
       iter.set_export_frame(frame);
       iter.iterate_and_write();
+
+      /* Check if we need to perform an incremental save. A value of 0 will never trigger. */
+      exported_frame_count++;
+      if (exported_frame_count == params.incremental_frames) {
+        usd_stage->GetRootLayer()->Save();
+        exported_frame_count = 0;
+      }
 
       worker_status->progress += progress_per_frame;
       worker_status->do_update = true;

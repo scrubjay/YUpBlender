@@ -18,6 +18,7 @@ from bpy.props import (
     FloatVectorProperty,
     IntVectorProperty,
 )
+import array
 import unittest
 import numpy as np
 import math
@@ -75,67 +76,61 @@ class TestPropArrayIndex(unittest.TestCase):
 
     size_1d = 10
     valid_indices_1d = (
-        (4, 9, -5, slice(7, 9)),
+        (4, 9, -5, slice(7, 9), slice(2, 9, 3), slice(8, 1, -3), slice(None, None, -1)),
     )
     invalid_indices_1d = (
         (
             # Wrong slice indices are clamped to valid values, and therefore return smaller-than-expected arrays
             (..., (slice(7, 11),)),
             (IndexError, (-11, 10)),
-            # Slices with step are not supported currently - although the 'inlined' [x:y:z] syntax does work?
-            (TypeError, (slice(2, 9, 3),)),
+            (ValueError, (slice(2, 9, 0),)),
         ),
     )
 
     size_2d = (4, 1)
     valid_indices_2d = (
-        (1, 3, -2, slice(0, 3)),
-        (0, -1, slice(0, 1)),
+        (1, 3, -2, slice(0, 3), slice(0, 4, 2), slice(None, None, -1)),
+        (0, -1, slice(0, 1), slice(0, 1, 2), slice(None, None, -1)),
     )
     invalid_indices_2d = (
         (
             # Wrong slice indices are clamped to valid values, and therefore return smaller-than-expected arrays
             (..., (slice(0, 5),)),
             (IndexError, (-5, 4)),
-            # Slices with step are not supported currently - although the 'inlined' [x:y:z] syntax does work?
-            (TypeError, (slice(0, 4, 2),)),
+            (ValueError, (slice(0, 4, 0),)),
         ),
         (
             # Wrong slice indices are clamped to valid values, and therefore return smaller-than-expected arrays
             (..., (slice(1, 2),)),
             (IndexError, (-2, 1)),
-            # Slices with step are not supported currently - although the 'inlined' [x:y:z] syntax does work?
-            (TypeError, (slice(0, 1, 2),)),
+            (ValueError, (slice(0, 1, 0),)),
         ),
     )
 
     size_3d = (3, 2, 4)
     valid_indices_3d = (
-        (1, 2, -2, slice(0, 3)),
-        (0, -2, slice(0, 1)),
-        (3, -4, slice(1, 3)),
+        (1, 2, -2, slice(0, 3), slice(0, 3, 2), slice(None, None, -1)),
+        (0, -2, slice(0, 1), slice(0, 2, 2), slice(None, None, -1)),
+        (3, -4, slice(1, 3), slice(1, 4, 2), slice(None, None, -1)),
     )
     invalid_indices_3d = (
         (
             # Wrong slice indices are clamped to valid values, and therefore return smaller-than-expected arrays
             (..., (slice(0, 5),)),
             (IndexError, (-4, 3)),
-            # Slices with step are not supported currently - although the 'inlined' [x:y:z] syntax does work?
-            (TypeError, (slice(0, 3, 2),)),
+            (ValueError, (slice(0, 3, 0),)),
         ),
         (
             # Wrong slice indices are clamped to valid values, and therefore return smaller-than-expected arrays
             (..., (slice(1, 3),)),
             (IndexError, (-3, 2)),
-            # Slices with step are not supported currently - although the 'inlined' [x:y:z] syntax does work?
-            (TypeError, (slice(0, 1, 2),)),
+            (ValueError, (slice(0, 1, 0),)),
         ),
         (
             # Wrong slice indices are clamped to valid values, and therefore return smaller-than-expected arrays
             (..., (slice(2, 7),)),
             (IndexError, (-5, 4)),
-            # Slices with step are not supported currently - although the 'inlined' [x:y:z] syntax does work?
-            (TypeError, (slice(1, 4, 2),)),
+            (ValueError, (slice(1, 4, 0),)),
         ),
     )
 
@@ -253,11 +248,15 @@ class TestPropArrayIndex(unittest.TestCase):
     ):
         self.assertEqual(len(prop_array), prop_size[current_dimension])
         for idx in valid_indices[current_dimension]:
-            expected_len = self.compute_slice_len(idx)
             data = prop_array[idx]
-            if expected_len is not ...:
-                self.assertEqual(len(data), expected_len)
+            if isinstance(idx, slice):
+                self.assertEqual(seq_items_as_tuple(data), seq_items_as_tuple(tuple(prop_array)[idx]))
+
             prop_array[idx] = data
+
+            if isinstance(idx, slice):
+                # Round-trip: the slice should still equal `data` after writing it back.
+                self.assertEqual(seq_items_as_tuple(prop_array[idx]), seq_items_as_tuple(data))
 
         for error, indices in invalid_indices[current_dimension]:
             for idx in indices:
@@ -380,6 +379,83 @@ class TestPropArrayIndex(unittest.TestCase):
         )
 
 
+class TestPropArraySliceStep(unittest.TestCase):
+    # Stepped slice reads and writes are symmetrical: a write places values at the same
+    # indices a read returns, and re-reading after a write yields exactly what was written.
+
+    size_1d = 10
+    size_2d = (4, 3)
+
+    def setUp(self):
+        id_type.test_array_i_1d = IntVectorProperty(size=self.size_1d)
+        id_type.test_array_i_2d = IntVectorProperty(size=self.size_2d)
+        id_inst.test_array_i_1d = tuple(range(self.size_1d))
+        id_inst.test_array_i_2d = matrix_with_repeating_digits(self.size_2d[1], self.size_2d[0])
+
+    def tearDown(self):
+        del id_type.test_array_i_1d
+        del id_type.test_array_i_2d
+
+    def test_step_positive(self):
+        # Slice covers indices 1, 3, 5, 7.
+        self.assertEqual(tuple(id_inst.test_array_i_1d[1:9:2]), (1, 3, 5, 7))
+        id_inst.test_array_i_1d[1:9:2] = (-1, -3, -5, -7)
+        self.assertEqual(tuple(id_inst.test_array_i_1d[1:9:2]), (-1, -3, -5, -7))
+        self.assertEqual(tuple(id_inst.test_array_i_1d), (0, -1, 2, -3, 4, -5, 6, -7, 8, 9))
+
+    def test_step_negative(self):
+        # Slice covers indices 8, 6, 4, 2 in that order.
+        self.assertEqual(tuple(id_inst.test_array_i_1d[8:1:-2]), (8, 6, 4, 2))
+        id_inst.test_array_i_1d[8:1:-2] = (-8, -6, -4, -2)
+        self.assertEqual(tuple(id_inst.test_array_i_1d[8:1:-2]), (-8, -6, -4, -2))
+        self.assertEqual(tuple(id_inst.test_array_i_1d), (0, 1, -2, 3, -4, 5, -6, 7, -8, 9))
+
+    def test_step_full_reverse(self):
+        # `arr[::-1]` covers every index - `slice_length == length`, so the write skips the
+        # pre-read of the existing array. Verify every position still lands correctly.
+        reversed_indices = tuple(range(self.size_1d - 1, -1, -1))
+        self.assertEqual(tuple(id_inst.test_array_i_1d[::-1]), reversed_indices)
+        id_inst.test_array_i_1d[::-1] = tuple(range(self.size_1d))
+        self.assertEqual(tuple(id_inst.test_array_i_1d[::-1]), tuple(range(self.size_1d)))
+        # Index 9 received `new[0]`, index 0 received `new[-1]` - full reverse.
+        self.assertEqual(tuple(id_inst.test_array_i_1d), reversed_indices)
+
+    def test_step_write_size_mismatch(self):
+        # `slice_length` is 4; providing 3 values must raise.
+        with self.assertRaises(TypeError):
+            id_inst.test_array_i_1d[1:9:2] = (-1, -3, -5)
+
+    def test_step_2d_outer(self):
+        # `arr[::2]` covers rows 0 and 2 of a (4, 3) array.
+        original = seq_items_as_tuple(id_inst.test_array_i_2d)
+        self.assertEqual(
+            seq_items_as_tuple(id_inst.test_array_i_2d[::2]),
+            (original[0], original[2]),
+        )
+        new_rows = ((-1, -2, -3), (-4, -5, -6))
+        id_inst.test_array_i_2d[::2] = new_rows
+        self.assertEqual(seq_items_as_tuple(id_inst.test_array_i_2d[::2]), new_rows)
+        self.assertEqual(
+            seq_items_as_tuple(id_inst.test_array_i_2d),
+            (new_rows[0], original[1], new_rows[1], original[3]),
+        )
+
+    def test_step_2d_inner(self):
+        # Stepped slice on an inner sub-array (single row).
+        original = seq_items_as_tuple(id_inst.test_array_i_2d)
+        self.assertEqual(
+            tuple(id_inst.test_array_i_2d[1][::2]),
+            (original[1][0], original[1][2]),
+        )
+        id_inst.test_array_i_2d[1][::2] = (-100, -200)
+        self.assertEqual(tuple(id_inst.test_array_i_2d[1][::2]), (-100, -200))
+        expected_row_1 = (-100, original[1][1], -200)
+        self.assertEqual(
+            seq_items_as_tuple(id_inst.test_array_i_2d),
+            (original[0], expected_row_1, original[2], original[3]),
+        )
+
+
 class TestPropArrayForeach(unittest.TestCase):
     # Test foreach_get/_set access of Int and Float vector properties (bool ones do not support this).
 
@@ -495,6 +571,32 @@ class TestPropArrayForeach(unittest.TestCase):
                 if num_dimensions > 2:
                     for j in range(prop_size[1]):
                         self.do_test_foreach_getset_current_dimension(prop_array[i][j], *test_args)
+
+    def test_foreach_get_readonly_buffer(self):
+        # `foreach_get` writes into the buffer, read-only buffers must be rejected.
+        id_inst.test_array_f_1d.foreach_set([float(i) for i in range(100, 100 + self.size_1d)])
+
+        values = array.array('f', [float(i) for i in range(self.size_1d)])
+        with self.assertRaises(TypeError):
+            id_inst.test_array_f_1d.foreach_get(memoryview(values).toreadonly())
+
+        self.assertEqual(tuple(values), tuple(float(i) for i in range(self.size_1d)))
+
+    def test_foreach_set_readonly_buffer(self):
+        # `foreach_set` only reads from the buffer, read-only buffers are supported.
+        values = array.array('f', [float(i) for i in range(self.size_1d)])
+        id_inst.test_array_f_1d.foreach_set(memoryview(values).toreadonly())
+        self.assertEqual(tuple(id_inst.test_array_f_1d), tuple(values))
+
+    def test_foreach_get_writable_buffer(self):
+        # A `memoryview` doesn't support item assignment, so this only passes
+        # when the buffer is written into directly.
+        values = array.array('f', [float(i) for i in range(self.size_1d)])
+        id_inst.test_array_f_1d.foreach_set(values)
+
+        buf = array.array('f', [-1.0] * self.size_1d)
+        id_inst.test_array_f_1d.foreach_get(memoryview(buf))
+        self.assertEqual(tuple(buf), tuple(values))
 
     def test_foreach_getset_i_1d(self):
         self.do_test_foreach_getset(id_inst.test_array_i_1d, 'INT', self.size_1d)
@@ -756,6 +858,39 @@ class TestPropArrayInvalidForeachGetSet(unittest.TestCase):
         invalid_3f_list = [1.0] * (len(me.vertices) * 3 - 1)
         with self.assertRaises(RuntimeError):
             me.vertices.foreach_set("co", invalid_3f_list)
+
+    def test_foreach_get_readonly_buffer(self):
+        # `foreach_get` writes into the buffer, read-only buffers must be rejected.
+        me = self.me
+
+        me.vertices.foreach_set("co", [float(i) for i in range(100, 100 + (len(me.vertices) * 3))])
+
+        values = array.array('f', [float(i) for i in range(len(me.vertices) * 3)])
+        with self.assertRaises(TypeError):
+            me.vertices.foreach_get("co", memoryview(values).toreadonly())
+
+        self.assertEqual(tuple(values), tuple(float(i) for i in range(len(me.vertices) * 3)))
+
+    def test_foreach_set_readonly_buffer(self):
+        # `foreach_set` only reads from the buffer, read-only buffers are supported.
+        me = self.me
+
+        values = array.array('f', [float(i) for i in range(len(me.vertices) * 3)])
+        me.vertices.foreach_set("co", memoryview(values).toreadonly())
+        for i, v in enumerate(me.vertices):
+            self.assertEqual(tuple(v.co), tuple(values[i * 3:(i + 1) * 3]))
+
+    def test_foreach_get_writable_buffer(self):
+        # A `memoryview` doesn't support item assignment, so this only passes
+        # when the buffer is written into directly.
+        me = self.me
+
+        values = array.array('f', [float(i) for i in range(len(me.vertices) * 3)])
+        me.vertices.foreach_set("co", values)
+
+        writable_3f = array.array('f', [-1.0] * (len(me.vertices) * 3))
+        me.vertices.foreach_get("co", memoryview(writable_3f))
+        self.assertEqual(tuple(writable_3f), tuple(values))
 
 
 def main():

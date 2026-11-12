@@ -146,7 +146,7 @@ class SCENE_OT_gltf2_variant_add(bpy.types.Operator):
     def execute(self, context):
         var = bpy.data.scenes[0].gltf2_KHR_materials_variants_variants.add()
         var.variant_idx = len(bpy.data.scenes[0].gltf2_KHR_materials_variants_variants) - 1
-        var.name = "VariantName"
+        var.name = "Variant Name"
         bpy.data.scenes[0].gltf2_active_variant = len(bpy.data.scenes[0].gltf2_KHR_materials_variants_variants) - 1
         return {'FINISHED'}
 
@@ -380,6 +380,9 @@ class MESH_PT_gltf2_mesh_variants(bpy.types.Panel):
     @classmethod
     def poll(cls, context):
         if not bpy.context.object:
+            return False
+        # Enable Variant UI only for Meshes, not Point Clouds (no multiple materials on PC for now)
+        if bpy.context.object.type != "MESH":
             return False
         return bpy.context.preferences.addons['io_scene_gltf2'].preferences.KHR_materials_variants_ui is True \
             and len(bpy.context.object.material_slots) > 0

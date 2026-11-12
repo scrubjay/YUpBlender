@@ -22,7 +22,7 @@
 #include "util/transform.h"
 #include "util/types.h"
 
-#include "BLI_listbase.h"
+#include "BLI_listbase.hh"
 
 #include "DNA_mesh_types.h"
 #include "DNA_modifier_types.h"
@@ -86,12 +86,9 @@ static inline blender::Mesh *object_copy_mesh_data(const BObjectInfo &b_ob_info)
 
 int blender_attribute_name_split_type(ustring name, string *r_real_name);
 
-void python_thread_state_save(void **python_thread_state);
-void python_thread_state_restore(void **python_thread_state);
-
 static inline blender::Mesh *object_to_mesh(BObjectInfo &b_ob_info)
 {
-  blender::Mesh *mesh = (GS(b_ob_info.object_data->name) == blender::ID_ME) ?
+  blender::Mesh *mesh = (b_ob_info.object_data->id_type() == blender::ID_ME) ?
                             blender::id_cast<blender::Mesh *>(b_ob_info.object_data) :
                             nullptr;
 
@@ -132,7 +129,7 @@ static inline void free_object_to_mesh(BObjectInfo &b_ob_info, blender::Mesh &me
 }
 
 static inline void colorramp_to_array(const blender::ColorBand &ramp,
-                                      array<float3> &ramp_color,
+                                      array<packed_float3> &ramp_color,
                                       array<float> &ramp_alpha,
                                       const int size)
 {
@@ -216,7 +213,7 @@ static inline void curvemapping_float_to_array(const blender::CurveMapping &cuma
 }
 
 static inline void curvemapping_color_to_array(const blender::CurveMapping &cumap,
-                                               array<float3> &data,
+                                               array<packed_float3> &data,
                                                const int size,
                                                bool rgb_curve)
 {
@@ -369,6 +366,18 @@ static inline Transform get_transform(const blender::float4x4 &matrix)
                         ptr[14]);
 }
 
+static inline float2 get_float2(blender::PointerRNA &ptr, const char *name)
+{
+  float2 f;
+  RNA_float_get_array(&ptr, name, &f.x);
+  return f;
+}
+
+static inline void set_float2(blender::PointerRNA &ptr, const char *name, const float2 value)
+{
+  RNA_float_set_array(&ptr, name, &value.x);
+}
+
 static inline float3 get_float3(blender::PointerRNA &ptr, const char *name)
 {
   float3 f;
@@ -501,7 +510,7 @@ static inline string get_text_datablock_content(const blender::ID *id)
   if (id == nullptr) {
     return "";
   }
-  if (GS(id->name) != blender::ID_TXT) {
+  if (id->id_type() != blender::ID_TXT) {
     return "";
   }
   const auto &text = *blender::id_cast<const blender::Text *>(id);
@@ -613,7 +622,7 @@ static inline blender::FluidDomainSettings *object_fluid_gas_domain_find(blender
 static blender::SubsurfModifierData *object_subdivision_modifier(blender::Object &b_ob,
                                                                  const bool preview)
 {
-  blender::ModifierData *md = static_cast<blender::ModifierData *>(b_ob.modifiers.last);
+  blender::ModifierData *md = b_ob.modifiers.last();
   if (!md) {
     return nullptr;
   }
@@ -707,25 +716,33 @@ static inline void object_subdivision_to_mesh(blender::Object &b_ob,
   }
 }
 
-static inline uint object_ray_visibility(blender::Object &b_ob)
+static inline PathRayVisibility object_ray_visibility(blender::Object &b_ob)
 {
-  uint flag = 0;
+  PathRayVisibility visibility = PATH_RAY_VISIBILITY_NONE;
 
-  flag |= ((b_ob.visibility_flag & blender::OB_HIDE_CAMERA) == 0) ? PATH_RAY_CAMERA :
-                                                                    PathRayFlag(0);
-  flag |= ((b_ob.visibility_flag & blender::OB_HIDE_DIFFUSE) == 0) ? PATH_RAY_DIFFUSE :
-                                                                     PathRayFlag(0);
-  flag |= ((b_ob.visibility_flag & blender::OB_HIDE_GLOSSY) == 0) ? PATH_RAY_GLOSSY :
-                                                                    PathRayFlag(0);
-  flag |= ((b_ob.visibility_flag & blender::OB_HIDE_TRANSMISSION) == 0) ? PATH_RAY_TRANSMIT :
-                                                                          PathRayFlag(0);
-  flag |= ((b_ob.visibility_flag & blender::OB_HIDE_SHADOW) == 0) ? PATH_RAY_SHADOW :
-                                                                    PathRayFlag(0);
-  flag |= ((b_ob.visibility_flag & blender::OB_HIDE_VOLUME_SCATTER) == 0) ?
-              PATH_RAY_VOLUME_SCATTER :
-              PathRayFlag(0);
+  visibility |= ((b_ob.visibility_flag & blender::OB_HIDE_CAMERA) == 0) ?
+                    PATH_RAY_VISIBILITY_CAMERA :
+                    PATH_RAY_VISIBILITY_NONE;
+  visibility |= ((b_ob.visibility_flag & blender::OB_HIDE_DIFFUSE) == 0) ?
+                    PATH_RAY_VISIBILITY_DIFFUSE :
+                    PATH_RAY_VISIBILITY_NONE;
+  visibility |= ((b_ob.visibility_flag & blender::OB_HIDE_GLOSSY) == 0) ?
+                    PATH_RAY_VISIBILITY_GLOSSY :
+                    PATH_RAY_VISIBILITY_NONE;
+  visibility |= ((b_ob.visibility_flag & blender::OB_HIDE_TRANSMISSION) == 0) ?
+                    PATH_RAY_VISIBILITY_TRANSMIT :
+                    PATH_RAY_VISIBILITY_NONE;
+  visibility |= ((b_ob.visibility_flag & blender::OB_HIDE_SHADOW) == 0) ?
+                    PATH_RAY_VISIBILITY_SHADOW :
+                    PATH_RAY_VISIBILITY_NONE;
+  visibility |= ((b_ob.visibility_flag & blender::OB_HIDE_VOLUME_SCATTER) == 0) ?
+                    PATH_RAY_VISIBILITY_VOLUME_SCATTER :
+                    PATH_RAY_VISIBILITY_NONE;
+  visibility |= ((b_ob.visibility_flag & blender::OB_HIDE_RAYCAST) == 0) ?
+                    PATH_RAY_VISIBILITY_RAYCAST :
+                    PATH_RAY_VISIBILITY_NONE;
 
-  return flag;
+  return visibility;
 }
 
 /* Check whether some of "built-in" motion-related attributes are needed to be exported (includes

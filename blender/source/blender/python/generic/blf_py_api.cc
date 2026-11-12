@@ -19,7 +19,7 @@
 
 #include "../../blenfont/BLF_api.hh"
 
-#include "BLI_utildefines.h"
+#include "BLI_utildefines.hh"
 
 #include "../../imbuf/IMB_colormanagement.hh"
 #include "../../imbuf/IMB_imbuf.hh"
@@ -62,7 +62,17 @@ static PyObject *py_blf_position(PyObject * /*self*/, PyObject *args)
   int fontid;
   float x, y, z;
 
-  if (!PyArg_ParseTuple(args, "ifff:blf.position", &fontid, &x, &y, &z)) {
+  if (!PyArg_ParseTuple(args,
+                        "i" /* `fontid` */
+                        "f" /* `x` */
+                        "f" /* `y` */
+                        "f" /* `z` */
+                        ":blf.position",
+                        &fontid,
+                        &x,
+                        &y,
+                        &z))
+  {
     return nullptr;
   }
 
@@ -88,7 +98,13 @@ static PyObject *py_blf_size(PyObject * /*self*/, PyObject *args)
   int fontid;
   float size;
 
-  if (!PyArg_ParseTuple(args, "if:blf.size", &fontid, &size)) {
+  if (!PyArg_ParseTuple(args,
+                        "i" /* `fontid` */
+                        "f" /* `size` */
+                        ":blf.size",
+                        &fontid,
+                        &size))
+  {
     return nullptr;
   }
 
@@ -114,7 +130,13 @@ static PyObject *py_blf_aspect(PyObject * /*self*/, PyObject *args)
   float aspect;
   int fontid;
 
-  if (!PyArg_ParseTuple(args, "if:blf.aspect", &fontid, &aspect)) {
+  if (!PyArg_ParseTuple(args,
+                        "i" /* `fontid` */
+                        "f" /* `aspect` */
+                        ":blf.aspect",
+                        &fontid,
+                        &aspect))
+  {
     return nullptr;
   }
 
@@ -146,7 +168,18 @@ static PyObject *py_blf_color(PyObject * /*self*/, PyObject *args)
   int fontid;
   float rgba[4];
 
-  if (!PyArg_ParseTuple(args, "iffff:blf.color", &fontid, &rgba[0], &rgba[1], &rgba[2], &rgba[3]))
+  if (!PyArg_ParseTuple(args,
+                        "i" /* `fontid` */
+                        "f" /* `r` */
+                        "f" /* `g` */
+                        "f" /* `b` */
+                        "f" /* `a` */
+                        ":blf.color",
+                        &fontid,
+                        &rgba[0],
+                        &rgba[1],
+                        &rgba[2],
+                        &rgba[3]))
   {
     return nullptr;
   }
@@ -178,7 +211,14 @@ static PyObject *py_blf_draw(PyObject * /*self*/, PyObject *args)
   Py_ssize_t text_length;
   int fontid;
 
-  if (!PyArg_ParseTuple(args, "is#:blf.draw", &fontid, &text, &text_length)) {
+  if (!PyArg_ParseTuple(args,
+                        "i"  /* `fontid` */
+                        "s#" /* `text` */
+                        ":blf.draw",
+                        &fontid,
+                        &text,
+                        &text_length))
+  {
     return nullptr;
   }
 
@@ -205,7 +245,14 @@ static PyObject *py_blf_draw_buffer(PyObject * /*self*/, PyObject *args)
   Py_ssize_t text_length;
   int fontid;
 
-  if (!PyArg_ParseTuple(args, "is#:blf.draw_buffer", &fontid, &text, &text_length)) {
+  if (!PyArg_ParseTuple(args,
+                        "i"  /* `fontid` */
+                        "s#" /* `text` */
+                        ":blf.draw_buffer",
+                        &fontid,
+                        &text,
+                        &text_length))
+  {
     return nullptr;
   }
 
@@ -235,7 +282,13 @@ static PyObject *py_blf_dimensions(PyObject * /*self*/, PyObject *args)
   PyObject *ret;
   int fontid;
 
-  if (!PyArg_ParseTuple(args, "is:blf.dimensions", &fontid, &text)) {
+  if (!PyArg_ParseTuple(args,
+                        "i" /* `fontid` */
+                        "s" /* `text` */
+                        ":blf.dimensions",
+                        &fontid,
+                        &text))
+  {
     return nullptr;
   }
 
@@ -269,7 +322,19 @@ static PyObject *py_blf_clipping(PyObject * /*self*/, PyObject *args)
   float xmin, ymin, xmax, ymax;
   int fontid;
 
-  if (!PyArg_ParseTuple(args, "iffff:blf.clipping", &fontid, &xmin, &ymin, &xmax, &ymax)) {
+  if (!PyArg_ParseTuple(args,
+                        "i" /* `fontid` */
+                        "f" /* `xmin` */
+                        "f" /* `ymin` */
+                        "f" /* `xmax` */
+                        "f" /* `ymax` */
+                        ":blf.clipping",
+                        &fontid,
+                        &xmin,
+                        &ymin,
+                        &xmax,
+                        &ymax))
+  {
     return nullptr;
   }
 
@@ -295,7 +360,13 @@ static PyObject *py_blf_word_wrap(PyObject * /*self*/, PyObject *args)
   int wrap_width;
   int fontid;
 
-  if (!PyArg_ParseTuple(args, "ii:blf.word_wrap", &fontid, &wrap_width)) {
+  if (!PyArg_ParseTuple(args,
+                        "i" /* `fontid` */
+                        "i" /* `wrap_width` */
+                        ":blf.word_wrap",
+                        &fontid,
+                        &wrap_width))
+  {
     return nullptr;
   }
 
@@ -321,7 +392,13 @@ static PyObject *py_blf_disable(PyObject * /*self*/, PyObject *args)
 {
   int option, fontid;
 
-  if (!PyArg_ParseTuple(args, "ii:blf.disable", &fontid, &option)) {
+  if (!PyArg_ParseTuple(args,
+                        "i" /* `fontid` */
+                        "i" /* `option` */
+                        ":blf.disable",
+                        &fontid,
+                        &option))
+  {
     return nullptr;
   }
 
@@ -347,7 +424,13 @@ static PyObject *py_blf_enable(PyObject * /*self*/, PyObject *args)
 {
   int option, fontid;
 
-  if (!PyArg_ParseTuple(args, "ii:blf.enable", &fontid, &option)) {
+  if (!PyArg_ParseTuple(args,
+                        "i" /* `fontid` */
+                        "i" /* `option` */
+                        ":blf.enable",
+                        &fontid,
+                        &option))
+  {
     return nullptr;
   }
 
@@ -373,7 +456,13 @@ static PyObject *py_blf_rotation(PyObject * /*self*/, PyObject *args)
   float angle;
   int fontid;
 
-  if (!PyArg_ParseTuple(args, "if:blf.rotation", &fontid, &angle)) {
+  if (!PyArg_ParseTuple(args,
+                        "i" /* `fontid` */
+                        "f" /* `angle` */
+                        ":blf.rotation",
+                        &fontid,
+                        &angle))
+  {
     return nullptr;
   }
 
@@ -408,8 +497,20 @@ static PyObject *py_blf_shadow(PyObject * /*self*/, PyObject *args)
   int level, fontid;
   float rgba[4];
 
-  if (!PyArg_ParseTuple(
-          args, "iiffff:blf.shadow", &fontid, &level, &rgba[0], &rgba[1], &rgba[2], &rgba[3]))
+  if (!PyArg_ParseTuple(args,
+                        "i" /* `fontid` */
+                        "i" /* `level` */
+                        "f" /* `r` */
+                        "f" /* `g` */
+                        "f" /* `b` */
+                        "f" /* `a` */
+                        ":blf.shadow",
+                        &fontid,
+                        &level,
+                        &rgba[0],
+                        &rgba[1],
+                        &rgba[2],
+                        &rgba[3]))
   {
     return nullptr;
   }
@@ -442,7 +543,15 @@ static PyObject *py_blf_shadow_offset(PyObject * /*self*/, PyObject *args)
 {
   int x, y, fontid;
 
-  if (!PyArg_ParseTuple(args, "iii:blf.shadow_offset", &fontid, &x, &y)) {
+  if (!PyArg_ParseTuple(args,
+                        "i" /* `fontid` */
+                        "i" /* `x` */
+                        "i" /* `y` */
+                        ":blf.shadow_offset",
+                        &fontid,
+                        &x,
+                        &y))
+  {
     return nullptr;
   }
 
@@ -514,7 +623,7 @@ static PyObject *py_blf_unload(PyObject * /*self*/, PyObject *args)
 
 static PyObject *py_blf_bind_imbuf_enter(BPyBLFImBufContext *self)
 {
-  if (UNLIKELY(self->buffer_state)) {
+  if (self->buffer_state) [[unlikely]] {
     PyErr_SetString(PyExc_ValueError,
                     "BLFImBufContext.__enter__: unable to enter the same context more than once");
     return nullptr;
@@ -544,6 +653,12 @@ static PyObject *py_blf_bind_imbuf_enter(BPyBLFImBufContext *self)
 
 static PyObject *py_blf_bind_imbuf_exit(BPyBLFImBufContext *self, PyObject * /*args*/)
 {
+  if (self->buffer_state == nullptr) [[unlikely]] {
+    PyErr_SetString(PyExc_ValueError,
+                    "BLFImBufContext.__exit__: called without a matching __enter__");
+    return nullptr;
+  }
+
   BLF_buffer_state_pop(self->buffer_state);
   self->buffer_state = nullptr;
 
@@ -601,6 +716,12 @@ static PyMethodDef py_blf_bind_imbuf_methods[] = {
 #  endif
 #endif
 
+PyDoc_STRVAR(
+    /* Wrap. */
+    BPyBLFImBufContext_Type_doc,
+    "Context manager returned by :func:`blf.bind_imbuf` that binds an image buffer\n"
+    "as the destination for text drawing.");
+
 static PyTypeObject BPyBLFImBufContext_Type = {
     /*ob_base*/ PyVarObject_HEAD_INIT(nullptr, 0)
     /*tp_name*/ "BLFImBufContext",
@@ -622,7 +743,7 @@ static PyTypeObject BPyBLFImBufContext_Type = {
     /*tp_setattro*/ nullptr,
     /*tp_as_buffer*/ nullptr,
     /*tp_flags*/ Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
-    /*tp_doc*/ nullptr,
+    /*tp_doc*/ BPyBLFImBufContext_Type_doc,
     /*tp_traverse*/ reinterpret_cast<traverseproc>(py_blf_bind_imbuf_traverse),
     /*tp_clear*/ reinterpret_cast<inquiry>(py_blf_bind_imbuf_clear),
     /*tp_richcompare*/ nullptr,
@@ -653,8 +774,6 @@ static PyTypeObject BPyBLFImBufContext_Type = {
     /*tp_vectorcall*/ nullptr,
 };
 
-/* NOTE(@ideasman42): `BLFImBufContext` isn't accessible from (without creating an instance),
- * it should be exposed although it doesn't seem especially important either. */
 PyDoc_STRVAR(
     /* Wrap. */
     py_blf_bind_imbuf_doc,
@@ -672,7 +791,7 @@ PyDoc_STRVAR(
     "   :type display_name: str | None\n"
 
     "   :return: The BLF ImBuf context manager.\n"
-    "   :rtype: BLFImBufContext\n");
+    "   :rtype: :class:`blf.types.BLFImBufContext`\n");
 static PyObject *py_blf_bind_imbuf(PyObject * /*self*/, PyObject *args, PyObject *kwds)
 {
   int fontid;
@@ -788,20 +907,61 @@ static PyModuleDef BLF_module_def = {
     /*m_free*/ nullptr,
 };
 
-PyObject *BPyInit_blf()
+/* -------------------------------------------------------------------- */
+/** \name Module Definition (`blf.types`)
+ * \{ */
+
+PyDoc_STRVAR(
+    /* Wrap. */
+    BLF_types_doc,
+    "This module provides access to font drawing types.");
+static PyModuleDef BLF_types_module_def = {
+    /*m_base*/ PyModuleDef_HEAD_INIT,
+    /*m_name*/ "blf.types",
+    /*m_doc*/ BLF_types_doc,
+    /*m_size*/ 0,
+    /*m_methods*/ nullptr,
+    /*m_slots*/ nullptr,
+    /*m_traverse*/ nullptr,
+    /*m_clear*/ nullptr,
+    /*m_free*/ nullptr,
+};
+
+static PyObject *BPyInit_blf_types()
 {
-  PyObject *submodule;
+  if (PyType_Ready(&BPyBLFImBufContext_Type) < 0) {
+    return nullptr;
+  }
 
-  submodule = PyModule_Create(&BLF_module_def);
+  PyObject *submodule = PyModule_Create(&BLF_types_module_def);
 
-  PyModule_AddIntConstant(submodule, "ROTATION", BLF_ROTATION);
-  PyModule_AddIntConstant(submodule, "CLIPPING", BLF_CLIPPING);
-  PyModule_AddIntConstant(submodule, "SHADOW", BLF_SHADOW);
-  PyModule_AddIntConstant(submodule, "WORD_WRAP", BLF_WORD_WRAP);
-  PyModule_AddIntConstant(submodule, "MONOCHROME", BLF_MONOCHROME);
-  PyModule_AddIntConstant(submodule, "NO_FALLBACK", BLF_NO_FALLBACK);
+  PyModule_AddType(submodule, &BPyBLFImBufContext_Type);
 
   return submodule;
+}
+
+/** \} */
+
+PyObject *BPyInit_blf()
+{
+  PyObject *mod;
+  PyObject *submodule;
+  PyObject *sys_modules = PyImport_GetModuleDict();
+
+  mod = PyModule_Create(&BLF_module_def);
+
+  PyModule_AddIntConstant(mod, "ROTATION", BLF_ROTATION);
+  PyModule_AddIntConstant(mod, "CLIPPING", BLF_CLIPPING);
+  PyModule_AddIntConstant(mod, "SHADOW", BLF_SHADOW);
+  PyModule_AddIntConstant(mod, "WORD_WRAP", BLF_WORD_WRAP);
+  PyModule_AddIntConstant(mod, "MONOCHROME", BLF_MONOCHROME);
+  PyModule_AddIntConstant(mod, "NO_FALLBACK", BLF_NO_FALLBACK);
+
+  /* `blf.types` */
+  PyModule_AddObject(mod, "types", (submodule = BPyInit_blf_types()));
+  PyC_Module_AddToSysModules(sys_modules, submodule);
+
+  return mod;
 }
 
 }  // namespace blender

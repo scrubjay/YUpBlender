@@ -54,6 +54,10 @@ void DebugFlags::CUDA::reset()
   if (getenv("CYCLES_CUDA_ADAPTIVE_COMPILE") != nullptr) {
     adaptive_compile = true;
   }
+
+  if (const char *str = getenv("CYCLES_CUDA_LOCAL_ATOMIC_SORT")) {
+    use_local_atomic_sort = (atoi(str) != 0);
+  }
 }
 
 void DebugFlags::HIP::reset()
@@ -84,6 +88,10 @@ void DebugFlags::Metal::reset()
   if (const char *str = getenv("CYCLES_METALRT_PCMI")) {
     use_metalrt_pcmi = (atoi(str) != 0);
   }
+
+  if (const char *str = getenv("CYCLES_METAL_RESIDENCY_SETS")) {
+    use_residency_sets_if_available = (atoi(str) != 0);
+  }
 }
 
 DebugFlags::TextureCache::TextureCache()
@@ -95,6 +103,7 @@ void DebugFlags::TextureCache::reset()
 {
   use_eviction = true;
   preserve_unused = 0;
+  min_tile_size = 64;
 }
 
 DebugFlags::OptiX::OptiX()

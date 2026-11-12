@@ -75,11 +75,12 @@ ccl_device_forceinline bool curve_ribbon_accept(KernelGlobals kg,
 
   /* We can ignore motion blur here because we don't need the positions, and it doesn't affect the
    * radius. */
+  const int position_offset = kernel_data_fetch(objects, object).position_offset;
   float radius[4];
-  radius[0] = kernel_data_fetch(curve_keys, ka).w;
-  radius[1] = kernel_data_fetch(curve_keys, k0).w;
-  radius[2] = kernel_data_fetch(curve_keys, k1).w;
-  radius[3] = kernel_data_fetch(curve_keys, kb).w;
+  radius[0] = kernel_data_fetch(curve_keys, position_offset + ka).w;
+  radius[1] = kernel_data_fetch(curve_keys, position_offset + k0).w;
+  radius[2] = kernel_data_fetch(curve_keys, position_offset + k1).w;
+  radius[3] = kernel_data_fetch(curve_keys, position_offset + kb).w;
   const float r = metal::catmull_rom(u, radius[0], radius[1], radius[2], radius[3]);
 
   /* MPJ TODO: Can we ignore motion and/or object transforms here? Depends on scaling? */
@@ -124,10 +125,11 @@ ccl_device_forceinline float curve_ribbon_v(KernelGlobals kg,
 
   float4 curve[4];
   if (!is_motion) {
-    curve[0] = kernel_data_fetch(curve_keys, ka);
-    curve[1] = kernel_data_fetch(curve_keys, k0);
-    curve[2] = kernel_data_fetch(curve_keys, k1);
-    curve[3] = kernel_data_fetch(curve_keys, kb);
+    const int position_offset = kernel_data_fetch(objects, object).position_offset;
+    curve[0] = kernel_data_fetch(curve_keys, position_offset + ka);
+    curve[1] = kernel_data_fetch(curve_keys, position_offset + k0);
+    curve[2] = kernel_data_fetch(curve_keys, position_offset + k1);
+    curve[3] = kernel_data_fetch(curve_keys, position_offset + kb);
   }
   else {
     motion_curve_keys(kg, object, time, ka, k0, k1, kb, curve);
@@ -202,7 +204,7 @@ ccl_device_intersect bool scene_intersect(KernelGlobals kg,
       r, metal_ancillaries->accel_struct, ray_mask, metal_ancillaries->ift_default, payload);
 #endif
 
-  if (intersection.type == intersection_type::none) {
+  if (intersection.type == metal::raytracing::intersection_type::none) {
     isect->t = ray->tmax;
     isect->type = PRIMITIVE_NONE;
 
@@ -211,14 +213,16 @@ ccl_device_intersect bool scene_intersect(KernelGlobals kg,
 
   isect->object = intersection.instance_id;
   isect->t = intersection.distance;
-  if (intersection.type == intersection_type::triangle) {
+  if (intersection.type == metal::raytracing::intersection_type::triangle) {
     isect->prim = intersection.primitive_id + intersection.user_instance_id;
     isect->type = kernel_data_fetch(objects, intersection.instance_id).primitive_type;
     isect->u = intersection.triangle_barycentric_coord.x;
     isect->v = intersection.triangle_barycentric_coord.y;
   }
 #ifdef __HAIR__
-  else if (kernel_data.bvh.have_curves && intersection.type == intersection_type::curve) {
+  else if (kernel_data.bvh.have_curves &&
+           intersection.type == metal::raytracing::intersection_type::curve)
+  {
     int prim = intersection.primitive_id + intersection.user_instance_id;
     const KernelCurveSegment segment = kernel_data_fetch(curve_segments, prim);
     isect->prim = segment.prim;
@@ -240,40 +244,13 @@ ccl_device_intersect bool scene_intersect(KernelGlobals kg,
   }
 #endif /* __HAIR__ */
 #ifdef __POINTCLOUD__
-  else if (kernel_data.bvh.have_points && intersection.type == intersection_type::bounding_box) {
-    const int object = intersection.instance_id;
-    const uint prim = intersection.primitive_id + intersection.user_instance_id;
-    const int prim_type = kernel_data_fetch(objects, object).primitive_type;
-
-    if (!(kernel_data_fetch(object_flag, object) & SD_OBJECT_TRANSFORM_APPLIED)) {
-      float3 idir;
-#  if defined(__METALRT_MOTION__)
-      bvh_instance_motion_push(nullptr, object, ray, &r.origin, &r.direction, &idir);
-#  else
-      bvh_instance_push(nullptr, object, ray, &r.origin, &r.direction, &idir);
-#  endif
-    }
-
-    if (prim_type & PRIMITIVE_POINT) {
-      if (!point_intersect(nullptr,
-                           isect,
-                           r.origin,
-                           r.direction,
-                           ray->tmin,
-                           ray->tmax,
-                           object,
-                           prim,
-                           ray->time,
-                           prim_type))
-      {
-        /* Shouldn't get here */
-        kernel_assert(!"Intersection mismatch");
-        isect->t = ray->tmax;
-        isect->type = PRIMITIVE_NONE;
-        return false;
-      }
-      return true;
-    }
+  else if (kernel_data.bvh.have_points &&
+           intersection.type == metal::raytracing::intersection_type::bounding_box)
+  {
+    isect->prim = intersection.primitive_id + intersection.user_instance_id;
+    isect->type = kernel_data_fetch(objects, intersection.instance_id).primitive_type;
+    isect->u = 0.0f;
+    isect->v = 0.0f;
   }
 #endif /* __POINTCLOUD__ */
 
@@ -318,7 +295,7 @@ ccl_device_intersect bool scene_intersect_shadow(KernelGlobals kg,
   intersection = metalrt_intersect.intersect(
       r, metal_ancillaries->accel_struct, ray_mask, metal_ancillaries->ift_shadow, payload);
 #endif
-  return (intersection.type != intersection_type::none);
+  return (intersection.type != metal::raytracing::intersection_type::none);
 }
 
 #ifdef __BVH_LOCAL__
@@ -379,7 +356,7 @@ ccl_device_intersect bool scene_intersect_local(KernelGlobals kg,
         payload);
 #  endif
 
-    if (intersection.type == intersection_type::none) {
+    if (intersection.type == metal::raytracing::intersection_type::none) {
       local_isect->num_hits = 0;
       return false;
     }
@@ -395,10 +372,11 @@ ccl_device_intersect bool scene_intersect_local(KernelGlobals kg,
     local_isect->hits[0].v = intersection.triangle_barycentric_coord.y;
     local_isect->hits[0].t = intersection.distance;
 
+    const int position_offset = kernel_data_fetch(objects, local_object).position_offset;
     const packed_uint3 tri_vindex = kernel_data_fetch(tri_vindex, prim);
-    const float3 tri_a = float3(kernel_data_fetch(tri_verts, tri_vindex.x));
-    const float3 tri_b = float3(kernel_data_fetch(tri_verts, tri_vindex.y));
-    const float3 tri_c = float3(kernel_data_fetch(tri_verts, tri_vindex.z));
+    const float3 tri_a = float3(kernel_data_fetch(tri_verts, position_offset + tri_vindex.x));
+    const float3 tri_b = float3(kernel_data_fetch(tri_verts, position_offset + tri_vindex.y));
+    const float3 tri_c = float3(kernel_data_fetch(tri_verts, position_offset + tri_vindex.z));
     local_isect->Ng[0] = normalize(cross(tri_b - tri_a, tri_c - tri_a));
     return true;
   }
@@ -438,7 +416,7 @@ ccl_device_intersect bool scene_intersect_local(KernelGlobals kg,
     if (max_hits == 0) {
       /* Special case for when no hit information is requested, just report that something was hit
        */
-      return (intersection.type != intersection_type::none);
+      return (intersection.type != metal::raytracing::intersection_type::none);
     }
 
     if (lcg_state) {
@@ -463,10 +441,11 @@ ccl_device_intersect bool scene_intersect_local(KernelGlobals kg,
         local_isect->hits[hit].object = local_object;
         local_isect->hits[hit].type = prim_type;
 
+        const int position_offset = kernel_data_fetch(objects, local_object).position_offset;
         const packed_uint3 tri_vindex = kernel_data_fetch(tri_vindex, prim);
-        const float3 tri_a = float3(kernel_data_fetch(tri_verts, tri_vindex.x));
-        const float3 tri_b = float3(kernel_data_fetch(tri_verts, tri_vindex.y));
-        const float3 tri_c = float3(kernel_data_fetch(tri_verts, tri_vindex.z));
+        const float3 tri_a = float3(kernel_data_fetch(tri_verts, position_offset + tri_vindex.x));
+        const float3 tri_b = float3(kernel_data_fetch(tri_verts, position_offset + tri_vindex.y));
+        const float3 tri_c = float3(kernel_data_fetch(tri_verts, position_offset + tri_vindex.z));
         local_isect->Ng[hit] = normalize(cross(tri_b - tri_a, tri_c - tri_a));
       }
     }
@@ -553,7 +532,7 @@ ccl_device_intersect bool scene_intersect_volume(KernelGlobals kg,
       r, metal_ancillaries->accel_struct, ray_mask, metal_ancillaries->ift_volume, payload);
 #  endif
 
-  if (intersection.type == intersection_type::triangle) {
+  if (intersection.type == metal::raytracing::intersection_type::triangle) {
     isect->prim = intersection.primitive_id + intersection.user_instance_id;
     isect->type = kernel_data_fetch(objects, intersection.instance_id).primitive_type;
     isect->u = intersection.triangle_barycentric_coord.x;

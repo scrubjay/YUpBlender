@@ -17,9 +17,9 @@
 #include "BKE_paint.hh"
 #include "BKE_report.hh"
 
-#include "BLI_listbase.h"
-#include "BLI_math_geom.h"
-#include "BLI_math_matrix.h"
+#include "BLI_listbase.hh"
+#include "BLI_math_geom_c.hh"
+#include "BLI_math_matrix_c.hh"
 
 #include "DNA_brush_types.h"
 #include "DNA_meshdata_types.h"
@@ -67,7 +67,7 @@ Set<std::string> get_bone_deformed_vertex_group_names(const Object &object)
 
     bPose *pose = gamd->object->pose;
     for (bPoseChannel &channel : pose->chanbase) {
-      if (channel.bone->flag & BONE_NO_DEFORM) {
+      if (channel.bone_get(*gamd->object)->flag & BONE_NO_DEFORM) {
         continue;
       }
       /* When a vertex group name matches the bone name, it is bone-deformed. */
@@ -220,8 +220,7 @@ static int foreach_bone_in_armature_ex(
     /* Only call `bone_callback` if the bone is non null */
     count += bone_callback(ob, bone) ? 1 : 0;
     /* Try to execute `bone_callback` for the first child. */
-    count += foreach_bone_in_armature_ex(
-        ob, static_cast<Bone *>(bone->childbase.first), bone_callback);
+    count += foreach_bone_in_armature_ex(ob, bone->childbase.first(), bone_callback);
     /* Try to execute `bone_callback` for the next bone at this depth of the recursion. */
     count += foreach_bone_in_armature_ex(ob, bone->next, bone_callback);
   }
@@ -233,8 +232,7 @@ static int foreach_bone_in_armature(Object &ob,
                                     const bArmature &armature,
                                     const FunctionRef<bool(Object &, const Bone *)> bone_callback)
 {
-  return foreach_bone_in_armature_ex(
-      ob, static_cast<const Bone *>(armature.bonebase.first), bone_callback);
+  return foreach_bone_in_armature_ex(ob, armature.bonebase.first(), bone_callback);
 }
 
 bool add_armature_vertex_groups(Object &object, const Object &ob_armature)
@@ -307,7 +305,7 @@ static int lookup_or_add_deform_group_index(CurvesGeometry &curves, const String
     bDeformGroup *defgroup = MEM_new<bDeformGroup>(__func__);
     name.copy_utf8_truncated(defgroup->name);
     BLI_addtail(&curves.vertex_group_names, defgroup);
-    def_nr = BLI_listbase_count(&curves.vertex_group_names) - 1;
+    def_nr = curves.vertex_group_names.count() - 1;
     BLI_assert(def_nr >= 0);
   }
 

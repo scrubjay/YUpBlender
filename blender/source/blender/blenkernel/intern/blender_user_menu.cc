@@ -12,8 +12,8 @@
 
 #include "MEM_guardedalloc.h"
 
-#include "BLI_listbase.h"
-#include "BLI_string.h"
+#include "BLI_listbase.hh"
+#include "BLI_string.hh"
 
 #include "DNA_userdef_types.h"
 
@@ -58,7 +58,7 @@ bUserMenu *BKE_blender_user_menu_ensure(ListBaseT<bUserMenu> *lb,
 /** \name Menu Item
  * \{ */
 
-bUserMenuItem *BKE_blender_user_menu_item_add(ListBaseT<bUserMenuItem> *lb, int type)
+bUserMenuItem *BKE_blender_user_menu_item_add(ListBaseT<bUserMenuItem> *lb, eUserMenu_Type type)
 {
   bUserMenuItem *umi;
 
@@ -97,13 +97,11 @@ void BKE_blender_user_menu_item_free(bUserMenuItem *umi)
 
 void BKE_blender_user_menu_item_free_list(ListBaseT<bUserMenuItem> *lb)
 {
-  for (bUserMenuItem *umi = static_cast<bUserMenuItem *>(lb->first), *umi_next; umi;
-       umi = umi_next)
-  {
+  for (bUserMenuItem *umi = lb->first(), *umi_next; umi; umi = umi_next) {
     umi_next = umi->next;
     BKE_blender_user_menu_item_free(umi);
   }
-  BLI_listbase_clear(lb);
+  lb->clear_no_delete();
 }
 
 /** \} */

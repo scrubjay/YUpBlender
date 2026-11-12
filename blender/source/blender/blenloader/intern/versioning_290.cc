@@ -10,13 +10,13 @@
 
 #include <algorithm>
 
-#include "BLI_listbase.h"
-#include "BLI_math_matrix.h"
-#include "BLI_math_rotation.h"
-#include "BLI_math_vector.h"
-#include "BLI_string.h"
-#include "BLI_string_utf8.h"
-#include "BLI_utildefines.h"
+#include "BLI_listbase.hh"
+#include "BLI_math_matrix_c.hh"
+#include "BLI_math_rotation_c.hh"
+#include "BLI_math_vector_c.hh"
+#include "BLI_string.hh"
+#include "BLI_string_utf8.hh"
+#include "BLI_utildefines.hh"
 
 /* Define macros in `DNA_genfile.h`. */
 #define DNA_GENFILE_VERSIONING_MACROS
@@ -30,7 +30,7 @@
 #include "DNA_fluid_types.h"
 #include "DNA_genfile.h"
 #include "DNA_gpencil_legacy_types.h"
-#include "DNA_gpencil_modifier_types.h"
+#include "DNA_grease_pencil_modifier_types.h"
 #include "DNA_light_types.h"
 #include "DNA_mesh_types.h"
 #include "DNA_meshdata_types.h"
@@ -51,6 +51,7 @@
 
 #undef DNA_GENFILE_VERSIONING_MACROS
 
+#include "BKE_annotations.h"
 #include "BKE_armature.hh"
 #include "BKE_collection.hh"
 #include "BKE_colortools.hh"
@@ -58,7 +59,6 @@
 #include "BKE_curve.hh"
 #include "BKE_customdata.hh"
 #include "BKE_fcurve.hh"
-#include "BKE_gpencil_legacy.h"
 #include "BKE_lib_id.hh"
 #include "BKE_main.hh"
 #include "BKE_mesh.hh"
@@ -133,8 +133,8 @@ static void strip_convert_transform_animation(const Strip *strip,
   }
 
   /* Hardcoded legacy bit-flags which has been removed. */
-  const uint32_t use_transform_flag = (1 << 16);
-  const uint32_t use_crop_flag = (1 << 17);
+  const eStripFlag use_transform_flag = eStripFlag(1 << 16);
+  const eStripFlag use_crop_flag = eStripFlag(1 << 17);
 
   /* Convert offset animation, but only if crop is not used. */
   if ((strip->flag & use_transform_flag) != 0 && (strip->flag & use_crop_flag) == 0) {
@@ -407,7 +407,7 @@ static void version_node_socket_duplicate(bNodeTree *ntree,
   for (bNodeLink &link : ntree->links.items_mutable()) {
     if (link.tonode->type_legacy == node_type) {
       bNode *node = link.tonode;
-      bNodeSocket *dest_socket = bke::node_find_socket(*node, SOCK_IN, new_name);
+      bNodeSocket *dest_socket = bke::node_find_socket(*node, SOCK_IN, UString(new_name));
       BLI_assert(dest_socket);
       if (STREQ(link.tosock->name, old_name)) {
         bke::node_add_link(*ntree, *link.fromnode, *link.fromsock, *node, *dest_socket);
@@ -418,8 +418,8 @@ static void version_node_socket_duplicate(bNodeTree *ntree,
   /* Duplicate the default value from the old socket and assign it to the new socket. */
   for (bNode &node : ntree->nodes) {
     if (node.type_legacy == node_type) {
-      bNodeSocket *source_socket = bke::node_find_socket(node, SOCK_IN, old_name);
-      bNodeSocket *dest_socket = bke::node_find_socket(node, SOCK_IN, new_name);
+      bNodeSocket *source_socket = bke::node_find_socket(node, SOCK_IN, UString(old_name));
+      bNodeSocket *dest_socket = bke::node_find_socket(node, SOCK_IN, UString(new_name));
       BLI_assert(source_socket && dest_socket);
       if (dest_socket->default_value) {
         MEM_delete_void(dest_socket->default_value);
@@ -571,7 +571,7 @@ void do_versions_after_linking_290(FileData * /*fd*/, Main *bmain)
     }
 
     /* Patch first frame for old files. */
-    Scene *scene = static_cast<Scene *>(bmain->scenes.first);
+    Scene *scene = bmain->scenes.first();
     if (scene != nullptr) {
       for (Object &ob : bmain->objects) {
         if (ob.type != OB_GPENCIL_LEGACY) {
@@ -579,9 +579,9 @@ void do_versions_after_linking_290(FileData * /*fd*/, Main *bmain)
         }
         bGPdata *gpd = id_cast<bGPdata *>(ob.data);
         for (bGPDlayer &gpl : gpd->layers) {
-          bGPDframe *gpf = static_cast<bGPDframe *>(gpl.frames.first);
+          bGPDframe *gpf = gpl.frames.first();
           if (gpf && gpf->framenum > scene->r.sfra) {
-            bGPDframe *gpf_dup = BKE_gpencil_frame_duplicate(gpf, true);
+            bGPDframe *gpf_dup = BKE_annotations_frame_duplicate(gpf, true);
             gpf_dup->framenum = scene->r.sfra;
             BLI_addhead(&gpl.frames, gpf_dup);
           }
@@ -715,10 +715,8 @@ static void panels_remove_x_closed_flag_recursive(Panel *panel)
 static void do_versions_point_attributes(CustomData *pdata)
 {
   /* Change to generic named float/float3 attributes. */
-  enum {
-    CD_LOCATION = 43,
-    CD_RADIUS = 44,
-  };
+  constexpr eCustomDataType CD_LOCATION = eCustomDataType(43);
+  constexpr eCustomDataType CD_RADIUS = eCustomDataType(44);
 
   for (int i = 0; i < pdata->totlayer; i++) {
     CustomDataLayer *layer = &pdata->layers[i];
@@ -801,12 +799,12 @@ static void version_node_join_geometry_for_multi_input_socket(bNodeTree *ntree)
     if (link.tonode->type_legacy == GEO_NODE_JOIN_GEOMETRY &&
         !(link.tosock->flag & SOCK_MULTI_INPUT))
     {
-      link.tosock = static_cast<bNodeSocket *>(link.tonode->inputs.first);
+      link.tosock = link.tonode->inputs.first();
     }
   }
   for (bNode &node : ntree->nodes) {
     if (node.type_legacy == GEO_NODE_JOIN_GEOMETRY) {
-      bNodeSocket *socket = static_cast<bNodeSocket *>(node.inputs.first);
+      bNodeSocket *socket = node.inputs.first();
       socket->flag |= SOCK_MULTI_INPUT;
       socket->limit = 4095;
       bke::node_remove_socket(*ntree, node, *socket->next);
@@ -1204,24 +1202,6 @@ void blo_do_versions_290(FileData *fd, Library * /*lib*/, Main *bmain)
     }
   }
 
-  if (!MAIN_VERSION_FILE_ATLEAST(bmain, 291, 4) && MAIN_VERSION_FILE_ATLEAST(bmain, 291, 1)) {
-    /* Due to a48d78ce07f4f, CustomData.totlayer and CustomData.maxlayer has been written
-     * incorrectly. Fortunately, the size of the layers array has been written to the .blend file
-     * as well, so we can reconstruct totlayer and maxlayer from that. */
-    for (Mesh &mesh : bmain->meshes) {
-      mesh.vert_data.totlayer = mesh.vert_data.maxlayer = MEM_allocN_len(mesh.vert_data.layers) /
-                                                          sizeof(CustomDataLayer);
-      mesh.edge_data.totlayer = mesh.edge_data.maxlayer = MEM_allocN_len(mesh.edge_data.layers) /
-                                                          sizeof(CustomDataLayer);
-      /* We can be sure that mesh->fdata is empty for files written by 2.90. */
-      mesh.corner_data.totlayer = mesh.corner_data.maxlayer = MEM_allocN_len(
-                                                                  mesh.corner_data.layers) /
-                                                              sizeof(CustomDataLayer);
-      mesh.face_data.totlayer = mesh.face_data.maxlayer = MEM_allocN_len(mesh.face_data.layers) /
-                                                          sizeof(CustomDataLayer);
-    }
-  }
-
   if (!MAIN_VERSION_FILE_ATLEAST(bmain, 291, 5)) {
     /* Fix fcurves to allow for new bezier handles behavior (#75881 and D8752). */
     for (bAction &act : bmain->actions) {
@@ -1298,7 +1278,8 @@ void blo_do_versions_290(FileData *fd, Library * /*lib*/, Main *bmain)
       for (Mesh &mesh : bmain->meshes) {
         /* The previous flags used to store mesh symmetry in edit-mode match the new ones that are
          * used in #Mesh.symmetry. */
-        mesh.symmetry = mesh.editflag & (ME_SYMMETRY_X | ME_SYMMETRY_Y | ME_SYMMETRY_Z);
+        mesh.symmetry = eMeshSymmetryType(int(mesh.editflag) &
+                                          (ME_SYMMETRY_X | ME_SYMMETRY_Y | ME_SYMMETRY_Z));
       }
     }
 
@@ -1832,8 +1813,8 @@ void blo_do_versions_290(FileData *fd, Library * /*lib*/, Main *bmain)
       for (ScrArea &area : screen.areabase) {
         for (SpaceLink &sl : area.spacedata) {
           if (sl.spacetype == SPACE_SPREADSHEET) {
-            ListBaseT<ARegion> *regionbase = (&sl == area.spacedata.first) ? &area.regionbase :
-                                                                             &sl.regionbase;
+            ListBaseT<ARegion> *regionbase = (&sl == area.spacedata.first_) ? &area.regionbase :
+                                                                              &sl.regionbase;
             ARegion *new_footer = do_versions_add_region_if_not_found(
                 regionbase, RGN_TYPE_FOOTER, "footer for spreadsheet", RGN_TYPE_HEADER);
             if (new_footer != nullptr) {
@@ -1895,7 +1876,7 @@ void blo_do_versions_290(FileData *fd, Library * /*lib*/, Main *bmain)
 
       for (Nurb &nu : *nurbs) {
         if (nu.flag & CU_2D) {
-          nu.flag &= ~CU_2D;
+          nu.flag &= ~eNurbFlag(CU_2D);
         }
         else {
           is_2d = false;

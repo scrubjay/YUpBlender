@@ -32,6 +32,10 @@ bool OIIOImageLoader::load_metadata(ImageMetaData &metadata,
                                     const ImageLoaderParams &params,
                                     Progress &progress)
 {
+  if (original_filepath_.empty()) {
+    return false;
+  }
+
   if (params.use_texture_cache) {
     const std::string &filepath = get_filepath();
     const bool found = resolve_tx(filepath,
@@ -56,6 +60,7 @@ bool OIIOImageLoader::load_metadata(ImageMetaData &metadata,
                    IMAGE_FORMAT_PLAIN))
       {
         texture_cache_filepath_.clear();
+        params.tx_failure_num++;
       }
     }
     else {
@@ -63,7 +68,12 @@ bool OIIOImageLoader::load_metadata(ImageMetaData &metadata,
     }
   }
 
-  return metadata.oiio_load_metadata(get_filepath());
+  if (!metadata.oiio_load_metadata(get_filepath())) {
+    params.load_failure_num++;
+    return false;
+  }
+
+  return true;
 }
 
 bool OIIOImageLoader::load_pixels(const ImageMetaData &metadata, void *pixels)
@@ -91,6 +101,7 @@ static bool oiio_load_pixels_tile(const unique_ptr<ImageInput> &in,
 
 {
   const int channels = metadata.channels;
+  int64_t read_x_stride = x_stride;
   int64_t read_y_stride = y_stride;
 
   /* Read pixels through OpenImageIO. */
@@ -99,6 +110,7 @@ static bool oiio_load_pixels_tile(const unique_ptr<ImageInput> &in,
   if (channels > 4) {
     tmppixels.resize(w * h * channels);
     readpixels = &tmppixels[0];
+    read_x_stride = channels * sizeof(StorageType);
     read_y_stride = w * channels * sizeof(StorageType);
   }
 
@@ -114,7 +126,7 @@ static bool oiio_load_pixels_tile(const unique_ptr<ImageInput> &in,
                       channels,
                       typedesc,
                       readpixels,
-                      x_stride,
+                      read_x_stride,
                       read_y_stride))
   {
     return false;
@@ -305,7 +317,15 @@ static bool oiio_load_pixels_tile_adjacent(const unique_ptr<ImageInput> &in,
     }
   }
 
-  /* Load adjacent tiles. */
+  /* Load adjacent tile, clamped to the image bounds as the adjacent tile may
+   * be at the edge and smaller than tile_size.
+   *
+   * OpenImageIO accepts either full tile size or clamped, however we support
+   * loading multiple smaller tiles in one go so tile size can not be assumed
+   * to match. */
+  const int64_t adj_tile_w = std::min(width - x_new, tile_size);
+  const int64_t adj_tile_h = std::min(height - y_new, tile_size);
+
   vector<uint8_t> tile_pixels(tile_size * tile_size * x_stride, 0);
   if (!oiio_load_pixels_tile(in,
                              metadata,
@@ -313,20 +333,14 @@ static bool oiio_load_pixels_tile_adjacent(const unique_ptr<ImageInput> &in,
                              miplevel,
                              x_new,
                              y_new,
-                             tile_size,
-                             tile_size,
+                             adj_tile_w,
+                             adj_tile_h,
                              x_stride,
                              tile_size * x_stride,
                              tile_pixels.data()))
   {
     return false;
   }
-
-  /* Copy pixels from adjacent tiles. Use the actual size of the loaded tile
-   * (clamped to image bounds) rather than full image width/height, since the
-   * adjacent tile may be at the edge and smaller than tile_size. */
-  const int64_t adj_tile_w = std::min(width - x_new, tile_size);
-  const int64_t adj_tile_h = std::min(height - y_new, tile_size);
   const int64_t tile_x = (x_adjacent < 0) ? adj_tile_w - padding : 0;
   const int64_t tile_y = (y_adjacent < 0) ? adj_tile_h - padding : 0;
 

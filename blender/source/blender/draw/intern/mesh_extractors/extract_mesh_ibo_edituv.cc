@@ -8,7 +8,7 @@
 
 #include "BKE_editmesh.hh"
 
-#include "BLI_math_geom.h"
+#include "BLI_math_geom_c.hh"
 
 #include "extract_mesh.hh"
 
@@ -167,7 +167,8 @@ static gpu::IndexBufPtr extract_edituv_tris_mesh(const MeshRenderData &mr,
 
 gpu::IndexBufPtr extract_edituv_tris(const MeshRenderData &mr, const bool edit_uvs)
 {
-  const bool sync_selection = edit_uvs ? (mr.toolsettings->uv_flag & UV_FLAG_SELECT_SYNC) : false;
+  const bool sync_selection = edit_uvs ? (mr.toolsettings->uv_flag & UV_FLAG_SELECT_SYNC) != 0 :
+                                         false;
   if (mr.extract_type == MeshExtractType::BMesh) {
     return extract_edituv_tris_bm(mr, sync_selection);
   }

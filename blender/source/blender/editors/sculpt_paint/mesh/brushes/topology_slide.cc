@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup edsculpt
+ */
+
 #include "editors/sculpt_paint/mesh/brushes/brushes.hh"
 
 #include "DNA_brush_types.h"
@@ -44,7 +48,7 @@ BLI_NOINLINE static void calc_translation_directions(const Brush &brush,
                                                      const Span<float3> positions,
                                                      const MutableSpan<float3> r_translations)
 {
-
+  PRF_scope(ProfileCategory::Editor);
   switch (brush.slide_deform_type) {
     case BRUSH_SLIDE_DEFORM_DRAG:
       r_translations.fill(math::normalize(cache.location_symm - cache.last_location_symm));
@@ -79,6 +83,7 @@ BLI_NOINLINE static void calc_neighbor_influence(const Span<float3> vert_positio
                                                  const GroupedSpan<int> vert_neighbors,
                                                  const MutableSpan<float3> translations)
 {
+  PRF_scope(ProfileCategory::Editor);
   for (const int i : positions.index_range()) {
     const float3 &position = positions[i];
     const float3 &dir = translations[i];
@@ -96,6 +101,7 @@ BLI_NOINLINE static void calc_neighbor_influence(const SubdivCCG &subdiv_ccg,
                                                  const Span<int> grids,
                                                  const MutableSpan<float3> translations)
 {
+  PRF_scope(ProfileCategory::Editor);
   const CCGKey key = BKE_subdiv_ccg_key_top_level(subdiv_ccg);
   const Span<float3> positions = subdiv_ccg.positions;
   for (const int i : grids.index_range()) {
@@ -135,6 +141,7 @@ BLI_NOINLINE static void calc_neighbor_influence(const Span<float3> positions,
                                                  const Set<BMVert *, 0> &verts,
                                                  const MutableSpan<float3> translations)
 {
+  PRF_scope(ProfileCategory::Editor);
   BMeshNeighborVerts neighbors;
   int i = 0;
   for (BMVert *vert : verts) {
@@ -168,8 +175,11 @@ static void calc_faces(const Depsgraph &depsgraph,
 
   const OrigPositionData orig_data = orig_position_data_get_mesh(object, node);
   const Span<int> verts = node.verts();
-  const MutableSpan positions = gather_data_mesh(position_data.eval, verts, tls.positions);
+  Array<float3, bke::pbvh::MESH_LEAF_LIMIT> positions(verts.size());
+  gather_data_mesh(position_data.eval, verts, positions.as_mutable_span());
 
+  Array<float, bke::pbvh::MESH_LEAF_LIMIT> factors(verts.size());
+  Array<float, bke::pbvh::MESH_LEAF_LIMIT> distances(verts.size());
   calc_factors_common_from_orig_data_mesh(depsgraph,
                                           brush,
                                           object,
@@ -177,10 +187,10 @@ static void calc_faces(const Depsgraph &depsgraph,
                                           orig_data.positions,
                                           orig_data.normals,
                                           node,
-                                          tls.factors,
-                                          tls.distances);
+                                          factors,
+                                          distances);
 
-  scale_factors(tls.factors, cache.bstrength);
+  scale_factors(factors, cache.bstrength);
 
   const GroupedSpan<int> neighbors = calc_vert_neighbors(faces,
                                                          corner_verts,
@@ -190,11 +200,10 @@ static void calc_faces(const Depsgraph &depsgraph,
                                                          tls.neighbor_offsets,
                                                          tls.neighbor_data);
 
-  tls.translations.resize(verts.size());
-  const MutableSpan<float3> translations = tls.translations;
+  Array<float3, bke::pbvh::MESH_LEAF_LIMIT> translations(verts.size());
   calc_translation_directions(brush, cache, positions, translations);
   calc_neighbor_influence(position_data.eval, positions, neighbors, translations);
-  scale_translations(translations, tls.factors);
+  scale_translations(translations, factors);
 
   clip_and_lock_translations(sd, ss, position_data.eval, verts, translations);
   position_data.deform(translations, verts);
@@ -275,6 +284,7 @@ void do_topology_slide_brush(const Depsgraph &depsgraph,
                              Object &object,
                              const IndexMask &node_mask)
 {
+  PRF_scope(ProfileCategory::Editor);
   const SculptSession &ss = *object.runtime->sculpt_session;
   bke::pbvh::Tree &pbvh = *bke::object::pbvh_get(object);
   const Brush &brush = *BKE_paint_brush_for_read(&sd.paint);

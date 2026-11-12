@@ -69,7 +69,7 @@ bool BlenderSync::object_is_geometry(BObjectInfo &b_ob_info)
     return false;
   }
 
-  const blender::ObjectType type = blender::ObjectType(b_ob_info.iter_object->type);
+  const blender::ObjectType type = b_ob_info.iter_object->type;
 
   if (type == blender::OB_VOLUME || type == blender::OB_CURVES || type == blender::OB_POINTCLOUD ||
       type == blender::OB_LAMP)
@@ -78,40 +78,29 @@ bool BlenderSync::object_is_geometry(BObjectInfo &b_ob_info)
     return true;
   }
 
-  return GS(b_ob_data->name) == blender::ID_ME;
+  return b_ob_data->id_type() == blender::ID_ME;
 }
 
 bool BlenderSync::object_can_have_geometry(blender::Object &b_ob)
 {
-  const blender::ObjectType type = blender::ObjectType(b_ob.type);
-  switch (type) {
-    case blender::OB_MESH:
-    case blender::OB_CURVES_LEGACY:
-    case blender::OB_SURF:
-    case blender::OB_MBALL:
-    case blender::OB_FONT:
-    case blender::OB_CURVES:
-    case blender::OB_POINTCLOUD:
-    case blender::OB_VOLUME:
-      /* TODO(weizhen): OB_LAMP */
-      return true;
-    default:
-      return false;
-  }
+  using namespace blender;
+
+  /* Empties can generate geometry with geometry nodes modifiers. */
+  return OB_TYPE_IS_GEOMETRY(b_ob.type) || b_ob.type == OB_EMPTY;
 }
 
 bool BlenderSync::object_is_light(blender::Object &b_ob)
 {
   blender::ID *b_ob_data = object_get_data(b_ob, true);
 
-  return (b_ob_data && GS(b_ob_data->name) == blender::ID_LA);
+  return (b_ob_data && b_ob_data->id_type() == blender::ID_LA);
 }
 
 bool BlenderSync::object_is_camera(blender::Object &b_ob)
 {
   blender::ID *b_ob_data = object_get_data(b_ob, true);
 
-  return (b_ob_data && GS(b_ob_data->name) == blender::ID_CA);
+  return (b_ob_data && b_ob_data->id_type() == blender::ID_CA);
 }
 
 void BlenderSync::sync_object_motion_init(blender::Object &b_parent,
@@ -120,8 +109,7 @@ void BlenderSync::sync_object_motion_init(blender::Object &b_parent,
 {
   /* Initialize motion blur for object, detecting if it's enabled and creating motion
    * steps array if so. */
-  array<Transform> motion;
-  object->set_motion(motion);
+  array<Transform> motion = object->get_motion();
 
   Geometry *geom = object->get_geometry();
   if (!geom) {
@@ -155,6 +143,9 @@ void BlenderSync::sync_object_motion_init(blender::Object &b_parent,
     for (size_t step = 0; step < motion_steps; step++) {
       motion_times.insert(object->motion_time(step));
     }
+  }
+  else {
+    object->set_motion(motion);
   }
 }
 
@@ -209,7 +200,7 @@ Object *BlenderSync::sync_object(blender::ViewLayer &b_view_layer,
   const blender::Base *base_parent = BKE_view_layer_base_find(&b_view_layer, b_parent);
   const bool use_holdout = (base_parent && (base_parent->flag & blender::BASE_HOLDOUT) != 0) ||
                            ((b_parent->visibility_flag & blender::OB_HOLDOUT) != 0);
-  uint visibility = object_ray_visibility(b_ob) & PATH_RAY_ALL_VISIBILITY;
+  PathRayVisibility visibility = object_ray_visibility(b_ob);
 
   if (b_parent != &b_ob) {
     visibility &= object_ray_visibility(*b_parent);
@@ -218,7 +209,7 @@ Object *BlenderSync::sync_object(blender::ViewLayer &b_view_layer,
   /* TODO: make holdout objects on excluded layer invisible for non-camera rays. */
 #if 0
   if (use_holdout && (layer_flag & view_layer.exclude_layer)) {
-    visibility &= ~(PATH_RAY_ALL_VISIBILITY - PATH_RAY_CAMERA);
+    visibility &= ~(PATH_RAY_VISIBILITY_OBJECT_ALL & ~PATH_RAY_VISIBILITY_CAMERA);
   }
 #endif
 
@@ -226,11 +217,11 @@ Object *BlenderSync::sync_object(blender::ViewLayer &b_view_layer,
   const bool use_indirect_only = !use_holdout && base_parent &&
                                  ((base_parent->flag & blender::BASE_INDIRECT_ONLY) != 0);
   if (use_indirect_only) {
-    visibility &= ~PATH_RAY_CAMERA;
+    visibility &= ~PATH_RAY_VISIBILITY_CAMERA;
   }
 
   /* Don't export completely invisible objects. */
-  if (visibility == 0) {
+  if (visibility == PATH_RAY_VISIBILITY_NONE) {
     return nullptr;
   }
 
@@ -584,19 +575,14 @@ void BlenderSync::sync_objects(blender::Depsgraph &b_depsgraph,
   }
 }
 
-void BlenderSync::sync_motion(blender::RenderData &b_render,
-                              blender::Depsgraph &b_depsgraph,
-                              blender::bScreen *b_screen,
-                              blender::View3D *b_v3d,
-                              blender::RegionView3D *b_rv3d,
-                              const int width,
-                              const int height,
-                              void **python_thread_state)
+void BlenderSync::sync_objects_and_motion(blender::RenderData &b_render,
+                                          blender::Depsgraph &b_depsgraph,
+                                          blender::bScreen *b_screen,
+                                          blender::View3D *b_v3d,
+                                          blender::RegionView3D *b_rv3d,
+                                          const int width,
+                                          const int height)
 {
-  if (scene->need_motion() == Scene::MOTION_NONE) {
-    return;
-  }
-
   /* get camera object here to deal with camera switch */
   blender::Object *b_cam = get_camera_object(b_v3d, b_rv3d);
 
@@ -604,7 +590,7 @@ void BlenderSync::sync_motion(blender::RenderData &b_render,
   const float subframe_center = b_scene->r.subframe;
   float frame_center_delta = 0.0f;
 
-  if (scene->need_motion() != Scene::MOTION_PASS &&
+  if (scene->need_motion() == Scene::MOTION_BLUR &&
       scene->camera->get_motion_position() != MOTION_POSITION_CENTER)
   {
     const float shuttertime = scene->camera->get_shuttertime();
@@ -619,13 +605,24 @@ void BlenderSync::sync_motion(blender::RenderData &b_render,
     const float time = frame_center + subframe_center + frame_center_delta;
     const int frame = (int)floorf(time);
     const float subframe = time - frame;
-    python_thread_state_restore(python_thread_state);
     RE_engine_frame_set(b_engine, frame, subframe);
-    python_thread_state_save(python_thread_state);
     if (b_cam) {
       sync_camera_motion(b_render, b_cam, width, height, 0.0f);
     }
-    sync_objects(b_depsgraph, b_screen, b_v3d);
+  }
+
+  sync_objects(b_depsgraph, b_screen, b_v3d);
+
+  /* In the viewport, only motion between previous frame and current frame is of interest, which is
+   * kept updated separately. */
+  if (b_v3d) {
+    assert(scene->need_motion() == Scene::MOTION_NONE ||
+           scene->need_motion() == Scene::MOTION_PASS_INTERACTIVE);
+    return;
+  }
+
+  if (scene->need_motion() == Scene::MOTION_NONE) {
+    return;
   }
 
   /* Insert motion times from camera. Motion times from other objects
@@ -640,7 +637,8 @@ void BlenderSync::sync_motion(blender::RenderData &b_render,
   /* Check which geometry already has motion blur so it can be skipped. */
   geometry_motion_attribute_synced.clear();
   for (Geometry *geom : scene->geometry) {
-    if (geom->attributes.find(ATTR_STD_MOTION_VERTEX_POSITION)) {
+    const Attribute *attr_P = geom->attributes.find(ATTR_STD_POSITION);
+    if (attr_P && attr_P->has_motion()) {
       geometry_motion_attribute_synced.insert(geom);
     }
   }
@@ -664,9 +662,7 @@ void BlenderSync::sync_motion(blender::RenderData &b_render,
     const float subframe = time - frame;
 
     /* change frame */
-    python_thread_state_restore(python_thread_state);
     RE_engine_frame_set(b_engine, frame, subframe);
-    python_thread_state_save(python_thread_state);
 
     /* Syncs camera motion if relative_time is one of the camera's motion times. */
     sync_camera_motion(b_render, b_cam, width, height, relative_time);
@@ -677,12 +673,8 @@ void BlenderSync::sync_motion(blender::RenderData &b_render,
 
   geometry_motion_attribute_synced.clear();
 
-  /* we need to set the python thread state again because this
-   * function assumes it is being executed from python and will
-   * try to save the thread state */
-  python_thread_state_restore(python_thread_state);
+  /* Restore the frame that was current before motion synchronization. */
   RE_engine_frame_set(b_engine, frame_center, subframe_center);
-  python_thread_state_save(python_thread_state);
 }
 
 CCL_NAMESPACE_END

@@ -28,16 +28,20 @@ PyDoc_STRVAR(
     "type of the initial curve vertices. A :class:`Chain` is a\n"
     "specialization of a Curve.\n"
     "\n"
-    ".. method:: __init__()\n"
-    "            __init__(brother)\n"
-    "            __init__(id)\n"
+    ".. method:: __init__(*args)\n"
+    "\n"
+    "   Accepted call signatures:\n"
+    "\n"
+    "   - ``__init__()``\n"
+    "   - ``__init__(brother)``\n"
+    "   - ``__init__(id)``\n"
     "\n"
     "   Builds a :class:`FrsCurve` using a default constructor,\n"
     "   copy constructor or from an :class:`Id`.\n"
     "\n"
-    "   :arg brother: A Curve object.\n"
+    "   :param brother: A Curve object.\n"
     "   :type brother: :class:`Curve`\n"
-    "   :arg id: An Id object.\n"
+    "   :param id: An Id object.\n"
     "   :type id: :class:`Id`\n");
 static int FrsCurve_init(BPy_FrsCurve *self, PyObject *args, PyObject *kwds)
 {
@@ -45,7 +49,15 @@ static int FrsCurve_init(BPy_FrsCurve *self, PyObject *args, PyObject *kwds)
   static const char *kwlist_2[] = {"id", nullptr};
   PyObject *obj = nullptr;
 
-  if (PyArg_ParseTupleAndKeywords(args, kwds, "|O!", (char **)kwlist_1, &FrsCurve_Type, &obj)) {
+  if (PyArg_ParseTupleAndKeywords(args,
+                                  kwds,
+                                  "|"  /* Optional arguments. */
+                                  "O!" /* `brother` */
+                                  ":__init__",
+                                  (char **)kwlist_1,
+                                  &FrsCurve_Type,
+                                  &obj))
+  {
     if (!obj) {
       self->c = new Curve();
     }
@@ -54,7 +66,13 @@ static int FrsCurve_init(BPy_FrsCurve *self, PyObject *args, PyObject *kwds)
     }
   }
   else if ((void)PyErr_Clear(),
-           PyArg_ParseTupleAndKeywords(args, kwds, "O!", (char **)kwlist_2, &Id_Type, &obj))
+           PyArg_ParseTupleAndKeywords(args,
+                                       kwds,
+                                       "O!" /* `id` */
+                                       ":__init__",
+                                       (char **)kwlist_2,
+                                       &Id_Type,
+                                       &obj))
   {
     self->c = new Curve(*(((BPy_Id *)obj)->id));
   }
@@ -74,14 +92,20 @@ PyDoc_STRVAR(
     "\n"
     "   Adds a single vertex at the end of the Curve.\n"
     "\n"
-    "   :arg vertex: A vertex object.\n"
+    "   :param vertex: A vertex object.\n"
     "   :type vertex: :class:`SVertex` | :class:`CurvePoint`\n");
 static PyObject *FrsCurve_push_vertex_back(BPy_FrsCurve *self, PyObject *args, PyObject *kwds)
 {
   static const char *kwlist[] = {"vertex", nullptr};
   PyObject *obj = nullptr;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O", (char **)kwlist, &obj)) {
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "O" /* `vertex` */
+                                   ":push_vertex_back",
+                                   (char **)kwlist,
+                                   &obj))
+  {
     return nullptr;
   }
 
@@ -105,14 +129,20 @@ PyDoc_STRVAR(
     "\n"
     "   Adds a single vertex at the front of the Curve.\n"
     "\n"
-    "   :arg vertex: A vertex object.\n"
+    "   :param vertex: A vertex object.\n"
     "   :type vertex: :class:`SVertex` | :class:`CurvePoint`\n");
 static PyObject *FrsCurve_push_vertex_front(BPy_FrsCurve *self, PyObject *args, PyObject *kwds)
 {
   static const char *kwlist[] = {"vertex", nullptr};
   PyObject *obj = nullptr;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O", (char **)kwlist, &obj)) {
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "O" /* `vertex` */
+                                   ":push_vertex_front",
+                                   (char **)kwlist,
+                                   &obj))
+  {
     return nullptr;
   }
 

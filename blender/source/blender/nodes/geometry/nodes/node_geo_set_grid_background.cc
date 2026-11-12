@@ -110,8 +110,8 @@ static void node_geo_exec(GeoNodeExecParams params)
   }
 
   auto background_variant = params.extract_input<bke::SocketValueVariant>("Background"_ustr);
-  background_variant.convert_to_single();
-  const GPointer background = background_variant.get_single_ptr();
+  background_variant.ensure_type(*grid->cpp_type());
+  const GPointer background = background_variant.get();
 
   const bool update_inactive = params.get_input<bool>("Update Inactive"_ustr);
 
@@ -159,6 +159,7 @@ static void node_register()
   ntype.geometry_node_execute = node_geo_exec;
   ntype.draw_buttons = node_layout;
   ntype.declare = node_declare;
+  ntype.default_width = bke::NodeWidth::_160;
   bke::node_register_type(ntype);
 
   node_rna(ntype.rna_ext.srna);

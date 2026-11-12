@@ -123,6 +123,9 @@ class ImageSingle : public ImageTexture {
   bool need_metadata = true;
   bool builtin = false;
 
+  /* Number of top mip levels in the image file to discard. */
+  int miplevel_offset = 0;
+
   thread_mutex mutex;
 
   device_image *vdb_memory = nullptr;
@@ -198,6 +201,9 @@ class ImageManager {
   bool auto_texture_cache = false;
   std::string texture_cache_path;
 
+  std::atomic<int> load_failure_num = 0;
+  std::atomic<int> tx_failure_num = 0;
+
   ImageSingle *add_image_texture(unique_ptr<ImageLoader> &&loader,
                                  const ImageParams &params,
                                  const bool builtin);
@@ -218,12 +224,15 @@ class ImageManager {
                          Scene *scene,
                          const size_t image_texture_id,
                          Progress &progress);
+  void device_load_tiled_descriptors(Scene *scene);
   void device_free_image(Scene *scene, const size_t image_texture_id);
 
   void device_update_udims(Device *device, Scene *scene);
 
   void device_resize_image_textures(Scene *scene);
   void device_copy_image_textures(Device *device, Scene *scene);
+
+  void report_failures();
 
   friend class ImageHandle;
 };

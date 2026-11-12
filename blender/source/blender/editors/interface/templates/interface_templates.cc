@@ -9,7 +9,7 @@
 #include "BKE_library.hh"
 #include "BKE_screen.hh"
 
-#include "BLI_math_color.h"
+#include "BLI_math_color_c.hh"
 #include "BLI_string_ref.hh"
 
 #include "ED_fileselect.hh"
@@ -69,9 +69,8 @@ void template_add_button_search_menu(const bContext *C,
                                      ButtonArgNCopy func_argN_copy_fn)
 {
   const PointerRNA active_ptr = RNA_property_pointer_get(ptr, prop);
-  ID *id = (active_ptr.data && RNA_struct_is_ID(active_ptr.type)) ?
-               static_cast<ID *>(active_ptr.data) :
-               nullptr;
+  ID *id = (active_ptr && RNA_struct_is_ID(active_ptr.type)) ? static_cast<ID *>(active_ptr.data) :
+                                                               nullptr;
   const ID *idfrom = ptr->owner_id;
   const StructRNA *type = active_ptr.type ? active_ptr.type : RNA_property_pointer_type(ptr, prop);
   Button *but;
@@ -297,6 +296,8 @@ void template_node_socket(Layout *layout, bContext * /*C*/, const float color[4]
 
   block_align_end(block);
 }
+
+/** \} */
 
 /* -------------------------------------------------------------------- */
 /** \name FileSelectParams Path Button Template

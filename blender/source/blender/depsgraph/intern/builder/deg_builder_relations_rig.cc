@@ -14,8 +14,8 @@
 #include <cstdlib>
 #include <cstring> /* required for STREQ later on. */
 
-#include "BLI_listbase.h"
-#include "BLI_utildefines.h"
+#include "BLI_listbase.hh"
+#include "BLI_utildefines.hh"
 
 #include "DNA_action_types.h"
 #include "DNA_armature_types.h"
@@ -404,7 +404,7 @@ void DepsgraphRelationBuilder::build_rig(Object *object)
       add_relation(parent_key, bone_pose_key, "Parent Bone -> Child Bone");
     }
     /* Build constraints. */
-    if (pchan.constraints.first != nullptr) {
+    if (pchan.constraints.first() != nullptr) {
       /* Build relations for indirectly linked objects. */
       BuilderWalkUserData data;
       data.builder = this;
@@ -438,11 +438,12 @@ void DepsgraphRelationBuilder::build_rig(Object *object)
       add_relation(bone_done_key, bone_segments_key, "Done -> B-Bone Segments");
       /* B-Bone shape depends on final position of handle bones. */
       bPoseChannel *prev, *next;
-      BKE_pchan_bbone_handles_get(&pchan, &prev, &next);
+      Bone *pchan_bone = pchan.bone_get(*object);
+      BKE_pchan_bbone_handles_get({&pchan, pchan_bone}, &prev, &next);
       if (prev) {
         OperationCode opcode = OperationCode::BONE_DONE;
         /* Inheriting parent roll requires access to prev handle's B-Bone properties. */
-        if ((pchan.bone->bbone_flag & BBONE_ADD_PARENT_END_ROLL) != 0 &&
+        if ((pchan_bone->bbone_flag & BBONE_ADD_PARENT_END_ROLL) != 0 &&
             check_pchan_has_bbone_segments(object, prev))
         {
           opcode = OperationCode::BONE_SEGMENTS;

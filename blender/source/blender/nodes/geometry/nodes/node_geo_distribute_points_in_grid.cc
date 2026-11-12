@@ -65,7 +65,7 @@ static void node_declare(NodeDeclarationBuilder &b)
                         .description("Minimum density of a voxel to contain a grid point")
                         .make_available(
                             [](bNode &node) { node.custom1 = int16_t(DistributeMode::Grid); });
-  b.add_output<decl::Geometry>("Points"_ustr).propagate_all();
+  b.add_output<decl::Geometry>("Points"_ustr).propagate_all_geometry();
 
   const bNode *node = b.node_or_null();
   if (node != nullptr) {
@@ -216,7 +216,7 @@ static void node_geo_exec(GeoNodeExecParams params)
       break;
   }
 
-  PointCloud *pointcloud = BKE_pointcloud_new_nomain(positions.size());
+  PointCloud *pointcloud = BKE_pointcloud_new_nomain(PointCloudType::Points, positions.size());
   pointcloud->positions_for_write().copy_from(positions);
 
   geometry::debug_randomize_point_order(pointcloud);
@@ -262,7 +262,7 @@ static void node_register()
   ntype.enum_name_legacy = "DISTRIBUTE_POINTS_IN_GRID";
   ntype.nclass = NODE_CLASS_GEOMETRY;
   ntype.initfunc = node_init;
-  bke::node_type_size(ntype, 170, 100, 320);
+  ntype.default_width = bke::NodeWidth::_180;
   ntype.declare = node_declare;
   ntype.geometry_node_execute = node_geo_exec;
   ntype.draw_buttons = node_layout;

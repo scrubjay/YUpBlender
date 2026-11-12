@@ -33,7 +33,7 @@ class OSLCameraParamQuery {
 /* Camera
  *
  * The camera parameters are quite standard, tested to be both compatible with
- * Renderman, and Blender after remapping.
+ * RenderMan, and Blender after remapping.
  */
 
 class Camera : public Node {
@@ -140,6 +140,8 @@ class Camera : public Node {
   NODE_SOCKET_API_STRUCT_MEMBER(float, border, right)
   NODE_SOCKET_API_STRUCT_MEMBER(float, border, bottom)
   NODE_SOCKET_API_STRUCT_MEMBER(float, border, top)
+  NODE_SOCKET_API(float, border_pre_left)
+  NODE_SOCKET_API(float, border_pre_bottom)
 
   BoundBox2D viewport_camera_border;
   NODE_SOCKET_API_STRUCT_MEMBER(float, viewport_camera_border, left)
@@ -155,6 +157,17 @@ class Camera : public Node {
   NODE_SOCKET_API(bool, use_perspective_motion)
   NODE_SOCKET_API(float, fov_pre)
   NODE_SOCKET_API(float, fov_post)
+
+  BoundBox2D viewplane_pre;
+  BoundBox2D viewplane_post;
+  NODE_SOCKET_API_STRUCT_MEMBER(float, viewplane_pre, left)
+  NODE_SOCKET_API_STRUCT_MEMBER(float, viewplane_pre, right)
+  NODE_SOCKET_API_STRUCT_MEMBER(float, viewplane_pre, bottom)
+  NODE_SOCKET_API_STRUCT_MEMBER(float, viewplane_pre, top)
+  NODE_SOCKET_API_STRUCT_MEMBER(float, viewplane_post, left)
+  NODE_SOCKET_API_STRUCT_MEMBER(float, viewplane_post, right)
+  NODE_SOCKET_API_STRUCT_MEMBER(float, viewplane_post, bottom)
+  NODE_SOCKET_API_STRUCT_MEMBER(float, viewplane_post, top)
 
   /* computed camera parameters */
   ProjectionTransform screentoworld;
@@ -208,6 +221,8 @@ class Camera : public Node {
 
   void update(Scene *scene);
 
+  void update_interactive_motion();
+
   void device_update(Device *device, DeviceScene *dscene, Scene *scene);
   void device_update_volume(Device *device, DeviceScene *dscene, Scene *scene);
   void device_free(Device *device, DeviceScene *dscene, Scene *scene);
@@ -223,7 +238,7 @@ class Camera : public Node {
   int motion_step(const float time) const;
   bool use_motion() const;
 
-  uint get_kernel_features() const;
+  uint64_t get_kernel_features() const;
 
   bool set_screen_size(int width, int height);
 

@@ -22,7 +22,7 @@ namespace blender {
 PyDoc_STRVAR(
     /* Wrap. */
     bpy_bm_geometry_intersect_face_point_doc,
-    ".. method:: intersect_face_point(face, point)\n"
+    ".. function:: intersect_face_point(face, point)\n"
     "\n"
     "   Tests if the projection of a point is inside a face (using the face's normal).\n"
     "\n"
@@ -39,7 +39,14 @@ static PyObject *bpy_bm_geometry_intersect_face_point(BPy_BMFace * /*self*/, PyO
   float point[3];
   bool ret;
 
-  if (!PyArg_ParseTuple(args, "O!O:intersect_face_point", &BPy_BMFace_Type, &py_face, &py_point)) {
+  if (!PyArg_ParseTuple(args,
+                        "O!" /* `face` */
+                        "O"  /* `point` */
+                        ":intersect_face_point",
+                        &BPy_BMFace_Type,
+                        &py_face,
+                        &py_point))
+  {
     return nullptr;
   }
 

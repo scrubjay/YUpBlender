@@ -9,14 +9,14 @@
 #include <cmath>
 #include <cstring>
 
-#include "BLI_math_base.h"
 #include "BLI_math_base.hh"
+#include "BLI_math_base_c.hh"
 #include "BLI_math_interp.hh"
-#include "BLI_math_vector.h"
+#include "BLI_math_vector_c.hh"
 #include "BLI_math_vector_types.hh"
 #include "BLI_simd.hh"
 
-#include "BLI_strict_flags.h" /* IWYU pragma: keep. Keep last. */
+#include "BLI_strict_flags.hh" /* IWYU pragma: keep. Keep last. */
 
 namespace blender {
 
@@ -118,8 +118,8 @@ BLI_INLINE void bicubic_interpolation(const T *src_buffer,
   BLI_assert(src_buffer && output);
   BLI_assert(components > 0 && components <= 4);
 
-  /* GCC 15.x can't reliably detect that `components` is never over 4. */
-#if (defined(__GNUC__) && (__GNUC__ >= 15) && !defined(__clang__))
+  /* GCC 14.x and newer can't reliably detect that `components` is never over 4. */
+#if (defined(__GNUC__) && (__GNUC__ >= 14) && !defined(__clang__))
   [[assume(components <= 4)]];
 #endif
 
@@ -636,7 +636,8 @@ void BLI_ewa_filter(const int width,
                     const float dv[2],
                     ewa_filter_read_pixel_cb read_pixel_cb,
                     void *userdata,
-                    float result[4])
+                    float result[4],
+                    bool clip)
 {
   /* Scaling `dxt` / `dyt` by full resolution can cause overflow because of huge A/B/C and esp.
    * F values, scaling by aspect ratio alone does the opposite, so try something in between
@@ -705,7 +706,7 @@ void BLI_ewa_filter(const int width,
   }
 
   /* Early output check for cases the whole region is outside of the buffer. */
-  if ((u2 < 0 || u1 >= width) || (v2 < 0 || v1 >= height)) {
+  if (clip && ((u2 < 0 || u1 >= width) || (v2 < 0 || v1 >= height))) {
     zero_v4(result);
     return;
   }

@@ -6,9 +6,9 @@
  * \ingroup edmask
  */
 
-#include "BLI_listbase.h"
-#include "BLI_math_vector.h"
-#include "BLI_string_utf8.h"
+#include "BLI_listbase.hh"
+#include "BLI_math_vector_c.hh"
+#include "BLI_string_utf8.hh"
 
 #include "BKE_context.hh"
 #include "BKE_mask.hh"
@@ -83,7 +83,8 @@ static wmOperatorStatus mask_parent_set_exec(bContext *C, wmOperator * /*op*/)
   MovieTrackingObject *tracking_object;
   /* done */
 
-  int framenr, parent_type;
+  MaskParentType parent_type;
+  int framenr;
   float parmask_pos[2], orig_corners[4][2];
   const char *sub_parent_name;
 

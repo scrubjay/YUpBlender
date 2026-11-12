@@ -2,16 +2,23 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup bke
+ */
+
 #include "CLG_log.h"
 
 #include "BLI_array_utils.hh"
-#include "BLI_assert.h"
+#include "BLI_assert.hh"
 #include "BLI_color_types.hh"
+#include "BLI_generic_array.hh"
 #include "BLI_implicit_sharing.hh"
 #include "BLI_memory_counter.hh"
 #include "BLI_resource_scope.hh"
 #include "BLI_string_utils.hh"
 #include "BLI_vector_set.hh"
+
+#include "PRF_profile.hh"
 
 #include "BLT_translation.hh"
 
@@ -35,59 +42,31 @@ static CLG_LogRef LOG = {"geom.attribute"};
 
 namespace bke {
 
-class ArrayDataImplicitSharing : public ImplicitSharingInfo {
- private:
-  void *data_;
-  int64_t size_;
-  const CPPType &type_;
-  /* This struct could also store caches about the array data, like the min and max values. */
-
- public:
-  ArrayDataImplicitSharing(void *data, const int64_t size, const CPPType &type)
-      : ImplicitSharingInfo(), data_(data), size_(size), type_(type)
-  {
-  }
-
- private:
-  void delete_self_with_data() override
-  {
-    if (data_ != nullptr) {
-      type_.destruct_n(data_, size_);
-      MEM_delete_void(data_);
-    }
-    MEM_delete(this);
-  }
-
-  void delete_data_only() override
-  {
-    type_.destruct_n(data_, size_);
-    MEM_delete_void(data_);
-    data_ = nullptr;
-    size_ = 0;
-  }
-};
+/** Create array data that owns the array's buffer. */
+static Attribute::ArrayData array_data_from_garray(GArray<> array)
+{
+  auto *sharing_info = new ImplicitSharedValue<GArray<>>(std::move(array));
+  Attribute::ArrayData data{};
+  data.data = sharing_info->data.data();
+  data.size = sharing_info->data.size();
+  data.sharing_info = ImplicitSharingPtr<>(sharing_info);
+  return data;
+}
 
 Attribute::ArrayData Attribute::ArrayData::from_value(const GPointer &value,
                                                       const int64_t domain_size)
 {
-  Attribute::ArrayData data{};
   const CPPType &type = *value.type();
   const void *value_ptr = value.get();
 
   /* Prefer `calloc` to zeroing after allocation since it is faster. */
   if (memory_is_zero(value_ptr, type.size)) {
-    data.data = MEM_new_array_zeroed_aligned(domain_size, type.size, type.alignment, __func__);
+    void *buffer = MEM_new_array_zeroed_aligned(domain_size, type.size, type.alignment, __func__);
+    return array_data_from_garray(GArray<>(type, buffer, domain_size));
   }
-  else {
-    data.data = MEM_new_array_uninitialized_aligned(
-        domain_size, type.size, type.alignment, __func__);
-    type.fill_construct_n(value_ptr, data.data, domain_size);
-  }
-
-  data.size = domain_size;
-  BLI_assert(type.is_trivially_destructible);
-  data.sharing_info = ImplicitSharingPtr<>(implicit_sharing::info_for_mem_free(data.data));
-  return data;
+  GArray<> array(type, domain_size, NoInitialization());
+  type.fill_construct_n(value_ptr, array.data(), domain_size);
+  return array_data_from_garray(std::move(array));
 }
 
 static GPointer default_value_for_type(const CPPType &type)
@@ -112,13 +91,7 @@ Attribute::ArrayData Attribute::ArrayData::from_default_value(const CPPType &typ
 Attribute::ArrayData Attribute::ArrayData::from_uninitialized(const CPPType &type,
                                                               const int64_t domain_size)
 {
-  Attribute::ArrayData data{};
-  data.data = MEM_new_array_uninitialized_aligned(
-      domain_size, type.size, type.alignment, __func__);
-  data.size = domain_size;
-  BLI_assert(type.is_trivially_destructible);
-  data.sharing_info = ImplicitSharingPtr<>(implicit_sharing::info_for_mem_free(data.data));
-  return data;
+  return array_data_from_garray(GArray<>(type, domain_size, NoInitialization()));
 }
 
 Attribute::ArrayData Attribute::ArrayData::from_constructed(const CPPType &type,
@@ -131,30 +104,17 @@ Attribute::ArrayData Attribute::ArrayData::from_constructed(const CPPType &type,
 
 Attribute::SingleData Attribute::SingleData::from_value(const GPointer &value)
 {
+  /* Use an array with a single element to store the value. */
+  auto *sharing_info = new ImplicitSharedValue<GArray<>>(GSpan(*value.type(), value.get(), 1));
   Attribute::SingleData data{};
-  const CPPType &type = *value.type();
-  data.value = MEM_new_uninitialized_aligned(type.size, type.alignment, __func__);
-  type.copy_construct(value.get(), data.value);
-  BLI_assert(type.is_trivially_destructible);
-  data.sharing_info = ImplicitSharingPtr<>(implicit_sharing::info_for_mem_free(data.value));
+  data.value = sharing_info->data.data();
+  data.sharing_info = ImplicitSharingPtr<>(sharing_info);
   return data;
 }
 
 Attribute::SingleData Attribute::SingleData::from_default_value(const CPPType &type)
 {
   return from_value(default_value_for_type(type));
-}
-
-AttrStorageType Attribute::storage_type() const
-{
-  if (std::get_if<Attribute::ArrayData>(&data_)) {
-    return AttrStorageType::Array;
-  }
-  if (std::get_if<Attribute::SingleData>(&data_)) {
-    return AttrStorageType::Single;
-  }
-  BLI_assert_unreachable();
-  return AttrStorageType::Array;
 }
 
 Attribute::DataVariant &Attribute::data_for_write()
@@ -309,10 +269,24 @@ bool AttributeStorage::remove(const StringRef name)
 
 bool AttributeStorage::remove(const Set<StringRef> &names)
 {
-  const int start_size = this->runtime->attributes.size();
-  this->runtime->attributes.remove_if(
+  const int removed_num = this->runtime->attributes.remove_if(
       [&](const std::unique_ptr<Attribute> &attr) { return names.contains(attr->name()); });
-  return this->runtime->attributes.size() != start_size;
+  return removed_num > 0;
+}
+
+bool AttributeStorage::remove(const Set<const Attribute *> &attributes)
+{
+#ifndef NDEBUG
+  for (const Attribute *attr : attributes) {
+    BLI_assert(this->runtime->attributes.lookup_key_as(attr->name()).get() == attr);
+  }
+#endif
+  if (attributes.is_empty()) {
+    return false;
+  }
+  const int removed_num = this->runtime->attributes.remove_if(
+      [&](const std::unique_ptr<Attribute> &attr) { return attributes.contains(attr.get()); });
+  return removed_num > 0;
 }
 
 std::string AttributeStorage::unique_name_calc(const StringRef name) const
@@ -354,6 +328,9 @@ void AttributeStorage::rename(const Map<Attribute *, StringRef> &renames)
                        this->runtime->attributes.end(),
                        [&](const std::unique_ptr<Attribute> &a) { return a.get() == attr; });
   }));
+  if (renames.is_empty()) {
+    return;
+  }
   Vector<std::unique_ptr<Attribute>, 16> renamed;
   renamed.reserve(this->runtime->attributes.size());
   while (!this->runtime->attributes.is_empty()) {
@@ -370,6 +347,7 @@ void AttributeStorage::rename(const Map<Attribute *, StringRef> &renames)
 
 void AttributeStorage::resize(const AttrDomain domain, const int64_t new_size)
 {
+  PRF_scope_with_name("AttributeStorage::resize", ProfileCategory::Default);
   for (Attribute &attr : *this) {
     if (attr.domain() != domain) {
       continue;
@@ -397,7 +375,7 @@ void AttributeStorage::resize(const AttrDomain domain, const int64_t new_size)
   }
 }
 
-static void read_array_data(BlendDataReader &reader,
+static bool read_array_data(BlendDataReader &reader,
                             const int8_t dna_attr_type,
                             const int64_t size,
                             void **data)
@@ -405,51 +383,36 @@ static void read_array_data(BlendDataReader &reader,
   switch (dna_attr_type) {
     case int8_t(AttrType::Bool):
       static_assert(sizeof(bool) == sizeof(int8_t));
-      BLO_read_int8_array(&reader, size, reinterpret_cast<int8_t **>(data));
-      return;
+      return BLO_read_array(&reader, reinterpret_cast<int8_t **>(data), size);
     case int8_t(AttrType::Int8):
-      BLO_read_int8_array(&reader, size, reinterpret_cast<int8_t **>(data));
-      return;
+      return BLO_read_array(&reader, reinterpret_cast<int8_t **>(data), size);
     case int8_t(AttrType::Int16_2D):
-      BLO_read_int16_array(&reader, size * 2, reinterpret_cast<int16_t **>(data));
-      return;
+      return BLO_read_array(&reader, reinterpret_cast<int16_t **>(data), size, 2);
     case int8_t(AttrType::Int32):
-      BLO_read_int32_array(&reader, size, reinterpret_cast<int32_t **>(data));
-      return;
+      return BLO_read_array(&reader, reinterpret_cast<int32_t **>(data), size);
     case int8_t(AttrType::Int32_2D):
-      BLO_read_int32_array(&reader, size * 2, reinterpret_cast<int32_t **>(data));
-      return;
+      return BLO_read_array(&reader, reinterpret_cast<int32_t **>(data), size, 2);
     case int8_t(AttrType::Float):
-      BLO_read_float_array(&reader, size, reinterpret_cast<float **>(data));
-      return;
+      return BLO_read_array(&reader, reinterpret_cast<float **>(data), size);
     case int8_t(AttrType::Float2):
-      BLO_read_float_array(&reader, size * 2, reinterpret_cast<float **>(data));
-      return;
+      return BLO_read_array(&reader, reinterpret_cast<float **>(data), size, 2);
     case int8_t(AttrType::Float3):
-      BLO_read_float3_array(&reader, size, reinterpret_cast<float **>(data));
-      return;
+      return BLO_read_array(&reader, reinterpret_cast<float **>(data), size, 3);
     case int8_t(AttrType::Float4x4):
-      BLO_read_float_array(&reader, size * 16, reinterpret_cast<float **>(data));
-      return;
+      return BLO_read_array(&reader, reinterpret_cast<float **>(data), size, 16);
     case int8_t(AttrType::ColorByte):
-      BLO_read_uint8_array(&reader, size * 4, reinterpret_cast<uint8_t **>(data));
-      return;
+      return BLO_read_array(&reader, reinterpret_cast<uint8_t **>(data), size, 4);
     case int8_t(AttrType::ColorFloat):
-      BLO_read_float_array(&reader, size * 4, reinterpret_cast<float **>(data));
-      return;
+      return BLO_read_array(&reader, reinterpret_cast<float **>(data), size, 4);
     case int8_t(AttrType::Quaternion):
-      BLO_read_float_array(&reader, size * 4, reinterpret_cast<float **>(data));
-      return;
+      return BLO_read_array(&reader, reinterpret_cast<float **>(data), size, 4);
     case int8_t(AttrType::String):
-      BLO_read_struct_array(
-          &reader, MStringProperty, size, reinterpret_cast<MStringProperty **>(data));
-      return;
+      return BLO_read_array(&reader, reinterpret_cast<MStringProperty **>(data), size);
     case int8_t(AttrType::Float4):
-      BLO_read_float_array(&reader, size * 4, reinterpret_cast<float **>(data));
-      return;
+      return BLO_read_array(&reader, reinterpret_cast<float **>(data), size, 4);
     default:
       *data = nullptr;
-      return;
+      return false;
   }
 }
 
@@ -459,14 +422,13 @@ static void read_shared_array(BlendDataReader &reader,
                               void **data,
                               const ImplicitSharingInfo **sharing_info)
 {
-  const char *func = __func__;
   *sharing_info = BLO_read_shared(&reader, data, [&]() -> const ImplicitSharingInfo * {
     read_array_data(reader, dna_attr_type, size, data);
     if (*data == nullptr) {
       return nullptr;
     }
     const CPPType &cpp_type = attribute_type_to_cpp_type(AttrType(dna_attr_type));
-    return MEM_new<ArrayDataImplicitSharing>(func, *data, size, cpp_type);
+    return new ImplicitSharedValue<GArray<>>(cpp_type, *data, size);
   });
 }
 
@@ -478,7 +440,10 @@ static std::optional<Attribute::DataVariant> read_attr_data(BlendDataReader &rea
   switch (dna_storage_type) {
     case int8_t(AttrStorageType::Array): {
       BLO_read_struct(&reader, AttributeArray, &dna_attr.data);
-      auto &data = *static_cast<blender::AttributeArray *>(dna_attr.data);
+      auto *dna_data = static_cast<blender::AttributeArray *>(dna_attr.data);
+      dna_attr.data = nullptr;
+      BLI_SCOPED_DEFER([&]() { MEM_delete(dna_data); });
+      auto &data = *dna_data;
       read_shared_array(reader, dna_attr_type, data.size, &data.data, &data.sharing_info);
       if (data.size != 0 && !data.data) {
         return std::nullopt;
@@ -493,7 +458,10 @@ static std::optional<Attribute::DataVariant> read_attr_data(BlendDataReader &rea
     }
     case int8_t(AttrStorageType::Single): {
       BLO_read_struct(&reader, AttributeSingle, &dna_attr.data);
-      auto &data = *static_cast<blender::AttributeSingle *>(dna_attr.data);
+      auto *dna_data = static_cast<blender::AttributeSingle *>(dna_attr.data);
+      dna_attr.data = nullptr;
+      BLI_SCOPED_DEFER([&]() { MEM_delete(dna_data); });
+      auto &data = *dna_data;
       read_shared_array(reader, dna_attr_type, 1, &data.data, &data.sharing_info);
       if (!data.data) {
         return std::nullopt;
@@ -540,10 +508,10 @@ static std::optional<AttrDomain> read_attr_domain(const int8_t dna_domain)
 void AttributeStorage::blend_read(BlendDataReader &reader)
 {
   this->runtime = MEM_new<AttributeStorageRuntime>(__func__);
-  this->runtime->attributes.reserve(this->dna_attributes_num);
 
-  BLO_read_struct_array(
-      &reader, blender::Attribute, this->dna_attributes_num, &this->dna_attributes);
+  BLO_read_array_and_validate_size(&reader, &this->dna_attributes, &this->dna_attributes_num);
+
+  this->runtime->attributes.reserve(this->dna_attributes_num);
   for (const int i : IndexRange(this->dna_attributes_num)) {
     blender::Attribute &dna_attr = this->dna_attributes[i];
     BLO_read_string(&reader, &dna_attr.name);
@@ -556,7 +524,6 @@ void AttributeStorage::blend_read(BlendDataReader &reader)
 
     std::optional<Attribute::DataVariant> data = read_attr_data(
         reader, dna_attr.storage_type, dna_attr.data_type, dna_attr);
-    BLI_SCOPED_DEFER([&]() { MEM_SAFE_DELETE_VOID(dna_attr.data); });
     if (!data) {
       continue;
     }
@@ -662,7 +629,7 @@ void attribute_storage_blend_write_prepare(AttributeStorage &data,
       if (use_5_0_compatibility) {
         attribute_dna.storage_type = int8_t(AttrStorageType::Array);
         /* Convert single value storage to array storage for forward compatibility.
-         * See #AttributeArray::is_single) comment for more details. */
+         * See #AttributeArray::is_single comment for more details. */
         const CPPType &cpp_type = attribute_type_to_cpp_type(attr.data_type());
         const GPointer value(cpp_type, data->value);
         const int domain_size = get_domain_size(attr.domain());
@@ -683,7 +650,7 @@ void attribute_storage_blend_write_prepare(AttributeStorage &data,
     }
 
     write_data.attributes.append(attribute_dna);
-    BLO_write_generated_pointer_tag(write_data.writer, attribute_dna.data);
+    write_data.writer->generated_pointer_tag(attribute_dna.data);
   }
   data.runtime = nullptr;
 }
@@ -695,7 +662,7 @@ static void write_shared_array(BlendWriter &writer,
                                const ImplicitSharingInfo *sharing_info)
 {
   const CPPType &cpp_type = attribute_type_to_cpp_type(data_type);
-  BLO_write_shared(&writer, data, cpp_type.size * size, sharing_info, [&]() {
+  writer.write_shared(data, cpp_type.size * size, sharing_info, [&]() {
     write_array_data(writer, data_type, data, size);
   });
 }
@@ -709,8 +676,13 @@ void AttributeStorage::blend_write(BlendWriter &writer,
                                    const AttributeStorage::BlendWriteData &write_data)
 {
   /* Use string argument to avoid confusion with the C++ class with the same name. */
-  writer.write_struct_array_by_name(
-      "Attribute", write_data.attributes.size(), write_data.attributes.data());
+  writer.write_struct_array_by_name("Attribute",
+                                    write_data.attributes.size(),
+                                    write_data.attributes.data(),
+                                    [](BlendStructWriterVoid &struct_writer) {
+                                      struct_writer.generated_ptr(
+                                          offsetof(blender::Attribute, data));
+                                    });
   for (const blender::Attribute &attr_dna : write_data.attributes) {
     writer.write_string(attr_dna.name);
     switch (AttrStorageType(attr_dna.storage_type)) {

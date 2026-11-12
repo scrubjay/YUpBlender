@@ -11,9 +11,9 @@
 #include "DNA_screen_types.h"
 #include "DNA_space_types.h"
 
-#include "BLI_math_geom.h"
-#include "BLI_math_vector.h"
-#include "BLI_utildefines.h"
+#include "BLI_math_geom_c.hh"
+#include "BLI_math_vector_c.hh"
+#include "BLI_utildefines.hh"
 
 #include "BKE_context.hh"
 #include "BKE_report.hh"
@@ -52,7 +52,7 @@ static wmOperatorStatus create_plane_track_tracks_exec(bContext *C, wmOperator *
 
   BKE_tracking_tracks_deselect_all(&tracking_object->tracks);
 
-  plane_track->flag |= SELECT;
+  plane_track->flag |= PLANE_TRACK_SELECT;
   tracking_object->active_track = nullptr;
   tracking_object->active_plane_track = plane_track;
 

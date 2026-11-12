@@ -14,10 +14,11 @@
 
 #include "MEM_guardedalloc.h"
 
-#include "BLI_listbase.h"
-#include "BLI_threads.h"
-#include "BLI_time.h"
-#include "BLI_utildefines.h"
+#include "BLI_listbase.hh"
+#include "BLI_simd.hh"
+#include "BLI_threads.hh"
+#include "BLI_time.hh"
+#include "BLI_utildefines.hh"
 
 /* for checking system threads - BLI_system_thread_count */
 #ifdef WIN32
@@ -95,7 +96,6 @@ static pthread_mutex_t _viewer_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t _custom1_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t _nodes_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t _movieclip_lock = PTHREAD_MUTEX_INITIALIZER;
-static pthread_mutex_t _colormanage_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t _fftw_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t _view3d_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_t mainid;
@@ -125,7 +125,7 @@ void BLI_threadpool_init(ListBaseT<ThreadSlot> *threadbase, void *(*do_thread)(v
   int a;
 
   if (threadbase != nullptr && tot > 0) {
-    BLI_listbase_clear(threadbase);
+    threadbase->clear_no_delete();
 
     if (tot > RE_MAX_THREAD) {
       tot = RE_MAX_THREAD;
@@ -174,6 +174,9 @@ int BLI_threadpool_available_thread_index(ListBaseT<ThreadSlot> *threadbase)
 
 static void *tslot_thread_start(void *tslot_p)
 {
+  /* Match the denormal handling of the task scheduler threads, see #BLI_task_scheduler_init. */
+  SIMD_SET_FLUSH_TO_ZERO;
+
   ThreadSlot *tslot = static_cast<ThreadSlot *>(tslot_p);
   return tslot->do_thread(tslot->callerdata);
 }
@@ -238,7 +241,7 @@ void BLI_threadpool_end(ListBaseT<ThreadSlot> *threadbase)
 
   /* Only needed if there's actually some stuff to end
    * this way we don't end up decrementing thread_levels on an empty `threadbase`. */
-  if (threadbase == nullptr || BLI_listbase_is_empty(threadbase)) {
+  if (threadbase == nullptr || threadbase->is_empty()) {
     return;
   }
 
@@ -247,7 +250,7 @@ void BLI_threadpool_end(ListBaseT<ThreadSlot> *threadbase)
       pthread_join(tslot.pthread, nullptr);
     }
   }
-  BLI_freelistN(threadbase);
+  threadbase->free_no_destruct();
 }
 
 /* System Information */
@@ -259,7 +262,7 @@ int BLI_system_thread_count()
   if (threads_override_num != 0) {
     return threads_override_num;
   }
-  if (LIKELY(t != -1)) {
+  if (t != -1) [[likely]] {
     return t;
   }
 
@@ -315,8 +318,6 @@ static ThreadMutex *global_mutex_from_type(const int type)
       return &_nodes_lock;
     case LOCK_MOVIECLIP:
       return &_movieclip_lock;
-    case LOCK_COLORMANAGE:
-      return &_colormanage_lock;
     case LOCK_FFTW:
       return &_fftw_lock;
     case LOCK_VIEW3D:

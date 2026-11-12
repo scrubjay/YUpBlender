@@ -2,7 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
-/* \file
+/** \file
  * \ingroup editors
  */
 
@@ -11,15 +11,15 @@
 #include "MOD_lineart.hh"
 
 #include "BLI_bounds.hh"
-#include "BLI_listbase.h"
-#include "BLI_math_geom.h"
-#include "BLI_math_matrix.h"
+#include "BLI_listbase.hh"
+#include "BLI_math_geom_c.hh"
 #include "BLI_math_matrix.hh"
-#include "BLI_math_rotation.h"
+#include "BLI_math_matrix_c.hh"
+#include "BLI_math_rotation_c.hh"
 #include "BLI_sort.hh"
-#include "BLI_task.h"
-#include "BLI_time.h"
-#include "BLI_utildefines.h"
+#include "BLI_task_c.hh"
+#include "BLI_time.hh"
+#include "BLI_utildefines.hh"
 #include "BLI_vector.hh"
 
 #include "BKE_attribute.hh"
@@ -145,7 +145,7 @@ static LineartEdgeSegment *lineart_give_segment(LineartData *ld)
   BLI_spin_lock(&ld->lock_cuts);
 
   /* See if there is any already allocated memory we can reuse. */
-  if (ld->wasted_cuts.first) {
+  if (ld->wasted_cuts.first_) {
     LineartEdgeSegment *es = static_cast<LineartEdgeSegment *>(BLI_pophead(&ld->wasted_cuts));
     BLI_spin_unlock(&ld->lock_cuts);
     memset(es, 0, sizeof(LineartEdgeSegment));
@@ -179,10 +179,10 @@ void lineart_edge_cut(LineartData *ld,
   if (LRT_DOUBLE_CLOSE_ENOUGH(start, 1) || LRT_DOUBLE_CLOSE_ENOUGH(end, 0)) {
     return;
   }
-  if (UNLIKELY(start != start)) {
+  if (start != start) [[unlikely]] {
     start = 0.0;
   }
-  if (UNLIKELY(end != end)) {
+  if (end != end) [[unlikely]] {
     end = 0.0;
   }
 
@@ -268,7 +268,7 @@ void lineart_edge_cut(LineartData *ld,
   else {
     /* We have yet to reach a existing cutting point even after we searched the whole line, so we
      * append the new cut to the end. */
-    i_seg = static_cast<LineartEdgeSegment *>(e->segments.last);
+    i_seg = e->segments.last();
     new_seg1->occlusion = i_seg->occlusion;
     new_seg1->material_mask_bits = i_seg->material_mask_bits;
     new_seg1->shadow_mask_bits = i_seg->shadow_mask_bits;
@@ -287,7 +287,7 @@ void lineart_edge_cut(LineartData *ld,
     }
   }
   else {
-    i_seg = static_cast<LineartEdgeSegment *>(e->segments.last);
+    i_seg = e->segments.last();
     new_seg2->occlusion = i_seg->occlusion;
     new_seg2->material_mask_bits = i_seg->material_mask_bits;
     new_seg2->shadow_mask_bits = i_seg->shadow_mask_bits;
@@ -1746,7 +1746,7 @@ void lineart_add_edge_to_array(LineartPendingEdges *pe, LineartEdge *e)
 
     LineartEdge **new_array = MEM_new_array_uninitialized<LineartEdge *>(
         size_t(pe->max) * 2, "LineartPendingEdges array");
-    if (LIKELY(pe->array)) {
+    if (pe->array) [[likely]] {
       memcpy(new_array, pe->array, sizeof(LineartEdge *) * pe->max);
       MEM_delete(pe->array);
     }
@@ -2363,7 +2363,7 @@ static int lineart_usage_check(Collection *c, Object *ob, bool is_render)
     return ob->lineart.usage;
   }
 
-  if (c->gobject.first) {
+  if (c->gobject.first_) {
     if (BKE_collection_has_object(c, id_cast<Object *>(ob->id.orig_id))) {
       if ((is_render && (c->flag & COLLECTION_HIDE_RENDER)) ||
           ((!is_render) && (c->flag & COLLECTION_HIDE_VIEWPORT)))
@@ -2382,6 +2382,8 @@ static int lineart_usage_check(Collection *c, Object *ob, bool is_render)
             return OBJECT_LRT_NO_INTERSECTION;
           case COLLECTION_LRT_FORCE_INTERSECTION:
             return OBJECT_LRT_FORCE_INTERSECTION;
+          case COLLECTION_LRT_INCLUDE:
+            break;
         }
         return OBJECT_LRT_INHERIT;
       }
@@ -2586,8 +2588,8 @@ void lineart_main_load_geometries(Depsgraph *depsgraph,
     copy_m4_m4_db(ld->conf.view, view);
   }
 
-  BLI_listbase_clear(&ld->geom.triangle_buffer_pointers);
-  BLI_listbase_clear(&ld->geom.vertex_buffer_pointers);
+  ld->geom.triangle_buffer_pointers.clear_no_delete();
+  ld->geom.vertex_buffer_pointers.clear_no_delete();
 
   double t_start;
   if (G.debug_value == 4000) {
@@ -3382,8 +3384,8 @@ static bool lineart_schedule_new_triangle_task(LineartIsecThread *th)
   }
 
   th->pending_to = eln ? eln :
-                         static_cast<LineartElementLinkNode *>(
-                             ld->geom.triangle_buffer_pointers.last);
+
+                         ld->geom.triangle_buffer_pointers.last();
   th->index_to = ld->isect_scheduled_up_to_index;
 
   BLI_spin_unlock(&ld->lock_task);
@@ -3403,7 +3405,7 @@ static void lineart_init_isec_thread(LineartIsecData *d, LineartData *ld, int th
   d->thread_count = thread_count;
 
   ld->isect_scheduled_up_to = static_cast<LineartElementLinkNode *>(
-      ld->geom.triangle_buffer_pointers.first);
+      ld->geom.triangle_buffer_pointers.first_);
   ld->isect_scheduled_up_to_index = 0;
 
   for (int i = 0; i < thread_count; i++) {
@@ -3530,12 +3532,12 @@ void lineart_destroy_render_data_keep_init(LineartData *ld)
     return;
   }
 
-  BLI_listbase_clear(&ld->chains);
-  BLI_listbase_clear(&ld->wasted_cuts);
+  ld->chains.clear_no_delete();
+  ld->wasted_cuts.clear_no_delete();
 
-  BLI_listbase_clear(&ld->geom.vertex_buffer_pointers);
-  BLI_listbase_clear(&ld->geom.line_buffer_pointers);
-  BLI_listbase_clear(&ld->geom.triangle_buffer_pointers);
+  ld->geom.vertex_buffer_pointers.clear_no_delete();
+  ld->geom.line_buffer_pointers.clear_no_delete();
+  ld->geom.triangle_buffer_pointers.clear_no_delete();
 
   if (ld->pending_edges.array) {
     MEM_delete(ld->pending_edges.array);
@@ -3889,7 +3891,7 @@ static void lineart_bounding_areas_connect_new(LineartData *ld, LineartBoundingA
   /* Then remove the parent bounding areas from
    * their original adjacent areas. */
   for (LinkData &lip : root->lp) {
-    for (lip2 = static_cast<LinkData *>((static_cast<LineartBoundingArea *>(lip.data))->rp.first);
+    for (lip2 = static_cast<LinkData *>((static_cast<LineartBoundingArea *>(lip.data))->rp.first_);
          lip2;
          lip2 = next_lip)
     {
@@ -3908,7 +3910,7 @@ static void lineart_bounding_areas_connect_new(LineartData *ld, LineartBoundingA
     }
   }
   for (LinkData &lip : root->rp) {
-    for (lip2 = static_cast<LinkData *>((static_cast<LineartBoundingArea *>(lip.data))->lp.first);
+    for (lip2 = static_cast<LinkData *>((static_cast<LineartBoundingArea *>(lip.data))->lp.first_);
          lip2;
          lip2 = next_lip)
     {
@@ -3927,7 +3929,7 @@ static void lineart_bounding_areas_connect_new(LineartData *ld, LineartBoundingA
     }
   }
   for (LinkData &lip : root->up) {
-    for (lip2 = static_cast<LinkData *>((static_cast<LineartBoundingArea *>(lip.data))->bp.first);
+    for (lip2 = static_cast<LinkData *>((static_cast<LineartBoundingArea *>(lip.data))->bp.first_);
          lip2;
          lip2 = next_lip)
     {
@@ -3946,7 +3948,7 @@ static void lineart_bounding_areas_connect_new(LineartData *ld, LineartBoundingA
     }
   }
   for (LinkData &lip : root->bp) {
-    for (lip2 = static_cast<LinkData *>((static_cast<LineartBoundingArea *>(lip.data))->up.first);
+    for (lip2 = static_cast<LinkData *>((static_cast<LineartBoundingArea *>(lip.data))->up.first_);
          lip2;
          lip2 = next_lip)
     {
@@ -3966,10 +3968,10 @@ static void lineart_bounding_areas_connect_new(LineartData *ld, LineartBoundingA
   }
 
   /* Finally clear parent's adjacent list. */
-  BLI_listbase_clear(&root->lp);
-  BLI_listbase_clear(&root->rp);
-  BLI_listbase_clear(&root->up);
-  BLI_listbase_clear(&root->bp);
+  root->lp.clear_no_delete();
+  root->rp.clear_no_delete();
+  root->up.clear_no_delete();
+  root->bp.clear_no_delete();
 }
 
 static void lineart_bounding_areas_connect_recursive(LineartData *ld, LineartBoundingArea *root)
@@ -5059,6 +5061,10 @@ bool MOD_lineart_compute_feature_lines_v3(Depsgraph *depsgraph,
     }
   }
 
+  if (lineart_camera->type != OB_CAMERA) {
+    return false;
+  }
+
   LineartCache *lc = *cached_result;
   if (!lc) {
     lc = MOD_lineart_init_cache();
@@ -5108,7 +5114,7 @@ bool MOD_lineart_compute_feature_lines_v3(Depsgraph *depsgraph,
     lineart_main_transform_and_add_shadow(ld, shadow_veln, shadow_eeln);
   }
 
-  if (!ld->geom.vertex_buffer_pointers.first) {
+  if (!ld->geom.vertex_buffer_pointers.first_) {
     /* No geometry loaded, return early. */
     return true;
   }
@@ -5191,7 +5197,7 @@ bool MOD_lineart_compute_feature_lines_v3(Depsgraph *depsgraph,
 
     if (enable_stroke_depth_offset && lmd.stroke_depth_offset > FLT_EPSILON) {
       MOD_lineart_chain_offset_towards_camera(
-          ld, lmd.stroke_depth_offset, lmd.flags & MOD_LINEART_OFFSET_TOWARDS_CUSTOM_CAMERA);
+          ld, lmd.stroke_depth_offset, lmd.flags & LINEART_GPENCIL_OFFSET_TOWARDS_CUSTOM_CAMERA);
     }
 
     if (ld->conf.shadow_use_silhouette) {
@@ -5290,7 +5296,7 @@ void MOD_lineart_gpencil_generate_v3(const LineartCache *cache,
 
   bool invert_input = modifier_calculation_flags & MOD_LINEART_INVERT_SOURCE_VGROUP;
 
-  bool inverse_silhouette = modifier_flags & MOD_LINEART_INVERT_SILHOUETTE_FILTER;
+  bool inverse_silhouette = modifier_flags & LINEART_GPENCIL_INVERT_SILHOUETTE_FILTER;
 
   Vector<LineartChainWriteInfo> writer;
   writer.reserve(128);
@@ -5312,12 +5318,12 @@ void MOD_lineart_gpencil_generate_v3(const LineartCache *cache,
     }
     if (orig_col && ec.object_ref) {
       if (BKE_collection_has_object_recursive_instanced(orig_col, ec.object_ref)) {
-        if (modifier_flags & MOD_LINEART_INVERT_COLLECTION) {
+        if (modifier_flags & LINEART_GPENCIL_INVERT_COLLECTION) {
           continue;
         }
       }
       else {
-        if (!(modifier_flags & MOD_LINEART_INVERT_COLLECTION)) {
+        if (!(modifier_flags & LINEART_GPENCIL_INVERT_COLLECTION)) {
           continue;
         }
       }
@@ -5421,7 +5427,8 @@ void MOD_lineart_gpencil_generate_v3(const LineartCache *cache,
   bke::CurvesGeometry new_curves(total_point_count, stroke_count);
   new_curves.fill_curve_types(CURVE_TYPE_POLY);
 
-  BKE_defgroup_copy_list(&new_curves.vertex_group_names, &drawing.geometry.vertex_group_names);
+  BKE_defgroup_copy_list(&new_curves.vertex_group_names,
+                         &drawing.strokes_for_write().vertex_group_names);
 
   MutableAttributeAccessor attributes = new_curves.attributes_for_write();
   MutableSpan<float3> point_positions = new_curves.positions_for_write();
@@ -5456,7 +5463,7 @@ void MOD_lineart_gpencil_generate_v3(const LineartCache *cache,
     return -1;
   };
 
-  const bool skip_weight_transfer = BLI_listbase_is_empty(&drawing.geometry.vertex_group_names);
+  const bool skip_weight_transfer = drawing.strokes().vertex_group_names.is_empty();
 
   int up_to_point = 0;
   for (int chain_i : writer.index_range()) {

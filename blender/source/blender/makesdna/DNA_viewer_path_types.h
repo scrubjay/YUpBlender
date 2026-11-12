@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup DNA
+ */
+
 #pragma once
 
 #include "DNA_listBase.h"
@@ -13,7 +17,7 @@ namespace blender {
 struct ID;
 struct bNodeTree;
 
-enum ViewerPathElemType {
+enum ViewerPathElemType : int {
   VIEWER_PATH_ELEM_TYPE_ID = 0,
   VIEWER_PATH_ELEM_TYPE_MODIFIER = 1,
   VIEWER_PATH_ELEM_TYPE_GROUP_NODE = 2,
@@ -26,7 +30,7 @@ enum ViewerPathElemType {
 
 struct ViewerPathElem {
   struct ViewerPathElem *next = nullptr, *prev = nullptr;
-  int type = 0;
+  ViewerPathElemType type = VIEWER_PATH_ELEM_TYPE_ID;
   char _pad[4] = {};
   char *ui_name = nullptr;
 };

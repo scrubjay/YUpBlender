@@ -154,6 +154,17 @@ def bm_loop_select_count_vert_edge_face(bm):
     return (uv_vert, uv_edge, uv_face), (mesh_vert, mesh_edge, mesh_face)
 
 
+def bm_uv_select_assert_matches_mesh(test, bm):
+    """
+    Every UV selection flag must equal its mesh element, only valid when all UV's are shared.
+    """
+    for f in bm.faces:
+        test.assertEqual(f.uv_select, f.select)
+        for l in f.loops:
+            test.assertEqual(l.uv_select_vert, l.vert.select)
+            test.assertEqual(l.uv_select_edge, l.edge.select)
+
+
 def bm_uv_select_reset(bm, /, *, select):
     bm_uv_select_set_all(bm, select=select)
     bm.uv_select_sync_to_mesh()
@@ -221,6 +232,48 @@ class TestBMeshUVSelectSimple(unittest.TestCase):
         bm.uv_select_sync_valid = True
         result = bm_uv_select_check_or_empty(bm, sync=True, flush=True, contiguous=False)
         self.assertTrue(result.get("count_uv_vert_any_selected_with_vert_unselected", 0), 48)
+
+        bm.free()
+
+    def test_uv_select_check_sync_edge(self):
+        """
+        The sync check must count a selected UV edge as a mismatch when its mesh edge
+        is unselected, even when both the mesh vertices are selected.
+        """
+        bm = bmesh.new()
+        bmesh.ops.create_grid(bm, x_segments=1, y_segments=1, size=1.0)
+        self.assertEqual((len(bm.verts), len(bm.edges), len(bm.faces)), (4, 4, 1))
+        bm.uv_select_sync_valid = True
+
+        f = next(iter(bm.faces))
+        l, l_next, _, _ = f.loops
+
+        # Select the edge's vertices (not the edge), matching the UV vertices.
+        l.vert.select = True
+        l_next.vert.select = True
+        l.uv_select_vert = True
+        l_next.uv_select_vert = True
+        self.assertEqual(bm_uv_select_check_non_zero(bm, sync=True), {})
+
+        # Now select the UV edge.
+        l.uv_select_edge = True
+        self.assertEqual(bm_uv_select_check_non_zero(bm, sync=True), {
+            "count_uv_edge_any_selected_with_edge_unselected": 1,
+        })
+
+        # Selecting the mesh edge resolves the error.
+        l.edge.select = True
+        self.assertEqual(bm_uv_select_check_non_zero(bm, sync=True), {})
+
+        # The reverse, a selected mesh edge with no selected UV edge,
+        # is only counted as a mismatch in edge select mode as vertex mode
+        # may select the mesh edge from its vertices.
+        l.uv_select_edge = False
+        self.assertEqual(bm_uv_select_check_non_zero(bm, sync=True), {})
+        bm.select_mode = {'EDGE'}
+        self.assertEqual(bm_uv_select_check_non_zero(bm, sync=True), {
+            "count_uv_edge_none_selected_with_edge_selected": 1,
+        })
 
         bm.free()
 
@@ -451,6 +504,48 @@ class TestBMeshUVSelectSimple(unittest.TestCase):
         # Nothing should be selected because the mesh is hidden.
         self.assertEqual(bm_loop_select_count_vert_edge_face(bm), ((0, 0, 0), (0, 0, 0)))
 
+    def test_uv_select_sync_to_mesh_face_mode(self):
+        # In face mode, the UV face selection is the only source for the mesh face selection.
+        # A 1:1 selection match is expected, see: #162004.
+
+        bm = bmesh.new()
+        uv_layer = bm.loops.layers.uv.new()
+
+        # A 3x3 grid of quads, so the center face is entirely surrounded.
+        bmesh.ops.create_grid(bm, x_segments=3, y_segments=3, size=2.0)
+        bm_uv_layer_from_coords(bm, uv_layer)
+        bm.select_mode = {'FACE'}
+        # Needed for methods that act on UV select.
+        bm.uv_select_sync_valid = True
+
+        # The center face is the only one with all it's edges shared with other faces.
+        faces_center = [f for f in bm.faces if all(len(e.link_faces) == 2 for e in f.edges)]
+        self.assertEqual(len(faces_center), 1)
+        face_center = faces_center[0]
+        del faces_center
+
+        # Select everything.
+        bm.uv_select_foreach_set(True, faces=bm.faces)
+        bm.uv_select_sync_to_mesh()
+        self.assertEqual(bm_loop_select_count_vert_edge_face(bm), ((36, 36, 9), (16, 24, 9)))
+        self.assertEqual(bm_uv_select_check_non_zero(bm, sync=True, flush=True, contiguous=True), {})
+
+        # De-select the center face, it's UV vertices & edges stay selected via the surrounding faces.
+        face_center.uv_select = False
+        bm.uv_select_sync_to_mesh()
+        self.assertFalse(face_center.select)
+        self.assertEqual(bm_loop_select_count_vert_edge_face(bm), ((36, 36, 8), (16, 24, 8)))
+        self.assertEqual(bm_uv_select_check_non_zero(bm, sync=True, flush=True, contiguous=True), {})
+
+        # Syncing back must round-trip, leaving the UV selection unchanged.
+        # Selecting the mesh face flushed back to the UV's, re-selecting the face the user de-selected.
+        bm.uv_select_sync_from_mesh()
+        self.assertFalse(face_center.uv_select)
+        self.assertEqual(bm_loop_select_count_vert_edge_face(bm), ((36, 36, 8), (16, 24, 8)))
+        self.assertEqual(bm_uv_select_check_non_zero(bm, sync=True, flush=True, contiguous=True), {})
+
+        bm.free()
+
     def test_uv_select_foreach_set(self):
         # Select UV's directly, similar to selecting in the UV editor.
         bm = bmesh.new()
@@ -564,6 +659,81 @@ class TestBMeshUVSelectSimple(unittest.TestCase):
         })
 
         # save_to_blend_file_for_testing(bm)
+
+    def test_uv_select_foreach_set_deselect_shared(self):
+        """
+        De-selecting must leave UV's connected to the remaining selection selected
+        and de-select the rest, without relying on a flush afterwards.
+        """
+        with self.subTest("isolated face"):
+            bm = bmesh.new()
+            uv_layer = bm.loops.layers.uv.new()
+            bmesh.ops.create_grid(bm, x_segments=1, y_segments=1, size=1.0)
+            bm_uv_layer_from_coords(bm, uv_layer)
+            bm.select_mode = {'FACE'}
+            bm.uv_select_sync_valid = True
+
+            f = next(iter(bm.faces))
+            bm.uv_select_foreach_set(True, faces=[f])
+            self.assertEqual(bm_loop_select_count_vert_edge_face(bm)[0], (4, 4, 1))
+
+            bm.uv_select_foreach_set(False, faces=[f])
+            self.assertEqual(bm_loop_select_count_vert_edge_face(bm)[0], (0, 0, 0))
+            self.assertEqual(bm_uv_select_check_non_zero(bm, flush=True, contiguous=True), {})
+            bm.free()
+
+        with self.subTest("adjacent edge kept"):
+            bm = bmesh.new()
+            uv_layer = bm.loops.layers.uv.new()
+            bmesh.ops.create_grid(bm, x_segments=1, y_segments=1, size=1.0)
+            bm_uv_layer_from_coords(bm, uv_layer)
+            bm.select_mode = {'EDGE'}
+            bm.uv_select_sync_valid = True
+
+            l = next(iter(next(iter(bm.faces)).loops))
+            l_prev = l.link_loop_prev
+            bm.uv_select_foreach_set(True, loop_edges=[l, l_prev])
+            self.assertEqual(bm_loop_select_count_vert_edge_face(bm)[0], (3, 2, 0))
+
+            # De-select one edge, the other keeps both its vertices.
+            bm.uv_select_foreach_set(False, loop_edges=[l])
+            self.assertTrue(l_prev.uv_select_edge)
+            self.assertFalse(l.uv_select_edge)
+            self.assertTrue(l_prev.uv_select_vert)
+            self.assertTrue(l.uv_select_vert)
+            self.assertFalse(l.link_loop_next.uv_select_vert)
+            self.assertEqual(bm_loop_select_count_vert_edge_face(bm)[0], (2, 1, 0))
+            self.assertEqual(bm_uv_select_check_non_zero(bm, flush=True, contiguous=True), {})
+            bm.free()
+
+        with self.subTest("neighbor face kept"):
+            bm = bmesh.new()
+            uv_layer = bm.loops.layers.uv.new()
+            bmesh.ops.create_grid(bm, x_segments=2, y_segments=1, size=1.0)
+            bm_uv_layer_from_coords(bm, uv_layer)
+            bm.select_mode = {'FACE'}
+            bm.uv_select_sync_valid = True
+
+            faces = list(bm.faces)
+            self.assertEqual(len(faces), 2)
+            f, f_other = faces
+            bm.uv_select_foreach_set(True, faces=faces)
+            self.assertEqual(bm_loop_select_count_vert_edge_face(bm)[0], (8, 8, 2))
+
+            # De-select one face, only the shared edge & its vertices stay selected.
+            bm.uv_select_foreach_set(False, faces=[f])
+            self.assertFalse(f.uv_select)
+            self.assertTrue(f_other.uv_select)
+            l_shared = next(l for l in f.loops if len(l.edge.link_faces) == 2)
+            for l in f.loops:
+                self.assertEqual(l.uv_select_edge, l is l_shared)
+                self.assertEqual(l.uv_select_vert, l in {l_shared, l_shared.link_loop_next})
+            for l in f_other.loops:
+                self.assertTrue(l.uv_select_vert)
+                self.assertTrue(l.uv_select_edge)
+            self.assertEqual(bm_loop_select_count_vert_edge_face(bm)[0], (6, 5, 1))
+            self.assertEqual(bm_uv_select_check_non_zero(bm, flush=True, contiguous=True), {})
+            bm.free()
 
     def test_uv_select_foreach_set_from_mesh(self):
         """
@@ -682,6 +852,317 @@ class TestBMeshUVSelectSimple(unittest.TestCase):
         })
 
         # save_to_blend_file_for_testing(bm)
+
+    def test_uv_select_foreach_set_from_mesh_select_mixed_mode(self):
+        """
+        Selecting a face or edge in vertex or edge select mode selects its vertices or edges,
+        which selects other edges & faces using them when the mesh selection is flushed.
+        The UV selection must match the mesh.
+        """
+        for select_mode, elem_type, expected in (
+                ({'VERT', 'FACE'}, 'FACE', (16, 24, 9)),
+                ({'EDGE', 'FACE'}, 'FACE', (16, 24, 9)),
+                ({'VERT', 'EDGE', 'FACE'}, 'FACE', (16, 24, 9)),
+                ({'VERT', 'EDGE'}, 'EDGE', (4, 4, 1)),
+                ({'VERT', 'EDGE', 'FACE'}, 'EDGE', (4, 4, 1)),
+        ):
+            with self.subTest(select_mode=select_mode, elem_type=elem_type):
+                bm = bmesh.new()
+                uv_layer = bm.loops.layers.uv.new()
+
+                # A 3x3 grid of quads, so the center face is entirely surrounded.
+                bmesh.ops.create_grid(bm, x_segments=3, y_segments=3, size=2.0)
+                bm_uv_layer_from_coords(bm, uv_layer)
+                bm.select_mode = select_mode
+                bm.uv_select_sync_valid = True
+                bm_uv_select_reset(bm, select=False)
+
+                faces_center = [f for f in bm.faces if all(len(e.link_faces) == 2 for e in f.edges)]
+                self.assertEqual(len(faces_center), 1)
+                face_flushed = faces_center[0]
+
+                if elem_type == 'FACE':
+                    # Selecting the surrounding faces selects the center face.
+                    elems = [f for f in bm.faces if f is not face_flushed]
+                    kw = {"faces": elems}
+                else:
+                    # Selecting three edges of the center face selects the fourth edge & the face.
+                    elems = list(face_flushed.edges)[:3]
+                    kw = {"edges": elems}
+
+                # Select the elements as the viewport does, then flush the mesh selection.
+                for elem in elems:
+                    elem.select = True
+                bm.select_flush_mode()
+                self.assertTrue(face_flushed.select)
+                bm.uv_select_foreach_set_from_mesh(True, **kw)
+
+                self.assertEqual(bm_loop_select_count_vert_edge_face(bm)[1], expected)
+                bm_uv_select_assert_matches_mesh(self, bm)
+                self.assertEqual(bm_uv_select_check_non_zero(bm, sync=True, flush=True, contiguous=True), {})
+
+                bm.free()
+
+    def test_uv_select_foreach_set_from_mesh_edge_shared(self):
+        """
+        Selecting an edge with sticky shared-location must select the UV's
+        of all faces using its vertices, not only the faces using the edge.
+        """
+        bm = bmesh.new()
+        uv_layer = bm.loops.layers.uv.new()
+        bmesh.ops.create_grid(bm, x_segments=3, y_segments=3, size=2.0)
+        bm_uv_layer_from_coords(bm, uv_layer)
+        bm.select_mode = {'EDGE'}
+        bm.uv_select_sync_valid = True
+        bm_uv_select_reset(bm, select=False)
+
+        # An edge between two interior vertices, each used by 4 faces.
+        edges = [e for e in bm.edges if all(len(v.link_edges) == 4 for v in e.verts)]
+        self.assertEqual(len(edges), 4)
+        del edges[1:]
+
+        edges[0].select = True
+        bm.select_flush_mode()
+        bm.uv_select_foreach_set_from_mesh(True, edges=edges)
+
+        self.assertEqual(bm_loop_select_count_vert_edge_face(bm), ((8, 2, 0), (2, 1, 0)))
+        self.assertEqual(bm_uv_select_check_non_zero(bm, sync=True, flush=True, contiguous=True), {})
+
+        bm.free()
+
+    def test_uv_select_foreach_set_from_mesh_deselect_mixed_mode(self):
+        """
+        De-selecting a face or edge in a lower select mode de-selects its vertices or edges,
+        which de-selects other elements using them when the mesh selection is flushed.
+        The UV selection must match the mesh.
+        """
+        for select_mode, elem_type, expected in (
+                ({'VERT', 'FACE'}, 'FACE', (12, 12, 0)),
+                ({'EDGE', 'FACE'}, 'FACE', (16, 20, 4)),
+                ({'VERT', 'EDGE', 'FACE'}, 'FACE', (12, 12, 0)),
+                ({'VERT', 'EDGE'}, 'EDGE', (14, 17, 3)),
+                ({'VERT', 'EDGE', 'FACE'}, 'EDGE', (14, 17, 3)),
+                # No vertex mode, only the edge & its faces are de-selected.
+                ({'EDGE', 'FACE'}, 'EDGE', (16, 23, 7)),
+                # A wire edge from a corner, de-selecting it de-selects the corner.
+                ({'VERT', 'EDGE'}, 'WIRE', (15, 22, 8)),
+                ({'VERT', 'EDGE', 'FACE'}, 'WIRE', (15, 22, 8)),
+        ):
+            with self.subTest(select_mode=select_mode, elem_type=elem_type):
+                bm = bmesh.new()
+                uv_layer = bm.loops.layers.uv.new()
+
+                # A 3x3 grid of quads, so the center face & edges between interior vertices
+                # are entirely surrounded.
+                bmesh.ops.create_grid(bm, x_segments=3, y_segments=3, size=2.0)
+                bm_uv_layer_from_coords(bm, uv_layer)
+                bm.select_mode = select_mode
+                # Needed for methods that act on UV select.
+                bm.uv_select_sync_valid = True
+
+                if elem_type == 'FACE':
+                    elems = [f for f in bm.faces if all(len(e.link_faces) == 2 for e in f.edges)]
+                    self.assertEqual(len(elems), 1)
+                    kw = {"faces": elems}
+                elif elem_type == 'EDGE':
+                    elems = [e for e in bm.edges if all(len(v.link_edges) == 4 for v in e.verts)]
+                    self.assertEqual(len(elems), 4)
+                    elems = elems[:1]
+                    kw = {"edges": elems}
+                else:
+                    v_corner = next(v for v in bm.verts if len(v.link_edges) == 2)
+                    v_wire = bm.verts.new((3.0, 3.0, 0.0))
+                    elems = [bm.edges.new((v_corner, v_wire))]
+                    kw = {"edges": elems}
+
+                # Select everything, the wire edge has no UV's so it isn't selected by syncing.
+                bm_uv_select_reset(bm, select=True)
+                elems[0].select = True
+                bm_uv_select_assert_matches_mesh(self, bm)
+
+                # De-select the element as the viewport does, then flush the mesh selection.
+                elems[0].select = False
+                bm.select_flush_mode()
+                bm.uv_select_foreach_set_from_mesh(False, **kw)
+
+                self.assertEqual(bm_loop_select_count_vert_edge_face(bm)[1], expected)
+                bm_uv_select_assert_matches_mesh(self, bm)
+                self.assertEqual(bm_uv_select_check_non_zero(bm, sync=True, flush=True, contiguous=True), {})
+
+                bm.free()
+
+
+# ------------------------------------------------------------------------------
+# BMesh Operators
+
+class TestBMeshOperators(unittest.TestCase):
+
+    def test_spin_primitive(self):
+        import math
+
+        # Regular hexagon with a 1.0 radius.
+        expected_area = (3.0 * math.sqrt(3.0)) / 2.0
+
+        unique_coords_pair = [set(), set()]
+
+        for do_dupli in (False, True):
+            with self.subTest(do_dupli=do_dupli):
+                bm = bmesh.new()
+                v = bm.verts.new((1.0, 0.0, 0.0))
+
+                bmesh.ops.spin(
+                    bm,
+                    geom=[v],
+                    cent=(0.0, 0.0, 0.0),
+                    axis=(0.0, 0.0, 1.0),
+                    angle=math.radians(360.0),
+                    steps=6,
+                    use_merge=True,
+                    use_duplicate=do_dupli,
+                )
+
+                if do_dupli:
+                    # Duplicate mode does not merge first/last.
+                    # The trailing vert is rotated one revolution causing it not to be an exact match.
+                    # Ensure it's close, then de-duplicate the location so the unique coords test passes.
+                    bm.verts.ensure_lookup_table()
+                    v0 = bm.verts[0]
+                    v_near = bm.verts[-1]
+                    self.assertLess((v_near.co - v0.co).length, 1e-4)
+                    v_near.co = v0.co
+
+                    f = bm.faces.new(bm.verts[:6])
+                    self.assertEqual((len(bm.verts), len(bm.edges), len(bm.faces)), (7, 6, 1))
+                else:
+                    self.assertEqual((len(bm.verts), len(bm.edges), len(bm.faces)), (6, 6, 0))
+
+                    # All edges should have the same length (regular hexagon).
+                    edge_lengths = [e.calc_length() for e in bm.edges]
+                    for length in edge_lengths[1:]:
+                        self.assertAlmostEqual(length, edge_lengths[0], places=5)
+
+                    f = bmesh.ops.contextual_create(bm, geom=bm.edges[:])["faces"][0]
+                    self.assertEqual((len(bm.verts), len(bm.edges), len(bm.faces)), (6, 6, 1))
+
+                self.assertAlmostEqual(f.calc_area(), expected_area, places=5)
+
+                unique_coords_pair[do_dupli] = {v.co[:] for v in bm.verts}
+
+                bm.free()
+
+        # Both paths should produce the same set of unique vertex positions.
+        self.assertEqual(unique_coords_pair[False], unique_coords_pair[True])
+
+    def test_spin_screw_complex(self):
+        import math
+        from mathutils import Matrix, Vector
+
+        # Non-identity "space" matrix combining translation, rotation, and scale.
+        # So spatial arguments interpreted in this local space.
+        space = (
+            Matrix.Translation((10.0, 0.0, 0.0)) @
+            Matrix.Rotation(math.radians(90.0), 4, Vector((1.0, 1.0, 1.0))) @
+            Matrix.Scale(2.0, 4)
+        )
+
+        steps = 6
+
+        unique_coords_pair = [set(), set()]
+
+        for do_dupli in (False, True):
+            with self.subTest(do_dupli=do_dupli):
+                bm = bmesh.new()
+
+                # Isolated vert (z=0).
+                bm.verts.new((11.0, 0.0, 0.0))
+                # Edge (z=1..2).
+                bm.edges.new([bm.verts.new(co) for co in (
+                    (11.0, 0.0, 1.0),
+                    (11.0, 0.0, 2.0),
+                )])
+                # Quad (z=3..4 in XZ).
+                bm.faces.new([bm.verts.new(co) for co in (
+                    (11.0, 0.0, 3.0),
+                    (12.0, 0.0, 3.0),
+                    (12.0, 0.0, 4.0),
+                    (11.0, 0.0, 4.0),
+                )])
+
+                bmesh.ops.spin(
+                    bm,
+                    geom=bm.verts[:] + bm.edges[:] + bm.faces[:],
+                    cent=(0.0, 0.0, 0.0),
+                    axis=(0.0, 0.0, 1.0),
+                    space=space,
+                    angle=math.radians(360.0),
+                    steps=steps,
+                    dvec=(0.0, 0.0, 0.5),
+                    use_duplicate=do_dupli,
+                )
+
+                total_area = sum(f.calc_area() for f in bm.faces)
+                total_length = sum(e.calc_length() for e in bm.edges)
+                if do_dupli:
+                    self.assertEqual((len(bm.verts), len(bm.edges), len(bm.faces)), (49, 35, 7))
+                    self.assertAlmostEqual(total_area, 7.0, places=4)
+                    self.assertAlmostEqual(total_length, 35.0, places=4)
+                else:
+                    self.assertEqual((len(bm.verts), len(bm.edges), len(bm.faces)), (49, 77, 32))
+                    self.assertAlmostEqual(total_area, 297.830433, places=4)
+                    self.assertAlmostEqual(total_length, 651.346448, places=4)
+
+                unique_coords_pair[do_dupli] = {v.co[:] for v in bm.verts}
+
+                bm.free()
+
+        # Both paths should produce the same set of unique vertex positions.
+        self.assertEqual(unique_coords_pair[False], unique_coords_pair[True])
+
+    def test_spin_screw(self):
+        import math
+
+        steps = 8
+
+        unique_coords_pair = [set(), set()]
+
+        for do_dupli in (False, True):
+            with self.subTest(do_dupli=do_dupli):
+                bm = bmesh.new()
+
+                # Vertical edge at radius 1.0.
+                bm.edges.new([bm.verts.new(co) for co in (
+                    (1.0, 0.0, 0.0),
+                    (1.0, 0.0, 1.0),
+                )])
+
+                bmesh.ops.spin(
+                    bm,
+                    geom=bm.verts[:] + bm.edges[:],
+                    cent=(-1.0, -1.0, -1.0),
+                    axis=(1.0, 1.0, 1.0),
+                    angle=math.radians(360.0),
+                    steps=steps,
+                    dvec=(0.0, 0.0, 1.0 / steps),
+                    use_duplicate=do_dupli,
+                )
+
+                total_area = sum(f.calc_area() for f in bm.faces)
+                total_length = sum(e.calc_length() for e in bm.edges)
+                if do_dupli:
+                    self.assertEqual((len(bm.verts), len(bm.edges), len(bm.faces)), (18, 9, 0))
+                    self.assertAlmostEqual(total_area, 0.0, places=4)
+                    self.assertAlmostEqual(total_length, 9.0, places=4)
+                else:
+                    self.assertEqual((len(bm.verts), len(bm.edges), len(bm.faces)), (18, 25, 8))
+                    self.assertAlmostEqual(total_area, 3.600270, places=4)
+                    self.assertAlmostEqual(total_length, 19.121252, places=4)
+
+                unique_coords_pair[do_dupli] = {v.co[:] for v in bm.verts}
+
+                bm.free()
+
+        # Both paths should produce the same set of unique vertex positions.
+        self.assertEqual(unique_coords_pair[False], unique_coords_pair[True])
 
 
 def main():

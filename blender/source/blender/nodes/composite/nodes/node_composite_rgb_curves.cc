@@ -65,6 +65,7 @@ static int node_gpu_material(GPUMaterial *material,
   CurveMapping *curve_mapping = get_curve_mapping(*node);
 
   BKE_curvemapping_init(curve_mapping);
+  BKE_curvemapping_premultiply(curve_mapping, true);
   float *band_values;
   int band_size;
   BKE_curvemapping_table_RGBA(curve_mapping, &band_values, &band_size);
@@ -180,7 +181,7 @@ static void node_register()
   ntype.enum_name_legacy = "CURVE_RGB";
   ntype.nclass = NODE_CLASS_OP_COLOR;
   ntype.declare = node_declare;
-  bke::node_type_size(ntype, 200, 140, 320);
+  ntype.default_width = bke::NodeWidth::_200;
   ntype.initfunc = node_init;
   bke::node_type_storage(ntype, "CurveMapping", node_free_curves, node_copy_curves);
   ntype.gpu_fn = node_gpu_material;

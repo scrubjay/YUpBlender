@@ -7,6 +7,7 @@
  */
 
 #include "DNA_ID.h"
+#include "DNA_key_types.h"
 #include "DNA_space_types.h"
 
 #include "BKE_anim_data.hh"
@@ -26,7 +27,10 @@
 #include "tree_element_id_object.hh"
 #include "tree_element_id_scene.hh"
 #include "tree_element_id_texture.hh"
+#include "tree_element_shapekey.hh"
 
+#include "tree_display.hh"
+#include "tree_element_anim_data.hh"
 #include "tree_element_id.hh"
 
 namespace blender::ed::outliner {
@@ -65,11 +69,13 @@ std::unique_ptr<TreeElementID> TreeElementID::create_from_id(TreeElement &legacy
       return std::make_unique<TreeElementIDObject>(legacy_te, (Object &)id);
     case ID_AC:
       return std::make_unique<TreeElementIDAction>(legacy_te, (bAction &)id);
+    case ID_KE:
+      /* Shape Key is handled separately, see #TreeElementShapeKeyBase. */
+      return nullptr;
     case ID_MA:
     case ID_LT:
     case ID_LA:
     case ID_CA:
-    case ID_KE:
     case ID_SCR:
     case ID_WO:
     case ID_SPK:
@@ -129,7 +135,7 @@ void TreeElementID::expand(SpaceOutliner & /*space_outliner*/) const
 void TreeElementID::expand_animation_data(AnimData *anim_data) const
 {
   if (outliner_animdata_test(anim_data)) {
-    add_element(&legacy_te_.subtree, &id_, anim_data, &legacy_te_, TSE_ANIM_DATA, 0);
+    add_element<TreeElementAnimData>({.owner_id = &id_}, *anim_data);
   }
 }
 

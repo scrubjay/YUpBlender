@@ -23,6 +23,7 @@ struct SwsContext;
 #ifdef WITH_FFMPEG
 
 extern "C" {
+#  include <libavutil/pixfmt.h>
 #  include <libavutil/rational.h>
 }
 
@@ -31,13 +32,12 @@ extern "C" {
 namespace blender {
 
 struct IDProperty;
-struct MovieIndex;
 
 struct MovieReader {
   enum class State { Uninitialized, Failed, Valid };
-  int ib_flags = 0;
+  ImBufFlags ib_flags = ImBufFlags::Zero;
   State state = State::Uninitialized;
-  int cur_position = 0; /* index  0 = 1e,  1 = 2e, enz. */
+  int cur_frame_index = 0; /* index  0 = 1e,  1 = 2e, enz. */
   int duration_in_frames = 0;
   int frs_sec = 0;
   double frs_sec_base = 0.0;
@@ -54,18 +54,21 @@ struct MovieReader {
   bool keep_original_colorspace = false;
 
 #ifdef WITH_FFMPEG
-  AVFormatContext *pFormatCtx = nullptr;
-  AVCodecContext *pCodecCtx = nullptr;
-  const AVCodec *pCodec = nullptr;
-  AVFrame *pFrameRGB = nullptr;
-  AVFrame *pFrameDeinterlaced = nullptr;
-  SwsContext *img_convert_ctx = nullptr;
-  int videoStream = 0;
+  AVFormatContext *format_ctx = nullptr;
+  AVCodecContext *codec_ctx = nullptr;
+  const AVCodec *codec = nullptr;
+  AVFrame *frame_rgb = nullptr;
+  AVFrame *frame_deinterlaced = nullptr;
+  SwsContext *sws_ctx = nullptr;
+  int video_stream_index = 0;
 
-  AVFrame *pFrame = nullptr;
-  bool pFrame_complete = false;
-  AVFrame *pFrame_backup = nullptr;
-  bool pFrame_backup_complete = false;
+  AVFrame *frame = nullptr;
+  bool frame_complete = false;
+  AVFrame *frame_backup = nullptr;
+  bool frame_backup_complete = false;
+
+  AVFrame *frame_sw = nullptr;
+  AVPixelFormat src_pix_fmt = AV_PIX_FMT_NONE;
 
   int64_t cur_pts = 0;
   int64_t cur_key_frame_pts = 0;
@@ -73,7 +76,6 @@ struct MovieReader {
 
   AVRational frame_rate = {1, 1};
 
-  bool seek_before_decode = false;
   bool is_float = false;
 
   /* When set, never seek within the video, and only ever decode one frame.
@@ -84,14 +86,11 @@ struct MovieReader {
   bool never_seek_decode_one_frame = false;
 #endif
 
-  char index_dir[768] = {};
+  char proxy_dir[768] = {};
 
   int proxies_tried = 0;
-  int indices_tried = 0;
 
   MovieReader *proxy_anim[IMB_PROXY_MAX_SLOT] = {};
-  MovieIndex *record_run = nullptr;
-  MovieIndex *no_gaps = nullptr;
 
   char colorspace[/*MAX_COLORSPACE_NAME*/ 64] = {};
   /** The maximum name from multi-view. */

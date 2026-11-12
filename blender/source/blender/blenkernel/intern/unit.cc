@@ -12,18 +12,18 @@
 #include <cstdlib>
 #include <cstring>
 
-#include "BLI_math_base.h"
-#include "BLI_string.h"
-#include "BLI_string_utf8.h"
-#include "BLI_string_utf8_symbols.h"
-#include "BLI_sys_types.h"
+#include "BLI_math_base_c.hh"
+#include "BLI_string.hh"
+#include "BLI_string_utf8.hh"
+#include "BLI_string_utf8_symbols.hh"
+#include "BLI_sys_types.hh"
 
 #include "DNA_scene_types.h"
 
 #include "BKE_unit.hh" /* own include */
 
 #ifdef WIN32
-#  include "BLI_winstuff.h"
+#  include "BLI_winstuff.hh"
 #endif
 
 namespace blender {
@@ -454,7 +454,7 @@ static bUnitDef buMetricAreaDef[] = {
         /*name_alt*/ "km2",
         /*name_display*/ "Square Kilometers",
         /*identifier*/ nullptr,
-        /*scalar*/ UN_SC_KM *UN_SC_KM,
+        /*scalar*/ UN_SC_KM * UN_SC_KM,
         /*bias*/ 0.0,
         /*flag*/ B_UNIT_DEF_NONE,
     },
@@ -465,7 +465,7 @@ static bUnitDef buMetricAreaDef[] = {
         /*name_alt*/ "hm2",
         /*name_display*/ "Square Hectometers",
         /*identifier*/ nullptr,
-        /*scalar*/ UN_SC_HM *UN_SC_HM,
+        /*scalar*/ UN_SC_HM * UN_SC_HM,
         /*bias*/ 0.0,
         /*flag*/ B_UNIT_DEF_SUPPRESS,
     }, /* Hectare. */
@@ -476,7 +476,7 @@ static bUnitDef buMetricAreaDef[] = {
         /*name_alt*/ "dam2",
         /*name_display*/ "Square Dekameters",
         /*identifier*/ nullptr,
-        /*scalar*/ UN_SC_DAM *UN_SC_DAM,
+        /*scalar*/ UN_SC_DAM * UN_SC_DAM,
         /*bias*/ 0.0,
         /*flag*/ B_UNIT_DEF_SUPPRESS,
     },
@@ -488,7 +488,7 @@ static bUnitDef buMetricAreaDef[] = {
         /*name_alt*/ "m2",
         /*name_display*/ "Square Meters",
         /*identifier*/ nullptr,
-        /*scalar*/ UN_SC_M *UN_SC_M,
+        /*scalar*/ UN_SC_M * UN_SC_M,
         /*bias*/ 0.0,
         /*flag*/ B_UNIT_DEF_NONE,
     },
@@ -499,7 +499,7 @@ static bUnitDef buMetricAreaDef[] = {
         /*name_alt*/ "dm2",
         /*name_display*/ "Square Decimeters",
         /*identifier*/ nullptr,
-        /*scalar*/ UN_SC_DM *UN_SC_DM,
+        /*scalar*/ UN_SC_DM * UN_SC_DM,
         /*bias*/ 0.0,
         /*flag*/ B_UNIT_DEF_SUPPRESS,
     },
@@ -510,7 +510,7 @@ static bUnitDef buMetricAreaDef[] = {
         /*name_alt*/ "cm2",
         /*name_display*/ "Square Centimeters",
         /*identifier*/ nullptr,
-        /*scalar*/ UN_SC_CM *UN_SC_CM,
+        /*scalar*/ UN_SC_CM * UN_SC_CM,
         /*bias*/ 0.0,
         /*flag*/ B_UNIT_DEF_NONE,
     },
@@ -521,7 +521,7 @@ static bUnitDef buMetricAreaDef[] = {
         /*name_alt*/ "mm2",
         /*name_display*/ "Square Millimeters",
         /*identifier*/ nullptr,
-        /*scalar*/ UN_SC_MM *UN_SC_MM,
+        /*scalar*/ UN_SC_MM * UN_SC_MM,
         /*bias*/ 0.0,
         /*flag*/ B_UNIT_DEF_NONE | B_UNIT_DEF_TENTH,
     },
@@ -532,7 +532,7 @@ static bUnitDef buMetricAreaDef[] = {
         /*name_alt*/ "um2",
         /*name_display*/ "Square Micrometers",
         /*identifier*/ nullptr,
-        /*scalar*/ UN_SC_UM *UN_SC_UM,
+        /*scalar*/ UN_SC_UM * UN_SC_UM,
         /*bias*/ 0.0,
         /*flag*/ B_UNIT_DEF_NONE,
     },
@@ -553,7 +553,7 @@ static bUnitDef buImperialAreaDef[] = {
         /*name_alt*/ nullptr,
         /*name_display*/ "Square Miles",
         /*identifier*/ nullptr,
-        /*scalar*/ UN_SC_MI *UN_SC_MI,
+        /*scalar*/ UN_SC_MI * UN_SC_MI,
         /*bias*/ 0.0,
         /*flag*/ B_UNIT_DEF_NONE,
     },
@@ -564,7 +564,7 @@ static bUnitDef buImperialAreaDef[] = {
         /*name_alt*/ nullptr,
         /*name_display*/ "Square Furlongs",
         /*identifier*/ nullptr,
-        /*scalar*/ UN_SC_FUR *UN_SC_FUR,
+        /*scalar*/ UN_SC_FUR * UN_SC_FUR,
         /*bias*/ 0.0,
         /*flag*/ B_UNIT_DEF_SUPPRESS,
     },
@@ -575,7 +575,7 @@ static bUnitDef buImperialAreaDef[] = {
         /*name_alt*/ nullptr,
         /*name_display*/ "Square Chains",
         /*identifier*/ nullptr,
-        /*scalar*/ UN_SC_CH *UN_SC_CH,
+        /*scalar*/ UN_SC_CH * UN_SC_CH,
         /*bias*/ 0.0,
         /*flag*/ B_UNIT_DEF_SUPPRESS,
     },
@@ -586,7 +586,7 @@ static bUnitDef buImperialAreaDef[] = {
         /*name_alt*/ nullptr,
         /*name_display*/ "Square Yards",
         /*identifier*/ nullptr,
-        /*scalar*/ UN_SC_YD *UN_SC_YD,
+        /*scalar*/ UN_SC_YD * UN_SC_YD,
         /*bias*/ 0.0,
         /*flag*/ B_UNIT_DEF_NONE,
     },
@@ -598,7 +598,7 @@ static bUnitDef buImperialAreaDef[] = {
         /*name_alt*/ nullptr,
         /*name_display*/ "Square Feet",
         /*identifier*/ nullptr,
-        /*scalar*/ UN_SC_FT *UN_SC_FT,
+        /*scalar*/ UN_SC_FT * UN_SC_FT,
         /*bias*/ 0.0,
         /*flag*/ B_UNIT_DEF_NONE,
     },
@@ -609,7 +609,7 @@ static bUnitDef buImperialAreaDef[] = {
         /*name_alt*/ nullptr,
         /*name_display*/ "Square Inches",
         /*identifier*/ nullptr,
-        /*scalar*/ UN_SC_IN *UN_SC_IN,
+        /*scalar*/ UN_SC_IN * UN_SC_IN,
         /*bias*/ 0.0,
         /*flag*/ B_UNIT_DEF_NONE,
     },
@@ -620,7 +620,7 @@ static bUnitDef buImperialAreaDef[] = {
         /*name_alt*/ nullptr,
         /*name_display*/ "Square Thou",
         /*identifier*/ nullptr,
-        /*scalar*/ UN_SC_MIL *UN_SC_MIL,
+        /*scalar*/ UN_SC_MIL * UN_SC_MIL,
         /*bias*/ 0.0,
         /*flag*/ B_UNIT_DEF_NONE,
     },
@@ -642,7 +642,7 @@ static bUnitDef buMetricVolDef[] = {
         /*name_alt*/ "km3",
         /*name_display*/ "Cubic Kilometers",
         /*identifier*/ nullptr,
-        /*scalar*/ UN_SC_KM *UN_SC_KM *UN_SC_KM,
+        /*scalar*/ UN_SC_KM * UN_SC_KM * UN_SC_KM,
         /*bias*/ 0.0,
         /*flag*/ B_UNIT_DEF_NONE,
     },
@@ -653,7 +653,7 @@ static bUnitDef buMetricVolDef[] = {
         /*name_alt*/ "hm3",
         /*name_display*/ "Cubic Hectometers",
         /*identifier*/ nullptr,
-        /*scalar*/ UN_SC_HM *UN_SC_HM *UN_SC_HM,
+        /*scalar*/ UN_SC_HM * UN_SC_HM * UN_SC_HM,
         /*bias*/ 0.0,
         /*flag*/ B_UNIT_DEF_SUPPRESS,
     },
@@ -664,7 +664,7 @@ static bUnitDef buMetricVolDef[] = {
         /*name_alt*/ "dam3",
         /*name_display*/ "Cubic Dekameters",
         /*identifier*/ nullptr,
-        /*scalar*/ UN_SC_DAM *UN_SC_DAM *UN_SC_DAM,
+        /*scalar*/ UN_SC_DAM * UN_SC_DAM * UN_SC_DAM,
         /*bias*/ 0.0,
         /*flag*/ B_UNIT_DEF_SUPPRESS,
     },
@@ -676,7 +676,7 @@ static bUnitDef buMetricVolDef[] = {
         /*name_alt*/ "m3",
         /*name_display*/ "Cubic Meters",
         /*identifier*/ nullptr,
-        /*scalar*/ UN_SC_M *UN_SC_M *UN_SC_M,
+        /*scalar*/ UN_SC_M * UN_SC_M * UN_SC_M,
         /*bias*/ 0.0,
         /*flag*/ B_UNIT_DEF_NONE,
     },
@@ -687,7 +687,7 @@ static bUnitDef buMetricVolDef[] = {
         /*name_alt*/ "dm3",
         /*name_display*/ "Cubic Decimeters",
         /*identifier*/ nullptr,
-        /*scalar*/ UN_SC_DM *UN_SC_DM *UN_SC_DM,
+        /*scalar*/ UN_SC_DM * UN_SC_DM * UN_SC_DM,
         /*bias*/ 0.0,
         /*flag*/ B_UNIT_DEF_SUPPRESS,
     },
@@ -698,7 +698,7 @@ static bUnitDef buMetricVolDef[] = {
         /*name_alt*/ "cm3",
         /*name_display*/ "Cubic Centimeters",
         /*identifier*/ nullptr,
-        /*scalar*/ UN_SC_CM *UN_SC_CM *UN_SC_CM,
+        /*scalar*/ UN_SC_CM * UN_SC_CM * UN_SC_CM,
         /*bias*/ 0.0,
         /*flag*/ B_UNIT_DEF_NONE,
     },
@@ -709,7 +709,7 @@ static bUnitDef buMetricVolDef[] = {
         /*name_alt*/ "mm3",
         /*name_display*/ "Cubic Millimeters",
         /*identifier*/ nullptr,
-        /*scalar*/ UN_SC_MM *UN_SC_MM *UN_SC_MM,
+        /*scalar*/ UN_SC_MM * UN_SC_MM * UN_SC_MM,
         /*bias*/ 0.0,
         /*flag*/ B_UNIT_DEF_NONE | B_UNIT_DEF_TENTH,
     },
@@ -720,7 +720,7 @@ static bUnitDef buMetricVolDef[] = {
         /*name_alt*/ "um3",
         /*name_display*/ "Cubic Micrometers",
         /*identifier*/ nullptr,
-        /*scalar*/ UN_SC_UM *UN_SC_UM *UN_SC_UM,
+        /*scalar*/ UN_SC_UM * UN_SC_UM * UN_SC_UM,
         /*bias*/ 0.0,
         /*flag*/ B_UNIT_DEF_NONE,
     },
@@ -741,7 +741,7 @@ static bUnitDef buImperialVolDef[] = {
         /*name_alt*/ nullptr,
         /*name_display*/ "Cubic Miles",
         /*identifier*/ nullptr,
-        /*scalar*/ UN_SC_MI *UN_SC_MI *UN_SC_MI,
+        /*scalar*/ UN_SC_MI * UN_SC_MI * UN_SC_MI,
         /*bias*/ 0.0,
         /*flag*/ B_UNIT_DEF_NONE,
     },
@@ -752,7 +752,7 @@ static bUnitDef buImperialVolDef[] = {
         /*name_alt*/ nullptr,
         /*name_display*/ "Cubic Furlongs",
         /*identifier*/ nullptr,
-        /*scalar*/ UN_SC_FUR *UN_SC_FUR *UN_SC_FUR,
+        /*scalar*/ UN_SC_FUR * UN_SC_FUR * UN_SC_FUR,
         /*bias*/ 0.0,
         /*flag*/ B_UNIT_DEF_SUPPRESS,
     },
@@ -763,7 +763,7 @@ static bUnitDef buImperialVolDef[] = {
         /*name_alt*/ nullptr,
         /*name_display*/ "Cubic Chains",
         /*identifier*/ nullptr,
-        /*scalar*/ UN_SC_CH *UN_SC_CH *UN_SC_CH,
+        /*scalar*/ UN_SC_CH * UN_SC_CH * UN_SC_CH,
         /*bias*/ 0.0,
         /*flag*/ B_UNIT_DEF_SUPPRESS,
     },
@@ -774,7 +774,7 @@ static bUnitDef buImperialVolDef[] = {
         /*name_alt*/ nullptr,
         /*name_display*/ "Cubic Yards",
         /*identifier*/ nullptr,
-        /*scalar*/ UN_SC_YD *UN_SC_YD *UN_SC_YD,
+        /*scalar*/ UN_SC_YD * UN_SC_YD * UN_SC_YD,
         /*bias*/ 0.0,
         /*flag*/ B_UNIT_DEF_NONE,
     },
@@ -786,7 +786,7 @@ static bUnitDef buImperialVolDef[] = {
         /*name_alt*/ nullptr,
         /*name_display*/ "Cubic Feet",
         /*identifier*/ nullptr,
-        /*scalar*/ UN_SC_FT *UN_SC_FT *UN_SC_FT,
+        /*scalar*/ UN_SC_FT * UN_SC_FT * UN_SC_FT,
         /*bias*/ 0.0,
         /*flag*/ B_UNIT_DEF_NONE,
     },
@@ -797,7 +797,7 @@ static bUnitDef buImperialVolDef[] = {
         /*name_alt*/ nullptr,
         /*name_display*/ "Cubic Inches",
         /*identifier*/ nullptr,
-        /*scalar*/ UN_SC_IN *UN_SC_IN *UN_SC_IN,
+        /*scalar*/ UN_SC_IN * UN_SC_IN * UN_SC_IN,
         /*bias*/ 0.0,
         /*flag*/ B_UNIT_DEF_NONE,
     },
@@ -808,7 +808,7 @@ static bUnitDef buImperialVolDef[] = {
         /*name_alt*/ nullptr,
         /*name_display*/ "Cubic Thou",
         /*identifier*/ nullptr,
-        /*scalar*/ UN_SC_MIL *UN_SC_MIL *UN_SC_MIL,
+        /*scalar*/ UN_SC_MIL * UN_SC_MIL * UN_SC_MIL,
         /*bias*/ 0.0,
         /*flag*/ B_UNIT_DEF_NONE,
     },
@@ -1606,7 +1606,7 @@ static const bUnitDef *unit_best_fit(double value,
     }
 
     /* Scale down scalar so 1cm doesn't convert to 10mm because of float error. */
-    if (UNLIKELY(unit->flag & B_UNIT_DEF_TENTH)) {
+    if (unit->flag & B_UNIT_DEF_TENTH) [[unlikely]] {
       if (value_abs >= unit->scalar * (0.1 - EPS)) {
         return unit;
       }
@@ -1648,7 +1648,8 @@ static size_t unit_as_string(char *str,
                              const bUnitCollection *usys,
                              /* Non exposed options. */
                              const bUnitDef *unit,
-                             char pad)
+                             char pad,
+                             bool do_unit_suffix)
 {
   BLI_assert(prec >= 0);
   if (unit == nullptr) {
@@ -1696,16 +1697,18 @@ static size_t unit_as_string(char *str,
   }
 
   /* Now add a space for all units except foot, inch, degree, arcminute, arcsecond. */
-  if (!(unit->flag & B_UNIT_DEF_NO_SPACE)) {
+  if (!(unit->flag & B_UNIT_DEF_NO_SPACE) && do_unit_suffix) {
     str[++i] = ' ';
   }
 
-  /* Now add the suffix. */
   if (i < str_maxncpy) {
-    int j = 0;
     i++;
-    while (unit->name_short[j] && (i < str_maxncpy)) {
-      str[i++] = unit->name_short[j++];
+    if (do_unit_suffix) {
+      /* Now add the suffix. */
+      int j = 0;
+      while (unit->name_short[j] && (i < str_maxncpy)) {
+        str[i++] = unit->name_short[j++];
+      }
     }
   }
 
@@ -1761,7 +1764,7 @@ static size_t unit_as_string_split_pair(char *str,
   /* Check the 2 is a smaller unit. */
   if (unit_b > unit_a) {
     /* Always strip zeros for the larger unit, since it is truncated and won't ever "jitter". */
-    size_t i = unit_as_string(str, str_maxncpy, value_a, prec, true, usys, unit_a, '\0');
+    size_t i = unit_as_string(str, str_maxncpy, value_a, prec, true, usys, unit_a, '\0', true);
 
     /* Fixed width mode skips this to preserve the exact decimal place count. */
     if (variable_width) {
@@ -1776,7 +1779,7 @@ static size_t unit_as_string_split_pair(char *str,
 
       /* Use low precision since this is a smaller unit. */
       i += unit_as_string(
-          str + i, str_maxncpy - i, value_b, prec, variable_width, usys, unit_b, '\0');
+          str + i, str_maxncpy - i, value_b, prec, variable_width, usys, unit_b, '\0', true);
     }
     return i;
   }
@@ -1789,11 +1792,33 @@ static bool is_valid_unit_collection(const bUnitCollection *usys)
   return usys != nullptr && usys->units[0].name != nullptr;
 }
 
-static const bUnitDef *get_preferred_display_unit_if_used(int type, const PreferredUnits &units)
+static bool is_unit_adaptive(const int type, const PreferredUnits &units)
+{
+  switch (type) {
+    case B_UNIT_LENGTH:
+    case B_UNIT_AREA:
+    case B_UNIT_VOLUME:
+      return units.length == USER_UNIT_ADAPTIVE;
+    case B_UNIT_MASS:
+      return units.mass == USER_UNIT_ADAPTIVE;
+    case B_UNIT_TIME:
+      return units.time == USER_UNIT_ADAPTIVE;
+    case B_UNIT_TEMPERATURE:
+      return units.temperature == USER_UNIT_ADAPTIVE;
+    default:
+      break;
+  }
+  return false;
+}
+
+static int get_preferred_display_unit_index_if_used(int type, const PreferredUnits &units)
 {
   const bUnitCollection *usys = unit_get_system(units.system, type);
   if (!is_valid_unit_collection(usys)) {
-    return nullptr;
+    return -1;
+  }
+  if (is_unit_adaptive(type, units)) {
+    return -1;
   }
 
   int max_offset = usys->length - 1;
@@ -1802,37 +1827,35 @@ static const bUnitDef *get_preferred_display_unit_if_used(int type, const Prefer
     case B_UNIT_LENGTH:
     case B_UNIT_AREA:
     case B_UNIT_VOLUME:
-      if (units.length == USER_UNIT_ADAPTIVE) {
-        return nullptr;
-      }
-      return usys->units + std::min(units.length, max_offset);
+      return std::min(units.length, max_offset);
     case B_UNIT_MASS:
-      if (units.mass == USER_UNIT_ADAPTIVE) {
-        return nullptr;
-      }
-      return usys->units + std::min(units.mass, max_offset);
+      return std::min(units.mass, max_offset);
     case B_UNIT_TIME:
-      if (units.time == USER_UNIT_ADAPTIVE) {
-        return nullptr;
-      }
-      return usys->units + std::min(units.time, max_offset);
+      return std::min(units.time, max_offset);
     case B_UNIT_ROTATION:
       if (units.rotation == 0) {
-        return usys->units + 0;
+        return 0;
       }
       else if (units.rotation == USER_UNIT_ROT_RADIANS) {
-        return usys->units + 3;
+        return 3;
       }
       break;
     case B_UNIT_TEMPERATURE:
-      if (units.temperature == USER_UNIT_ADAPTIVE) {
-        return nullptr;
-      }
-      return usys->units + std::min(units.temperature, max_offset);
+      return std::min(units.temperature, max_offset);
     default:
       break;
   }
-  return nullptr;
+  return -1;
+}
+
+static const bUnitDef *get_preferred_display_unit_if_used(int type, const PreferredUnits &units)
+{
+  const bUnitCollection *usys = unit_get_system(units.system, type);
+  const int index = get_preferred_display_unit_index_if_used(type, units);
+  if (index == -1) {
+    return nullptr;
+  }
+  return &usys->units[index];
 }
 
 /* Return the length of the generated string. */
@@ -1843,6 +1866,7 @@ static size_t unit_as_string_main(char *str,
                                   int type,
                                   bool split,
                                   bool pad,
+                                  bool do_unit_suffix,
                                   const PreferredUnits &units)
 {
   const bUnitCollection *usys = unit_get_system(units.system, type);
@@ -1870,12 +1894,26 @@ static size_t unit_as_string_main(char *str,
     }
   }
 
-  return unit_as_string(
-      str, str_maxncpy, value, prec, variable_width, usys, main_unit, pad ? ' ' : '\0');
+  return unit_as_string(str,
+                        str_maxncpy,
+                        value,
+                        prec,
+                        variable_width,
+                        usys,
+                        main_unit,
+                        pad ? ' ' : '\0',
+                        do_unit_suffix);
 }
 
-size_t BKE_unit_value_as_string_adaptive(
-    char *str, int str_maxncpy, double value, int prec, int system, int type, bool split, bool pad)
+size_t BKE_unit_value_as_string_adaptive(char *str,
+                                         int str_maxncpy,
+                                         double value,
+                                         int prec,
+                                         int system,
+                                         int type,
+                                         bool split,
+                                         bool pad,
+                                         bool do_unit_suffix)
 {
   PreferredUnits units;
   units.system = system;
@@ -1884,7 +1922,8 @@ size_t BKE_unit_value_as_string_adaptive(
   units.mass = USER_UNIT_ADAPTIVE;
   units.time = USER_UNIT_ADAPTIVE;
   units.temperature = USER_UNIT_ADAPTIVE;
-  return unit_as_string_main(str, str_maxncpy, value, prec, type, split, pad, units);
+  return unit_as_string_main(
+      str, str_maxncpy, value, prec, type, split, pad, do_unit_suffix, units);
 }
 
 size_t BKE_unit_value_as_string(char *str,
@@ -1893,11 +1932,13 @@ size_t BKE_unit_value_as_string(char *str,
                                 int prec,
                                 int type,
                                 const UnitSettings &settings,
-                                bool pad)
+                                bool pad,
+                                bool do_unit_suffix)
 {
   bool do_split = (settings.flag & USER_UNIT_OPT_SPLIT) != 0;
   PreferredUnits units = preferred_units_from_UnitSettings(settings);
-  return unit_as_string_main(str, str_maxncpy, value, prec, type, do_split, pad, units);
+  return unit_as_string_main(
+      str, str_maxncpy, value, prec, type, do_split, pad, do_unit_suffix, units);
 }
 
 size_t BKE_unit_value_as_string_scaled(char *str,
@@ -1906,10 +1947,17 @@ size_t BKE_unit_value_as_string_scaled(char *str,
                                        int prec,
                                        int type,
                                        const UnitSettings &settings,
-                                       bool pad)
+                                       bool pad,
+                                       bool do_unit_suffix)
 {
-  return BKE_unit_value_as_string(
-      str, str_maxncpy, BKE_unit_value_scale(settings, type, value), prec, type, settings, pad);
+  return BKE_unit_value_as_string(str,
+                                  str_maxncpy,
+                                  BKE_unit_value_scale(settings, type, value),
+                                  prec,
+                                  type,
+                                  settings,
+                                  pad,
+                                  do_unit_suffix);
 }
 
 double BKE_unit_value_scale(const UnitSettings &settings, const int unit_type, double value)
@@ -2131,11 +2179,11 @@ static bool unit_distribute_negatives(char *str, const int str_maxncpy)
 
     changed = true;
 
-    /* Add '(', shift the following characters to the right to make space. */
+    /* Add `(`, shift the following characters to the right to make space. */
     memmove(remaining_str + 1, remaining_str, remaining_str_maxncpy - 2);
     *remaining_str = '(';
 
-    /* Add the ')' before the next operation or at the end.
+    /* Add the `)` before the next operation or at the end.
      * Unary operators are skipped to allow `--` to be a supported prefix. */
     remaining_str = find_next_op(str, skip_unary_op(remaining_str + 1), remaining_str_maxncpy);
     remaining_str_maxncpy = str_maxncpy - int(remaining_str - str);
@@ -2548,6 +2596,16 @@ int BKE_unit_base_of_type_get(int system, int type)
   return unit_get_system(system, type)->base_unit;
 }
 
+int BKE_preffered_unit_of_type_or_base_get(const UnitSettings &settings, int type)
+{
+  PreferredUnits units = preferred_units_from_UnitSettings(settings);
+  const int unit_index = get_preferred_display_unit_index_if_used(type, units);
+  if (unit_index == -1) {
+    return BKE_unit_base_of_type_get(units.system, type);
+  }
+  return unit_index;
+}
+
 const char *BKE_unit_name_get(const void *usys_pt, int index)
 {
   const bUnitCollection *usys = static_cast<const bUnitCollection *>(usys_pt);
@@ -2559,6 +2617,12 @@ const char *BKE_unit_display_name_get(const void *usys_pt, int index)
   const bUnitCollection *usys = static_cast<const bUnitCollection *>(usys_pt);
   BLI_assert(uint(index) < uint(usys->length));
   return usys->units[index].name_display;
+}
+const char *BKE_unit_display_name_short_get(const void *usys_pt, int index)
+{
+  const bUnitCollection *usys = static_cast<const bUnitCollection *>(usys_pt);
+  BLI_assert(uint(index) < uint(usys->length));
+  return usys->units[index].name_short;
 }
 const char *BKE_unit_identifier_get(const void *usys_pt, int index)
 {
@@ -2583,6 +2647,29 @@ bool BKE_unit_is_suppressed(const void *usys_pt, int index)
   const bUnitCollection *usys = static_cast<const bUnitCollection *>(usys_pt);
   BLI_assert(uint(index) < uint(usys->length));
   return (usys->units[index].flag & B_UNIT_DEF_SUPPRESS) != 0;
+}
+
+bool BKE_unit_is_adaptive(const UnitSettings &settings, int type)
+{
+  PreferredUnits units = preferred_units_from_UnitSettings(settings);
+  return is_unit_adaptive(type, units);
+}
+
+UnitConversion BKE_unit_preferred_conversion_get(const UnitSettings &settings, int unit_type)
+{
+  const PreferredUnits units = preferred_units_from_UnitSettings(settings);
+  const bUnitCollection *usys = unit_get_system(units.system, unit_type);
+
+  if (!is_valid_unit_collection(usys)) {
+    return {};
+  }
+
+  const bUnitDef *unit = get_preferred_display_unit_if_used(unit_type, units);
+  if (unit == nullptr) {
+    /* The preferred unit is adaptive, which picks a unit per value at display time. */
+    unit = unit_default(usys);
+  }
+  return {unit->scalar, unit->bias};
 }
 
 }  // namespace blender

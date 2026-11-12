@@ -7,10 +7,10 @@
  */
 
 #include "BLI_bounds_types.hh"
-#include "BLI_listbase.h"
-#include "BLI_math_base.h"
+#include "BLI_listbase.hh"
+#include "BLI_math_base_c.hh"
 #include "BLI_math_vector.hh"
-#include "BLI_utildefines.h"
+#include "BLI_utildefines.hh"
 
 #include "DNA_scene_types.h"
 #include "DNA_space_enums.h"
@@ -240,7 +240,7 @@ static bool view_frame_preview_scope(bContext *C,
       /* Optionally limit X range to max nits of the view transform. */
       const Scene *scene = CTX_data_sequencer_scene(C);
       const ocio::ScopeInfo scope_info = IMB_colormanagement_get_scope_info(
-          &scene->display_settings, scene->view_settings.view_transform);
+          &scene->display_settings, &scene->view_settings);
       if (scope_info.view_transform_max_nits > 0) {
         max_nits_scale = scope_info.view_transform_max_nits_value;
       }

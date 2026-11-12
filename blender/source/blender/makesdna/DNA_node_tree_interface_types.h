@@ -13,7 +13,7 @@
 #include "BLI_function_ref.hh"
 #include "BLI_span.hh"
 #include "BLI_string_ref.hh"
-#include "BLI_sys_types.h"
+#include "BLI_sys_types.hh"
 
 namespace blender {
 
@@ -33,15 +33,14 @@ struct BlendWriter;
 struct BlendDataReader;
 
 /** Type of interface item. */
-enum eNodeTreeInterfaceItemType {
-  NODE_INTERFACE_PANEL = 0,
-  NODE_INTERFACE_SOCKET = 1,
+enum class NodeTreeInterfaceItemType : char {
+  Panel = 0,
+  Socket = 1,
 };
 
 /** Describes a socket and all necessary details for a node declaration. */
 struct bNodeTreeInterfaceItem {
-  /* eNodeTreeInterfaceItemType */
-  char item_type = 0;
+  NodeTreeInterfaceItemType item_type = NodeTreeInterfaceItemType::Panel;
   char _pad[7] = {};
 
 #ifdef __cplusplus
@@ -50,7 +49,7 @@ struct bNodeTreeInterfaceItem {
 };
 
 /* Socket interface flags */
-enum NodeTreeInterfaceSocketFlag {
+enum NodeTreeInterfaceSocketFlag : int {
   NODE_INTERFACE_SOCKET_INPUT = 1 << 0,
   NODE_INTERFACE_SOCKET_OUTPUT = 1 << 1,
   NODE_INTERFACE_SOCKET_HIDE_VALUE = 1 << 2,
@@ -75,30 +74,30 @@ enum NodeTreeInterfaceSocketFlag {
 };
 ENUM_OPERATORS(NodeTreeInterfaceSocketFlag);
 
-enum NodeSocketInterfaceStructureType {
-  NODE_INTERFACE_SOCKET_STRUCTURE_TYPE_AUTO = 0,
-  NODE_INTERFACE_SOCKET_STRUCTURE_TYPE_SINGLE = 1,
-  NODE_INTERFACE_SOCKET_STRUCTURE_TYPE_DYNAMIC = 2,
-  NODE_INTERFACE_SOCKET_STRUCTURE_TYPE_FIELD = 3,
-  NODE_INTERFACE_SOCKET_STRUCTURE_TYPE_GRID = 4,
-  NODE_INTERFACE_SOCKET_STRUCTURE_TYPE_LIST = 5,
+enum class NodeSocketInterfaceStructureType : int8_t {
+  Auto = 0,
+  Single = 1,
+  Dynamic = 2,
+  Field = 3,
+  Grid = 4,
+  List = 5,
 };
 
 // TODO: Move out of DNA.
 #ifdef __cplusplus
 namespace nodes {
 enum class StructureType : int8_t {
-  Single = NODE_INTERFACE_SOCKET_STRUCTURE_TYPE_SINGLE,
-  Dynamic = NODE_INTERFACE_SOCKET_STRUCTURE_TYPE_DYNAMIC,
-  Field = NODE_INTERFACE_SOCKET_STRUCTURE_TYPE_FIELD,
-  Grid = NODE_INTERFACE_SOCKET_STRUCTURE_TYPE_GRID,
-  List = NODE_INTERFACE_SOCKET_STRUCTURE_TYPE_LIST,
+  Single = int8_t(NodeSocketInterfaceStructureType::Single),
+  Dynamic = int8_t(NodeSocketInterfaceStructureType::Dynamic),
+  Field = int8_t(NodeSocketInterfaceStructureType::Field),
+  Grid = int8_t(NodeSocketInterfaceStructureType::Grid),
+  List = int8_t(NodeSocketInterfaceStructureType::List),
 };
 }
 #endif
 
 /* Panel interface flags */
-enum NodeTreeInterfacePanelFlag {
+enum NodeTreeInterfacePanelFlag : int {
   /* Panel starts closed on new node instances. */
   NODE_INTERFACE_PANEL_DEFAULT_CLOSED = 1 << 0,
   /* In the past, not all panels allowed child panels. Now all allow them. */
@@ -112,7 +111,7 @@ enum NodeTreeInterfacePanelFlag {
 };
 ENUM_OPERATORS(NodeTreeInterfacePanelFlag);
 
-enum NodeDefaultInputType {
+enum NodeDefaultInputType : short {
   NODE_DEFAULT_INPUT_VALUE = 0,
   NODE_DEFAULT_INPUT_INDEX_FIELD = 1,
   NODE_DEFAULT_INPUT_ID_INDEX_FIELD = 2,
@@ -121,23 +120,24 @@ enum NodeDefaultInputType {
   NODE_DEFAULT_INPUT_INSTANCE_TRANSFORM_FIELD = 5,
   NODE_DEFAULT_INPUT_HANDLE_LEFT_FIELD = 6,
   NODE_DEFAULT_INPUT_HANDLE_RIGHT_FIELD = 7,
+  NODE_DEFAULT_INPUT_SCENE_FRAME = 8,
+  NODE_DEFAULT_INPUT_UNIFORM_IMAGE_COORDINATES = 9,
+  NODE_DEFAULT_INPUT_SELF_OBJECT = 10,
 };
 
 struct bNodeTreeInterfaceSocket {
   bNodeTreeInterfaceItem item;
 
   /* UI name of the socket. */
-  char *name = nullptr;
-  char *description = nullptr;
+  char *name_ = nullptr;
+  char *description_ = nullptr;
   /* Type idname of the socket to generate, e.g. "NodeSocketFloat". */
   char *socket_type = nullptr;
-  /* NodeTreeInterfaceSocketFlag */
-  int flag = 0;
+  NodeTreeInterfaceSocketFlag flag = {};
 
   /* AttrDomain */
   int16_t attribute_domain = 0;
-  /** NodeDefaultInputType. */
-  int16_t default_input = 0;
+  NodeDefaultInputType default_input = NODE_DEFAULT_INPUT_VALUE;
   char *default_attribute_name = nullptr;
 
   /* Unique identifier for generated sockets. */
@@ -147,11 +147,17 @@ struct bNodeTreeInterfaceSocket {
 
   struct IDProperty *properties = nullptr;
 
-  /** #NodeSocketInterfaceStructureType. */
-  int8_t structure_type = 0;
-  char _pad[7] = {};
+  NodeSocketInterfaceStructureType structure_type = NodeSocketInterfaceStructureType::Auto;
+
+  /* Needed to ensure forward compatibility of PROP_PIXEL socket subtype. */
+  char is_pixel_socket_forward_compat = false;
+
+  char _pad[6] = {};
 
 #ifdef __cplusplus
+  StringRefNull name() const;
+  StringRefNull description() const;
+
   bke::bNodeSocketType *socket_typeinfo() const;
   ColorGeometry4f socket_color() const;
 
@@ -182,10 +188,9 @@ struct bNodeTreeInterfacePanel {
   bNodeTreeInterfaceItem item;
 
   /* UI name of the panel. */
-  char *name = nullptr;
-  char *description = nullptr;
-  /* NodeTreeInterfacePanelFlag */
-  int flag = 0;
+  char *name_ = nullptr;
+  char *description_ = nullptr;
+  NodeTreeInterfacePanelFlag flag = {};
   char _pad[4] = {};
 
   bNodeTreeInterfaceItem **items_array = nullptr;
@@ -195,6 +200,9 @@ struct bNodeTreeInterfacePanel {
   int identifier = 0;
 
 #ifdef __cplusplus
+  StringRefNull name() const;
+  StringRefNull description() const;
+
   IndexRange items_range() const;
   Span<const bNodeTreeInterfaceItem *> items() const;
   MutableSpan<bNodeTreeInterfaceItem *> items();

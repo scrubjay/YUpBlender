@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup nodes
+ */
+
 #pragma once
 
 #include <optional>
@@ -47,7 +51,7 @@ struct EnumRNAAccessors {
       }, \
       [](PointerRNA *ptr, PropertyRNA * /*prop*/, const int value) { \
         bNode &node = *static_cast<bNode *>(ptr->data); \
-        node.member = value; \
+        node.member = static_cast<std::remove_reference_t<decltype(node.member)>>(value); \
       })
 
 /**
@@ -58,11 +62,12 @@ struct EnumRNAAccessors {
   EnumRNAAccessors( \
       [](PointerRNA *ptr, PropertyRNA * /*prop*/) -> int { \
         const bNode &node = *static_cast<const bNode *>(ptr->data); \
-        return node_storage(node).member; \
+        return int(node_storage(node).member); \
       }, \
       [](PointerRNA *ptr, PropertyRNA * /*prop*/, const int value) { \
         bNode &node = *static_cast<bNode *>(ptr->data); \
-        node_storage(node).member = value; \
+        node_storage(node).member = \
+            static_cast<std::remove_reference_t<decltype(node_storage(node).member)>>(value); \
       })
 
 struct BooleanRNAAccessors {

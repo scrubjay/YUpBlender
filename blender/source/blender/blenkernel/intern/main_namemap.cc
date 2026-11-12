@@ -12,14 +12,14 @@
 #include "BKE_main.hh"
 #include "BKE_main_namemap.hh"
 
-#include "BLI_assert.h"
+#include "BLI_assert.hh"
 #include "BLI_bit_span_ops.hh"
 #include "BLI_bit_vector.hh"
-#include "BLI_listbase.h"
+#include "BLI_listbase.hh"
 #include "BLI_map.hh"
 #include "BLI_math_base.hh"
-#include "BLI_string.h"
-#include "BLI_string_utf8.h"
+#include "BLI_string.hh"
+#include "BLI_string_utf8.hh"
 #include "BLI_string_utils.hh"
 
 #include "DNA_ID.h"
@@ -282,6 +282,10 @@ struct UniqueName_Map {
   {
     BLI_assert(name_full.size() < MAX_ID_NAME - 2);
 
+    int number = 0;
+    const std::string name_base = BLI_string_split_name_number(name_full, '.', number);
+    std::unique_ptr<UniqueName_Value> *val = nullptr;
+
     if (this->is_global) {
       /* By definition adding to global map is always successful. */
       int *count = type_map.full_names.lookup_ptr(name_full);
@@ -292,30 +296,38 @@ struct UniqueName_Map {
       }
       if (*count > 1) {
         (*count)--;
+        /* If there are still one or more usages of this number, do not mark it as unused in the
+         * global map, so do not lookup for the #UniqueName_Value of its basename. */
       }
       else {
         BLI_assert(*count == 1);
         type_map.full_names.remove_contained(name_full);
+        val = type_map.base_name_to_num_suffix.lookup_ptr(name_base);
+        if (!val) {
+          BLI_assert_unreachable();
+          return;
+        }
       }
     }
-    else if (!type_map.full_names.remove(name_full)) {
-      BLI_assert_msg(
-          false, "Removing a name from Main namemaps that was not in it, should never happen.");
-      return;
+    else {
+      if (!type_map.full_names.remove(name_full)) {
+        BLI_assert_msg(
+            false, "Removing a name from Main namemaps that was not in it, should never happen.");
+        return;
+      }
+      val = type_map.base_name_to_num_suffix.lookup_ptr(name_base);
+      if (!val) {
+        BLI_assert_unreachable();
+        return;
+      }
     }
 
-    int number = 0;
-    const std::string name_base = BLI_string_split_name_number(name_full, '.', number);
-    std::unique_ptr<UniqueName_Value> *val = type_map.base_name_to_num_suffix.lookup_ptr(
-        name_base);
-    if (val == nullptr) {
-      BLI_assert_unreachable();
-      return;
-    }
-    val->get()->mark_unused(number);
-    if (!val->get()->max_value_in_use) {
-      /* This was the only base name usage, remove the whole key. */
-      type_map.base_name_to_num_suffix.remove(name_base);
+    if (val) {
+      val->get()->mark_unused(number);
+      if (!val->get()->max_value_in_use) {
+        /* This was the only base name usage, remove the whole key. */
+        type_map.base_name_to_num_suffix.remove(name_base);
+      }
     }
   }
   void remove_full_name(const short id_type, StringRef name_full)
@@ -348,8 +360,7 @@ void BKE_main_namemap_clear(Main &bmain)
   auto bmain_namemap_clear = [](Main *bmain_iter) -> void {
     BKE_main_namemap_destroy(&bmain_iter->name_map);
     BKE_main_namemap_destroy(&bmain_iter->name_map_global);
-    for (Library *lib_iter = static_cast<Library *>(bmain_iter->libraries.first);
-         lib_iter != nullptr;
+    for (Library *lib_iter = bmain_iter->libraries.first(); lib_iter != nullptr;
          lib_iter = static_cast<Library *>(lib_iter->id.next))
     {
       BKE_main_namemap_destroy(&lib_iter->runtime->name_map);
@@ -747,7 +758,7 @@ static bool main_namemap_validate_and_fix(Main &bmain, const bool do_fix)
       }
     }
 
-    lib = static_cast<Library *>((lib == nullptr) ? bmain.libraries.first : lib->id.next);
+    lib = static_cast<Library *>((lib == nullptr) ? bmain.libraries.first() : lib->id.next);
     name_map = (lib != nullptr) ? lib->runtime->name_map : nullptr;
   } while (lib != nullptr);
 

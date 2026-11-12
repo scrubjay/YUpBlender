@@ -8,21 +8,24 @@
 
 #include <algorithm>
 
+#include "DNA_action_types.h"
 #include "DNA_armature_types.h"
 #include "DNA_constraint_types.h"
 
 #include "MEM_guardedalloc.h"
 
-#include "BLI_listbase.h"
-#include "BLI_math_matrix.h"
-#include "BLI_math_rotation.h"
-#include "BLI_math_vector.h"
+#include "BLI_listbase.hh"
+#include "BLI_math_matrix_c.hh"
+#include "BLI_math_rotation_c.hh"
+#include "BLI_math_vector_c.hh"
 #include "BLI_set.hh"
+#include "BLI_vector.hh"
 
 #include "BKE_action.hh"
 #include "BKE_armature.hh"
 #include "BKE_constraint.h"
 #include "BKE_context.hh"
+#include "BKE_pose.hh"
 #include "BKE_report.hh"
 
 #include "BIK_api.h"
@@ -108,7 +111,7 @@ static void update_deg_with_temporary_ik(Main *bmain, Object *ob)
 
 static bKinematicConstraint *has_targetless_ik(bPoseChannel *pchan)
 {
-  bConstraint *con = static_cast<bConstraint *>(pchan->constraints.first);
+  bConstraint *con = pchan->constraints.first();
 
   for (; con; con = con->next) {
     if (con->type == CONSTRAINT_TYPE_KINEMATIC && (con->flag & CONSTRAINT_OFF) == 0 &&
@@ -130,8 +133,9 @@ static bKinematicConstraint *has_targetless_ik(bPoseChannel *pchan)
 /**
  * Adds the IK to pchan - returns if added.
  */
-static short pose_grab_with_ik_add(bPoseChannel *pchan)
+static short pose_grab_with_ik_add(Object &ob, bke::PChanBone pchanbone)
 {
+  bPoseChannel *pchan = pchanbone.pchan;
   bKinematicConstraint *targetless = nullptr;
   bKinematicConstraint *data;
 
@@ -210,8 +214,10 @@ static short pose_grab_with_ik_add(bPoseChannel *pchan)
     /* Now we count this pchan as being included. */
     data->rootbone++;
 
+    /* We modify the pchan pointer below so we also have to get the corresponding bone pointer. */
+    Bone *bone = pchan->bone_get(ob);
     /* Continue to parent, but only if we're connected to it. */
-    if (pchan->bone->flag & BONE_CONNECTED) {
+    if (bone->flag & BONE_CONNECTED) {
       pchan = pchan->parent;
     }
     else {
@@ -228,7 +234,7 @@ static short pose_grab_with_ik_add(bPoseChannel *pchan)
 /**
  * Bone is a candidate to get IK, but we don't do it if it has children connected.
  */
-static short pose_grab_with_ik_children(bPose *pose, Bone *bone)
+static short pose_grab_with_ik_children(Object &ob, Bone *bone)
 {
   short wentdeeper = 0, added = 0;
 
@@ -236,13 +242,13 @@ static short pose_grab_with_ik_children(bPose *pose, Bone *bone)
   for (Bone &bonec : bone->childbase) {
     if (bonec.flag & BONE_CONNECTED) {
       wentdeeper = 1;
-      added += pose_grab_with_ik_children(pose, &bonec);
+      added += pose_grab_with_ik_children(ob, &bonec);
     }
   }
   if (wentdeeper == 0) {
-    bPoseChannel *pchan = BKE_pose_channel_find_name(pose, bone->name);
+    bPoseChannel *pchan = BKE_pose_channel_find_name(ob.pose, bone->name);
     if (pchan) {
-      added += pose_grab_with_ik_add(pchan);
+      added += pose_grab_with_ik_add(ob, {pchan, bone});
     }
   }
 
@@ -265,35 +271,38 @@ static short pose_grab_with_ik(Main *bmain, Object *ob)
   /* Rule: allow multiple Bones
    * (but they must be selected, and only one ik-solver per chain should get added). */
   for (bPoseChannel &pchan : ob->pose->chanbase) {
+    Bone *pchan_bone = pchan.bone_get(*ob);
+
     if (BKE_pose_is_bonecoll_visible(arm, &pchan)) {
-      if ((pchan.flag & POSE_SELECTED) || (pchan.bone->flag & BONE_TRANSFORM_MIRROR)) {
+      if ((pchan.flag & POSE_SELECTED) || (pchan_bone->flag & BONE_TRANSFORM_MIRROR)) {
         /* Rule: no IK for solitary (unconnected) bones. */
-        for (bonec = static_cast<Bone *>(pchan.bone->childbase.first); bonec; bonec = bonec->next)
-        {
+        for (bonec = pchan_bone->childbase.first(); bonec; bonec = bonec->next) {
           if (bonec->flag & BONE_CONNECTED) {
             break;
           }
         }
-        if ((pchan.bone->flag & BONE_CONNECTED) == 0 && (bonec == nullptr)) {
+        if ((pchan_bone->flag & BONE_CONNECTED) == 0 && (bonec == nullptr)) {
           continue;
         }
 
         /* Rule: if selected Bone is not the root of a connected chain, it gets temporary IK. */
-        if (pchan.parent && (pchan.bone->flag & BONE_CONNECTED)) {
+        if (pchan.parent && (pchan_bone->flag & BONE_CONNECTED)) {
           /* Only adds if there's no IK yet (and no parent bone was selected). */
           bPoseChannel *parent;
           for (parent = pchan.parent; parent; parent = parent->parent) {
-            if ((parent->flag & POSE_SELECTED) || (parent->bone->flag & BONE_TRANSFORM_MIRROR)) {
+            if ((parent->flag & POSE_SELECTED) ||
+                (parent->bone_get(*ob)->flag & BONE_TRANSFORM_MIRROR))
+            {
               break;
             }
           }
           if (parent == nullptr) {
-            tot_ik += pose_grab_with_ik_add(&pchan);
+            tot_ik += pose_grab_with_ik_add(*ob, {&pchan, pchan_bone});
           }
         }
         else {
           /* Rule: go over the children and add IK to the tips. */
-          tot_ik += pose_grab_with_ik_children(ob->pose, pchan.bone);
+          tot_ik += pose_grab_with_ik_children(*ob, pchan_bone);
         }
       }
     }
@@ -338,10 +347,11 @@ struct PoseInitData_Mirror {
 };
 
 static void pose_mirror_info_init(PoseInitData_Mirror *pid,
-                                  bPoseChannel *pchan,
-                                  bPoseChannel *pchan_orig,
+                                  bke::PChanBone pchanbone,
+                                  bke::PChanBoneConst pchanbone_orig,
                                   bool is_mirror_relative)
 {
+  bPoseChannel *pchan = pchanbone.pchan;
   pid->pchan = pchan;
   copy_v3_v3(pid->orig.loc, pchan->loc);
   copy_v3_v3(pid->orig.scale, pchan->scale);
@@ -369,8 +379,8 @@ static void pose_mirror_info_init(PoseInitData_Mirror *pid,
     unit_m4(flip_mtx);
     flip_mtx[0][0] = -1;
 
-    BKE_pchan_to_mat4(pchan_orig, pchan_mtx_mirror);
-    BKE_pchan_to_mat4(pchan, pchan_mtx);
+    BKE_pchan_to_mat4(pchanbone_orig, pchan_mtx_mirror);
+    BKE_pchan_to_mat4(pchanbone, pchan_mtx);
 
     mul_m4_m4m4(pchan_mtx_mirror, pchan_mtx_mirror, flip_mtx);
     mul_m4_m4m4(pchan_mtx_mirror, flip_mtx, pchan_mtx_mirror);
@@ -392,7 +402,7 @@ static void pose_mirror_info_init(PoseInitData_Mirror *pid,
 static void add_pose_transdata(
     TransInfo *t, bPoseChannel *pchan, Object *ob, TransData *td, TransDataExtension *td_ext)
 {
-  Bone *bone = pchan->bone;
+  Bone *bone = pchan->bone_get(*ob);
   float pmat[3][3], omat[3][3];
   float cmat[3][3], tmat[3][3];
 
@@ -415,7 +425,7 @@ static void add_pose_transdata(
     td->flag |= TD_NO_LOC;
   }
 
-  td->extra = pchan;
+  td->extra = MEM_new<bke::PChanBone>(__func__, pchan, bone);
   td->protectflag = pchan->protectflag;
 
   td->loc = pchan->loc;
@@ -460,7 +470,7 @@ static void add_pose_transdata(
 
     /* Not using the `pchan->custom_tx` here because we need the transformation to be
      * relative to the actual bone being modified, not it's visual representation. */
-    BKE_bone_parent_transform_calc_from_pchan(pchan, &bpt);
+    BKE_bone_parent_transform_calc_from_pchan({pchan, bone}, &bpt);
     if (t->mode == TFM_TRANSLATION) {
       copy_m3_m4(pmat, bpt.loc_mat);
     }
@@ -491,12 +501,13 @@ static void add_pose_transdata(
 
   /* Exceptional case: rotate the pose bone which also applies transformation
    * when a parentless bone has #BONE_NO_LOCAL_LOCATION []. */
-  if (!ELEM(t->mode, TFM_TRANSLATION, TFM_RESIZE) && (pchan->bone->flag & BONE_NO_LOCAL_LOCATION))
+  if (!ELEM(t->mode, TFM_TRANSLATION, TFM_RESIZE) &&
+      (pchan->bone_get(*ob)->flag & BONE_NO_LOCAL_LOCATION))
   {
     if (pchan->parent) {
-      /* Same as `td->smtx` but without `pchan->bone->bone_mat`. */
+      /* Same as `td->smtx` but without `pchan->bone_get(*ob)->bone_mat`. */
       td->flag |= TD_PBONE_LOCAL_MTX_C;
-      mul_m3_m3m3(td_ext->l_smtx, pchan->bone->bone_mat, td->smtx);
+      mul_m3_m3m3(td_ext->l_smtx, pchan->bone_get(*ob)->bone_mat, td->smtx);
     }
     else {
       td->flag |= TD_PBONE_LOCAL_MTX_P;
@@ -559,7 +570,29 @@ static void add_pose_transdata(
   }
 
   /* Store reference to first constraint. */
-  td->con = static_cast<bConstraint *>(pchan->constraints.first);
+  td->con = pchan->constraints.first();
+}
+
+static void free_pose_transdata(TransInfo *t, TransDataContainer *tc, TransCustomData *custom_data)
+{
+  /* Free any data in custom_data->data. */
+  if (custom_data->data != nullptr) {
+    MEM_delete_void(custom_data->data);
+    custom_data->data = nullptr;
+  }
+
+  /* Armature Pose mode allocates data in td.extra, which is freed here. */
+  if (t->data_type == &TransConvertType_Pose) {
+    for (int i = 0; i < tc->data_len; i++) {
+      TransData &td = tc->data[i];
+      if (!td.extra) {
+        continue;
+      }
+
+      bke::PChanBone *pchanbone = static_cast<bke::PChanBone *>(td.extra);
+      MEM_delete(pchanbone);
+    }
+  }
 }
 
 static void createTransPose(bContext * /*C*/, TransInfo *t)
@@ -592,7 +625,7 @@ static void createTransPose(bContext * /*C*/, TransInfo *t)
      * Also collect needed information (such as bone count)
      * and clear flags from previous runs that can interfere. */
     for (bPoseChannel &pchan : ob->pose->chanbase) {
-      Bone *bone = pchan.bone;
+      Bone *bone = pchan.bone_get(*ob);
 
       /* Clear the MIRROR flag from previous runs. */
       bone->flag &= ~BONE_TRANSFORM_MIRROR;
@@ -694,8 +727,11 @@ static void createTransPose(bContext * /*C*/, TransInfo *t)
         if (pchan.runtime.flag & POSE_RUNTIME_TRANSFORM) {
           bPoseChannel *pchan_mirror = BKE_pose_channel_get_mirrored(ob->pose, pchan.name);
           if (pchan_mirror) {
-            pchan_mirror->bone->flag |= BONE_TRANSFORM_MIRROR;
-            pose_mirror_info_init(&pid[pid_index], pchan_mirror, &pchan, is_mirror_relative);
+            Bone *bone = pchan.bone_get(*ob);
+            Bone *bone_mirror = pchan_mirror->bone_get(*ob);
+            bone_mirror->flag |= BONE_TRANSFORM_MIRROR;
+            pose_mirror_info_init(
+                &pid[pid_index], {pchan_mirror, bone_mirror}, {&pchan, bone}, is_mirror_relative);
             pid_index++;
           }
         }
@@ -721,6 +757,8 @@ static void createTransPose(bContext * /*C*/, TransInfo *t)
         add_pose_transdata(t, &pchan, ob, td++, tdx++);
       }
     }
+    tc->custom.type.free_cb = free_pose_transdata;
+    tc->custom.type.use_free = true;
 
     if (td != (tc->data + tc->data_len)) {
       BKE_report(t->reports, RPT_DEBUG, "Bone selection count error");
@@ -742,6 +780,14 @@ static void createTransPose(bContext * /*C*/, TransInfo *t)
       t->mode = TFM_RESIZE;
     }
   }
+}
+
+static void free_bone_init_data(TransInfo * /*t*/,
+                                TransDataContainer * /*tc*/,
+                                TransCustomData *custom_data)
+{
+  MEM_delete(static_cast<Vector<BoneInitData> *>(custom_data->data));
+  custom_data->data = nullptr;
 }
 
 static void createTransArmatureVerts(bContext * /*C*/, TransInfo *t)
@@ -791,13 +837,11 @@ static void createTransArmatureVerts(bContext * /*C*/, TransInfo *t)
     }
 
     if (mirror) {
-      BoneInitData *bid = MEM_new_array_uninitialized<BoneInitData>((total_mirrored + 1),
-                                                                    "BoneInitData");
-
-      /* Trick to terminate iteration. */
-      bid[total_mirrored].bone = nullptr;
+      Vector<BoneInitData> *bid = MEM_new<Vector<BoneInitData>>(__func__);
+      bid->reserve(total_mirrored);
 
       tc->custom.type.data = bid;
+      tc->custom.type.free_cb = free_bone_init_data;
       tc->custom.type.use_free = true;
     }
     t->data_len_all += tc->data_len;
@@ -816,13 +860,12 @@ static void createTransArmatureVerts(bContext * /*C*/, TransInfo *t)
     TransData *td, *td_old;
     float mtx[3][3], smtx[3][3], bonemat[3][3];
     bool mirror = ((arm->flag & ARM_MIRROR_EDIT) != 0);
-    BoneInitData *bid = static_cast<BoneInitData *>(tc->custom.type.data);
+    auto &bid = *static_cast<Vector<BoneInitData> *>(tc->custom.type.data);
 
     copy_m3_m4(mtx, tc->obedit->object_to_world().ptr());
     pseudoinverse_m3_m3(smtx, mtx, PSEUDOINVERSE_EPSILON);
 
     td = tc->data = MEM_new_array_zeroed<TransData>(tc->data_len, "TransEditBone");
-    int i = 0;
 
     for (EditBone &ebo : *edbo) {
       td_old = td;
@@ -963,24 +1006,19 @@ static void createTransArmatureVerts(bContext * /*C*/, TransInfo *t)
       if (mirror && (td_old != td)) {
         EditBone *eboflip = ED_armature_ebone_get_mirrored(arm->edbo, &ebo);
         if (eboflip) {
-          bid[i].bone = eboflip;
-          bid[i].dist = eboflip->dist;
-          bid[i].rad_head = eboflip->rad_head;
-          bid[i].rad_tail = eboflip->rad_tail;
-          bid[i].roll = eboflip->roll;
-          bid[i].xwidth = eboflip->xwidth;
-          bid[i].zwidth = eboflip->zwidth;
-          copy_v3_v3(bid[i].head, eboflip->head);
-          copy_v3_v3(bid[i].tail, eboflip->tail);
-          i++;
+          BoneInitData bone_data{};
+          bone_data.bone = eboflip;
+          bone_data.dist = eboflip->dist;
+          bone_data.rad_head = eboflip->rad_head;
+          bone_data.rad_tail = eboflip->rad_tail;
+          bone_data.roll = eboflip->roll;
+          bone_data.xwidth = eboflip->xwidth;
+          bone_data.zwidth = eboflip->zwidth;
+          copy_v3_v3(bone_data.head, eboflip->head);
+          copy_v3_v3(bone_data.tail, eboflip->tail);
+          bid.append(bone_data);
         }
       }
-    }
-
-    if (mirror) {
-      /* Trick to terminate iteration. */
-      BLI_assert(i + 1 == (MEM_allocN_len(bid) / sizeof(*bid)));
-      bid[i].bone = nullptr;
     }
   }
 }
@@ -994,8 +1032,7 @@ static void createTransArmatureVerts(bContext * /*C*/, TransInfo *t)
 static void restoreBones(TransDataContainer *tc)
 {
   bArmature *arm;
-  BoneInitData *bid = static_cast<BoneInitData *>(tc->custom.type.data);
-  EditBone *ebo;
+  auto &bid = *static_cast<Vector<BoneInitData> *>(tc->custom.type.data);
 
   if (tc->obedit) {
     arm = id_cast<bArmature *>(tc->obedit->data);
@@ -1005,17 +1042,17 @@ static void restoreBones(TransDataContainer *tc)
     arm = id_cast<bArmature *>(tc->poseobj->data);
   }
 
-  while (bid->bone) {
-    ebo = bid->bone;
+  for (const BoneInitData &init : bid) {
+    EditBone *ebo = init.bone;
 
-    ebo->dist = bid->dist;
-    ebo->rad_head = bid->rad_head;
-    ebo->rad_tail = bid->rad_tail;
-    ebo->roll = bid->roll;
-    ebo->xwidth = bid->xwidth;
-    ebo->zwidth = bid->zwidth;
-    copy_v3_v3(ebo->head, bid->head);
-    copy_v3_v3(ebo->tail, bid->tail);
+    ebo->dist = init.dist;
+    ebo->rad_head = init.rad_head;
+    ebo->rad_tail = init.rad_tail;
+    ebo->roll = init.roll;
+    ebo->xwidth = init.xwidth;
+    ebo->zwidth = init.zwidth;
+    copy_v3_v3(ebo->head, init.head);
+    copy_v3_v3(ebo->tail, init.tail);
 
     if (arm->flag & ARM_MIRROR_EDIT) {
       /* Also move connected ebo_child, in case ebo_child's name aren't mirrored properly. */
@@ -1033,8 +1070,6 @@ static void restoreBones(TransDataContainer *tc)
         parent->rad_tail = ebo->rad_head;
       }
     }
-
-    bid++;
   }
 }
 
@@ -1154,7 +1189,7 @@ static void pose_transform_mirror_update(TransInfo *t, TransDataContainer *tc, O
 
   for (bPoseChannel &pchan_orig : ob->pose->chanbase) {
     /* Clear the MIRROR flag from previous runs. */
-    pchan_orig.bone->flag &= ~BONE_TRANSFORM_MIRROR;
+    pchan_orig.bone_get(*ob)->flag &= ~BONE_TRANSFORM_MIRROR;
   }
 
   bPose *pose = ob->pose;
@@ -1165,9 +1200,15 @@ static void pose_transform_mirror_update(TransInfo *t, TransDataContainer *tc, O
 
   TransData *td = tc->data;
   for (int i = tc->data_len; i--; td++) {
-    bPoseChannel *pchan_orig = static_cast<bPoseChannel *>(td->extra);
+    /* I (Sybren) am not sure how the multi-object transforming works, so there is no assumption
+     * that the pchan in td->extra belongs to the 'ob' parameter given to this function. That's why
+     * the bone lookup happens when td->extra gets its value, and not here. */
+    bke::PChanBoneConst *pchanbone_orig = static_cast<bke::PChanBoneConst *>(td->extra);
+    const bPoseChannel *pchan_orig = pchanbone_orig->pchan;
+    const Bone *bone_orig = pchanbone_orig->bone;
+
     BLI_assert(pchan_orig->runtime.flag & POSE_RUNTIME_TRANSFORM);
-    if (pchan_orig->bone->flag & BONE_TRANSFORM_MIRROR) {
+    if (bone_orig->flag & BONE_TRANSFORM_MIRROR) {
       /* If the bone already has the flag set it was already visited by its mirror bone which may
        * also be selected. To avoid double transformations, ignore in this case. See #95396.  */
       if (pid) {
@@ -1180,10 +1221,11 @@ static void pose_transform_mirror_update(TransInfo *t, TransDataContainer *tc, O
     if (pchan == nullptr) {
       continue;
     }
+    Bone *pchan_bone = pchan->bone_get(*ob);
 
     /* Also do bbone scaling. */
-    pchan->bone->xwidth = pchan_orig->bone->xwidth;
-    pchan->bone->zwidth = pchan_orig->bone->zwidth;
+    pchan_bone->xwidth = bone_orig->xwidth;
+    pchan_bone->zwidth = bone_orig->zwidth;
 
     /* We assume X-axis flipping for now. */
     pchan->curve_in_x = pchan_orig->curve_in_x * -1;
@@ -1192,16 +1234,20 @@ static void pose_transform_mirror_update(TransInfo *t, TransDataContainer *tc, O
     pchan->roll2 = pchan_orig->roll2 * -1; /* XXX? */
 
     float pchan_mtx_final[4][4];
-    BKE_pchan_to_mat4(pchan_orig, pchan_mtx_final);
+    BKE_pchan_to_mat4(*pchanbone_orig, pchan_mtx_final);
     mul_m4_m4m4(pchan_mtx_final, pchan_mtx_final, flip_mtx);
     mul_m4_m4m4(pchan_mtx_final, flip_mtx, pchan_mtx_final);
     if (pid) {
       mul_m4_m4m4(pchan_mtx_final, pid->offset_mtx, pchan_mtx_final);
     }
-    BKE_pchan_apply_mat4(pchan, pchan_mtx_final, false);
+    float loc[3], rot[3][3], scale[3];
+    mat4_to_loc_rot_size(loc, rot, scale, pchan_mtx_final);
+    BKE_pchan_protected_location_set(pchan, loc);
+    BKE_pchan_protected_rotation_set(pchan, rot);
+    BKE_pchan_protected_scale_set(pchan, scale);
 
     /* Set flag to let auto key-frame know to key-frame the mirrored bone. */
-    pchan->bone->flag |= BONE_TRANSFORM_MIRROR;
+    pchan_bone->flag |= BONE_TRANSFORM_MIRROR;
 
     /* In this case we can do target-less IK grabbing. */
     if (t->mode == TFM_TRANSLATION) {
@@ -1355,18 +1401,20 @@ static void autokeyframe_pose(bContext *C,
 
   bPose *pose = ob->pose;
   for (bPoseChannel &pchan : pose->chanbase) {
+    Bone *pchan_bone = pchan.bone_get(*ob);
     if ((pchan.runtime.flag & POSE_RUNTIME_TRANSFORM) == 0 &&
-        !((pose->flag & POSE_MIRROR_EDIT) && (pchan.bone->flag & BONE_TRANSFORM_MIRROR)))
+        !((pose->flag & POSE_MIRROR_EDIT) && (pchan_bone->flag & BONE_TRANSFORM_MIRROR)))
     {
       continue;
     }
 
     Vector<RNAPath> rna_paths;
-    const StringRef rotation_path = animrig::get_rotation_mode_path(eRotationModes(pchan.rotmode));
+    const StringRefNull rotation_path = animrig::get_rotation_mode_path(
+        eRotationModes(pchan.rotmode));
 
     if (animrig::is_keying_flag(scene, AUTOKEY_FLAG_INSERTNEEDED)) {
-      const bool is_connected = pchan.bone->parent != nullptr &&
-                                (pchan.bone->flag & BONE_CONNECTED);
+      const bool is_connected = pchan_bone->parent != nullptr &&
+                                (pchan_bone->flag & BONE_CONNECTED);
       rna_paths = get_affected_rna_paths_from_transform_mode(tmode,
                                                              scene->toolsettings,
                                                              rotation_path,
@@ -1413,7 +1461,6 @@ static void recalcData_pose(TransInfo *t)
   }
   else {
     Set<Object *> motionpath_updates;
-
     FOREACH_TRANS_DATA_CONTAINER (t, tc) {
       Object *ob = tc->poseobj;
       bPose *pose = ob->pose;
@@ -1447,14 +1494,20 @@ static void recalcData_pose(TransInfo *t)
 
       if (motionpath_need_update_pose(t->scene, ob)) {
         motionpath_updates.add(ob);
+        /* We have to tag the pose for recalc so `animviz_build_motionpath_targets` will gather the
+         * targets. */
+        ob->pose->avs.recalc |= ANIMVIZ_RECALC_PATHS;
       }
 
       DEG_id_tag_update(&ob->id, ID_RECALC_GEOMETRY);
     }
-
-    /* Update motion paths once for all transformed bones in an object. */
-    for (Object *ob : motionpath_updates) {
-      ED_pose_recalculate_paths(t->context, t->scene, ob, POSE_PATH_CALC_RANGE_CURRENT_FRAME);
+    if (!motionpath_updates.is_empty()) {
+      Depsgraph *evaluated_dg = CTX_data_ensure_evaluated_depsgraph(t->context);
+      Vector<MPathTarget> targets;
+      for (Object *ob : motionpath_updates) {
+        animviz_build_motionpath_targets(ob, targets);
+      }
+      animviz_update_motionpath_preview(*evaluated_dg, targets);
     }
   }
 }
@@ -1465,16 +1518,16 @@ static void recalcData_pose(TransInfo *t)
 /** \name Special After Transform Pose
  * \{ */
 
-static void pose_channel_children_clear_transflag(bPose &pose,
-                                                  bPoseChannel &pose_bone,
+static void pose_channel_children_clear_transflag(Object &pose_ob,
+                                                  bPoseChannel &pchan,
                                                   const int mode,
                                                   const short around)
 {
-  animrig::pose_bone_descendent_iterator(pose, pose_bone, [&](bPoseChannel &child) {
-    if (&pose_bone == &child) {
+  animrig::pose_bone_descendent_iterator(pose_ob, pchan, [&](bPoseChannel &child) {
+    if (&pchan == &child) {
       return;
     }
-    Bone *bone = child.bone;
+    Bone *bone = child.bone_get(pose_ob);
     if ((bone->flag & BONE_HINGE) && (bone->flag & BONE_CONNECTED)) {
       child.runtime.flag |= POSE_RUNTIME_HINGE_CHILD_TRANSFORM;
     }
@@ -1494,7 +1547,7 @@ void transform_convert_pose_transflags_update(Object *ob, const int mode, const 
   bArmature *arm = id_cast<bArmature *>(ob->data);
 
   for (bPoseChannel &pchan : ob->pose->chanbase) {
-    if (animrig::bone_is_visible(arm, &pchan)) {
+    if (animrig::bone_is_visible(arm, {&pchan, pchan.bone_get(*ob)})) {
       if (pchan.flag & POSE_SELECTED) {
         pchan.runtime.flag |= POSE_RUNTIME_TRANSFORM;
       }
@@ -1514,7 +1567,7 @@ void transform_convert_pose_transflags_update(Object *ob, const int mode, const 
   if (!ELEM(mode, TFM_BONESIZE, TFM_BONE_ENVELOPE_DIST)) {
     for (bPoseChannel &pchan : ob->pose->chanbase) {
       if (pchan.runtime.flag & POSE_RUNTIME_TRANSFORM) {
-        pose_channel_children_clear_transflag(*ob->pose, pchan, mode, around);
+        pose_channel_children_clear_transflag(*ob, pchan, mode, around);
       }
     }
   }
@@ -1561,7 +1614,7 @@ static short apply_targetless_ik(Object *ob)
         /* Ensures it gets an auto key inserted. */
         parchan->runtime.flag |= POSE_RUNTIME_TRANSFORM;
 
-        BKE_armature_mat_pose_to_bone(parchan, parchan->pose_mat, mat);
+        BKE_armature_mat_pose_to_bone({parchan, parchan->bone_get(*ob)}, parchan->pose_mat, mat);
         /* Apply and decompose, doesn't work for constraints or non-uniform scale well. */
         {
           float rmat3[3][3], scale[3];
@@ -1610,7 +1663,7 @@ static void pose_grab_with_ik_clear(Main *bmain, Object *ob)
     pchan.constflag &= ~(PCHAN_HAS_IK | PCHAN_HAS_NO_TARGET);
 
     /* Remove all temporary IK-constraints added. */
-    for (con = static_cast<bConstraint *>(pchan.constraints.first); con; con = next) {
+    for (con = pchan.constraints.first(); con; con = next) {
       next = con->next;
       if (con->type == CONSTRAINT_TYPE_KINEMATIC) {
         data = static_cast<bKinematicConstraint *>(con->data);
@@ -1710,14 +1763,23 @@ static void special_aftertrans_update__pose(bContext *C, TransInfo *t)
 
       if (t->mode != TFM_DUMMY && motionpath_need_update_pose(t->scene, ob)) {
         motionpath_updates.add(ob);
+        ob->pose->avs.recalc |= ANIMVIZ_RECALC_PATHS;
       }
     }
-
-    /* Update motion paths once for all transformed bones in an object. */
+    /* This needs to happen before the call to `ED_pose_recalculate_paths` because that clears the
+     * `ANIMVIZ_RECALC_PATHS` flag which makes the `animviz_build_motionpath_targets` find no
+     * targets. */
+    Vector<MPathTarget> targets;
     for (Object *ob : motionpath_updates) {
-      const ePosePathCalcRange range = canceled ? POSE_PATH_CALC_RANGE_CURRENT_FRAME :
-                                                  POSE_PATH_CALC_RANGE_CHANGED;
-      ED_pose_recalculate_paths(C, t->scene, ob, range);
+      animviz_build_motionpath_targets(ob, targets);
+    }
+    animviz_clear_motionpath_preview(targets);
+
+    if (!canceled) {
+      /* Update motion paths once for all transformed bones in an object. */
+      for (Object *ob : motionpath_updates) {
+        ED_pose_recalculate_paths(C, t->scene, ob);
+      }
     }
   }
 }

@@ -25,8 +25,11 @@
 
 #include "IMB_colormanagement.hh"
 
-#include "SEQ_render.hh"
+#include "PRF_profile.hh"
+
 #include "SEQ_thumbnail_cache.hh"
+
+#include "UI_view2d.hh"
 
 #include "WM_api.hh"
 
@@ -57,22 +60,24 @@ static void strip_get_thumb_image_dimensions(const Strip *strip,
                                              float *r_image_width,
                                              float *r_image_height)
 {
-  float image_width = strip->data->stripdata->orig_width;
-  float image_height = strip->data->stripdata->orig_height;
+  int image_width = seq::THUMB_SIZE, image_height = seq::THUMB_SIZE;
+  if (ELEM(strip->type, STRIP_TYPE_IMAGE, STRIP_TYPE_MOVIE)) {
+    image_width = strip->data->stripdata->orig_width;
+    image_height = strip->data->stripdata->orig_height;
+  }
+  else if (strip->type == STRIP_TYPE_MOVIECLIP && strip->clip) {
+    image_width = strip->clip->lastsize[0];
+    image_height = strip->clip->lastsize[1];
+  }
+  else if (strip->type == STRIP_TYPE_SCENE && strip->scene) {
+    image_width = strip->scene->r.xsch;
+    image_height = strip->scene->r.ysch;
+  }
 
-  /* Fix the dimensions to be max SEQ_THUMB_SIZE for x or y. */
-  float aspect_ratio = image_width / image_height;
-  if (image_width > image_height) {
-    image_width = seq::THUMB_SIZE;
-    image_height = round_fl_to_int(image_width / aspect_ratio);
-  }
-  else {
-    image_height = seq::THUMB_SIZE;
-    image_width = round_fl_to_int(image_height * aspect_ratio);
-  }
+  seq::image_size_to_thumb_size(image_width, image_height);
 
   /* Calculate thumb dimensions. */
-  aspect_ratio = image_width / image_height;
+  const float aspect_ratio = float(image_width) / float(image_height);
   float thumb_h_px = thumb_height / pixely;
   float thumb_width = aspect_ratio * thumb_h_px * pixelx;
 
@@ -165,13 +170,53 @@ static bool is_thumbnail_in_view(const float timeline_frame,
   return false;
 }
 
+static void get_seq_strip_middle_thumbnail(const View2D *v2d,
+                                           const bContext *C,
+                                           const StripDrawContext &strip,
+                                           Scene *scene,
+                                           const float thumb_width,
+                                           const float crop_x_multiplier,
+                                           const float upper_thumb_bound,
+                                           bool is_muted,
+                                           Vector<SeqThumbInfo> &r_thumbs)
+{
+  const float left_frame = max_ff(strip.content_start, strip.left_handle);
+  const float right_frame = strip.is_single_image ? left_frame :
+                                                    min_ff(strip.content_end, strip.right_handle);
+  const float strip_width = strip.is_single_image ? (strip.right_handle - strip.left_handle) :
+                                                    (right_frame - left_frame);
+  const float middle_frame = roundf((left_frame + right_frame) / 2.0f);
+
+  /* To center the thumbnail, offset it by half its width to the left. */
+  const float display_offset = (strip.is_single_image ? strip_width / 2.0f : 0.0f) -
+                               (thumb_width / 2.0f);
+
+  /* Thumbnail is centered, so same crop used for left and right. */
+  const float crop = max_ff(0.0f, thumb_width - strip_width) / 2.0f;
+
+  if (is_thumbnail_in_view(middle_frame + display_offset, thumb_width, v2d)) {
+    add_thumbnail_at_frame(middle_frame,
+                           C,
+                           v2d,
+                           strip,
+                           scene,
+                           thumb_width,
+                           crop,
+                           crop,
+                           crop_x_multiplier,
+                           upper_thumb_bound,
+                           display_offset,
+                           is_muted,
+                           r_thumbs);
+  }
+}
+
 static void get_seq_strip_ends_thumbnails(const View2D *v2d,
                                           const bContext *C,
                                           const StripDrawContext &strip,
                                           Scene *scene,
                                           const float thumb_width,
                                           const float crop_x_multiplier,
-                                          const float pixelx,
                                           const float upper_thumb_bound,
                                           bool is_muted,
                                           Vector<SeqThumbInfo> &r_thumbs)
@@ -186,7 +231,7 @@ static void get_seq_strip_ends_thumbnails(const View2D *v2d,
                                            !(strip.strip->flag & SEQ_LEFTSEL));
   /* Offset the start of last thumbnail. */
   const float display_offset = (strip.is_single_image ? strip_width : 0.0f) - thumb_width;
-  const float gap = 1.5f * pixelx * UI_SCALE_FAC;
+  const float gap = 1.5f * ui::view2d_pixel_size_get_x(v2d) * UI_SCALE_FAC;
 
   float crop_left = 0.0;
   float crop_right = 0.0;
@@ -239,15 +284,17 @@ static void get_seq_strip_thumbnails(const View2D *v2d,
                                      const bContext *C,
                                      Scene *scene,
                                      const StripDrawContext &strip,
-                                     float pixelx,
-                                     float pixely,
                                      bool is_muted,
+                                     bool show_only_middle,
                                      bool show_only_at_strip_ends,
                                      Vector<SeqThumbInfo> &r_thumbs)
 {
   if (!seq::strip_can_have_thumbnail(scene, strip.strip)) {
     return;
   }
+
+  const float pixelx = ui::view2d_pixel_size_get_x(v2d);
+  const float pixely = ui::view2d_pixel_size_get_y(v2d);
 
   /* No thumbnails if height of the strip is too small. */
   const float thumb_height = strip.strip_content_top - strip.bottom;
@@ -266,6 +313,19 @@ static void get_seq_strip_thumbnails(const View2D *v2d,
     upper_thumb_bound = strip.right_handle;
   }
 
+  if (show_only_middle) {
+    get_seq_strip_middle_thumbnail(v2d,
+                                   C,
+                                   strip,
+                                   scene,
+                                   thumb_width,
+                                   crop_x_multiplier,
+                                   upper_thumb_bound,
+                                   is_muted,
+                                   r_thumbs);
+    return;
+  }
+
   if (show_only_at_strip_ends) {
     get_seq_strip_ends_thumbnails(v2d,
                                   C,
@@ -273,14 +333,13 @@ static void get_seq_strip_thumbnails(const View2D *v2d,
                                   scene,
                                   thumb_width,
                                   crop_x_multiplier,
-                                  pixelx,
                                   upper_thumb_bound,
                                   is_muted,
                                   r_thumbs);
     return;
   }
 
-  int first_drawable_frame = max_iii(strip.left_handle, strip.strip->start, v2d->cur.xmin);
+  int first_drawable_frame = std::max({strip.left_handle, strip.strip->start, v2d->cur.xmin});
   /* Calculate how many thumbnails should we skip over to get to the first visible thumbnail. */
   float aligned_frame_offset = int((first_drawable_frame - strip.strip->start) / thumb_width) *
                                thumb_width;
@@ -410,18 +469,18 @@ void draw_strip_thumbnails(const TimelineDrawContext &ctx,
                            StripsDrawBatch &strips_batch,
                            const Vector<StripDrawContext> &strips)
 {
-  const bool show_thumbnails = (ctx.sseq->timeline_overlay.flag &
-                                SEQ_TIMELINE_STRIP_END_THUMBNAILS) ||
-                               (ctx.sseq->timeline_overlay.flag &
-                                SEQ_TIMELINE_CONTINUOUS_THUMBNAILS);
+  const bool show_thumbnails = (ctx.sseq->timeline_overlay.flag & SEQ_TIMELINE_SHOW_THUMBNAILS);
   /* Nothing to do if we're not showing thumbnails overall. */
   if ((ctx.sseq->flag & SEQ_SHOW_OVERLAY) == 0 || !show_thumbnails) {
     return;
   }
 
+  PRF_scope_with_name("SeqTimelineThumbs", ProfileCategory::Draw);
+
   /* Gather information for all thumbnails. */
   Vector<SeqThumbInfo> thumbs;
   /* Thumbnail display mode (Strip ends / Continuous). */
+  const bool show_only_middle = (ctx.sseq->timeline_overlay.flag & SEQ_TIMELINE_MIDDLE_THUMBNAILS);
   const bool show_only_at_strip_ends = (ctx.sseq->timeline_overlay.flag &
                                         SEQ_TIMELINE_STRIP_END_THUMBNAILS);
 
@@ -430,19 +489,14 @@ void draw_strip_thumbnails(const TimelineDrawContext &ctx,
                              ctx.C,
                              ctx.scene,
                              strip,
-                             ctx.pixelx,
-                             ctx.pixely,
                              strip.is_muted,
+                             show_only_middle,
                              show_only_at_strip_ends,
                              thumbs);
   }
   if (thumbs.is_empty()) {
     return;
   }
-
-  Scene *sequencer_scene = CTX_data_sequencer_scene(ctx.C);
-  ColorManagedViewSettings *view_settings = &sequencer_scene->view_settings;
-  ColorManagedDisplaySettings *display_settings = &sequencer_scene->display_settings;
 
   /* Arrange thumbnail images into a texture atlas, using a simple
    * "add to current row until end, then start a new row". Thumbnail
@@ -489,23 +543,19 @@ void draw_strip_thumbnails(const TimelineDrawContext &ctx,
     const rcti &rect = rects[i];
     SeqThumbInfo &info = thumbs[i];
 
-    void *cache_handle = nullptr;
-    const uchar *display_buffer = IMB_display_buffer_acquire(
-        info.ibuf, view_settings, display_settings, &cache_handle);
-    if (display_buffer != nullptr && info.ibuf != nullptr) {
-      int cropx_min = int(info.cropx_min);
-      int cropx_max = int(math::ceil(info.cropx_max));
-      int width = cropx_max - cropx_min + 1;
-      int height = info.ibuf->y;
-      const uchar *src = display_buffer + cropx_min * 4;
-      uchar *dst = &tex_data[(rect.ymin * ATLAS_WIDTH + rect.xmin) * 4];
-      for (int y = 0; y < height; y++) {
-        memcpy(dst, src, width * 4);
-        src += info.ibuf->x * 4;
-        dst += ATLAS_WIDTH * 4;
-      }
+    const uchar *thumb_image = info.ibuf->byte_data();
+    BLI_assert_msg(thumb_image != nullptr, "Sequencer thumbnails are expected to be byte images");
+    int cropx_min = int(info.cropx_min);
+    int cropx_max = int(math::ceil(info.cropx_max));
+    int width = cropx_max - cropx_min + 1;
+    int height = info.ibuf->y;
+    const uchar *src = thumb_image + cropx_min * 4;
+    uchar *dst = &tex_data[(rect.ymin * ATLAS_WIDTH + rect.xmin) * 4];
+    for (int y = 0; y < height; y++) {
+      memcpy(dst, src, width * 4);
+      src += info.ibuf->x * 4;
+      dst += ATLAS_WIDTH * 4;
     }
-    IMB_display_buffer_release(cache_handle);
 
     /* Release thumb image reference. */
     IMB_freeImBuf(info.ibuf);

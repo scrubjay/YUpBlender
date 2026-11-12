@@ -27,9 +27,9 @@ PyDoc_STRVAR(
     "\n"
     "   Builds an IncreasingThicknessShader object.\n"
     "\n"
-    "   :arg thickness_A: The first thickness value.\n"
+    "   :param thickness_A: The first thickness value.\n"
     "   :type thickness_A: float\n"
-    "   :arg thickness_B: The second thickness value.\n"
+    "   :param thickness_B: The second thickness value.\n"
     "   :type thickness_B: float\n"
     "\n"
     ".. method:: shade(stroke)\n"
@@ -40,7 +40,7 @@ PyDoc_STRVAR(
     "   this midpoint vertex and the last vertex. The thickness is\n"
     "   linearly interpolated from A to B.\n"
     "\n"
-    "   :arg stroke: A Stroke object.\n"
+    "   :param stroke: A Stroke object.\n"
     "   :type stroke: :class:`freestyle.types.Stroke`\n");
 static int IncreasingThicknessShader___init__(BPy_IncreasingThicknessShader *self,
                                               PyObject *args,
@@ -49,7 +49,15 @@ static int IncreasingThicknessShader___init__(BPy_IncreasingThicknessShader *sel
   static const char *kwlist[] = {"thickness_A", "thickness_B", nullptr};
   float f1, f2;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "ff", (char **)kwlist, &f1, &f2)) {
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "f" /* `thickness_A` */
+                                   "f" /* `thickness_B` */
+                                   ":__init__",
+                                   (char **)kwlist,
+                                   &f1,
+                                   &f2))
+  {
     return -1;
   }
   self->py_ss.ss = new StrokeShaders::IncreasingThicknessShader(f1, f2);

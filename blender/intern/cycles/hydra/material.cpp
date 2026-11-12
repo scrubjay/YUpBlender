@@ -6,17 +6,39 @@
 #include "hydra/material.h"
 #include "hydra/node_util.h"
 #include "hydra/session.h"
+#include "hydra/util.h"
 #include "scene/scene.h"
 #include "scene/shader.h"
 #include "scene/shader_graph.h"
 #include "scene/shader_nodes.h"
 
+#include <pxr/imaging/hd/material.h>
+#include <pxr/imaging/hd/materialConnectionSchema.h>
+#include <pxr/imaging/hd/materialNetworkSchema.h>
+#include <pxr/imaging/hd/materialNodeParameterSchema.h>
+#include <pxr/imaging/hd/materialNodeSchema.h>
+#include <pxr/imaging/hd/materialSchema.h>
 #include <pxr/imaging/hd/sceneDelegate.h>
 
 HDCYCLES_NAMESPACE_OPEN_SCOPE
 
+/* Normalize a material network node name to a full SdfPath. The schema may
+ * provide either a full path or a bare identifier. */
+static SdfPath MaterialNodeNameToSdfPath(const TfToken &nodeName)
+{
+  const std::string &s = nodeName.GetString();
+  if (s.empty()) {
+    return SdfPath::EmptyPath();
+  }
+  if (s[0] == '/' && SdfPath::IsValidPathString(s)) {
+    return SdfPath(s);
+  }
+  return SdfPath::AbsoluteRootPath().AppendChild(nodeName);
+}
+
 // clang-format off
 TF_DEFINE_PRIVATE_TOKENS(CyclesMaterialTokens,
+    (cycles)
     ((cyclesSurface, "cycles:surface"))
     ((cyclesDisplacement, "cycles:displacement"))
     ((cyclesVolume, "cycles:volume"))
@@ -41,7 +63,8 @@ TF_DEFINE_PRIVATE_TOKENS(CyclesMaterialTokens,
 );
 // clang-format on
 
-// Simple class to handle remapping of USDPreviewSurface nodes and parameters to Cycles equivalents
+/* Simple class to handle remapping of USDPreviewSurface nodes and parameters to Cycles
+ * equivalents. */
 class UsdToCyclesMapping {
   using ParamMap = std::unordered_map<TfToken, ustring, TfToken::HashFunctor>;
 
@@ -56,13 +79,17 @@ class UsdToCyclesMapping {
     return _nodeType;
   }
 
+  bool hasParameterMapping(const TfToken &name) const
+  {
+    return _paramMap.find(name) != _paramMap.end();
+  }
+
   virtual std::string parameterName(const TfToken &name,
                                     const ShaderInput *inputConnection,
                                     VtValue * /*value*/ = nullptr) const
   {
-    // UsdNode.name -> Node.input
-    // These all follow a simple pattern that we can just remap
-    // based on the name or 'Node.input' type
+    /* UsdNode.name -> Node.input. These all follow a simple pattern that we can just
+     * remap based on the name or 'Node.input' type. */
     if (inputConnection) {
       if (name == CyclesMaterialTokens->a) {
         return "alpha";
@@ -70,7 +97,7 @@ class UsdToCyclesMapping {
       if (name == CyclesMaterialTokens->rgb) {
         return "color";
       }
-      // TODO: Is there a better mapping than 'color'?
+      /* TODO: Is there a better mapping than 'color'? */
       if (name == CyclesMaterialTokens->r || name == CyclesMaterialTokens->g ||
           name == CyclesMaterialTokens->b)
       {
@@ -94,7 +121,7 @@ class UsdToCyclesMapping {
       }
     }
 
-    // Simple mapping case
+    /* Simple mapping case */
     const auto it = _paramMap.find(name);
     return it != _paramMap.end() ? it->second.string() : name.GetString();
   }
@@ -113,11 +140,11 @@ class UsdToCyclesTexture : public UsdToCyclesMapping {
                             VtValue *value) const override
   {
     if (value) {
-      // Remap UsdUVTexture.wrapS and UsdUVTexture.wrapT to cycles_image_texture.extension
+      /* Remap UsdUVTexture.wrapS and UsdUVTexture.wrapT to cycles_image_texture.extension. */
       if (name == CyclesMaterialTokens->wrapS || name == CyclesMaterialTokens->wrapT) {
         const std::string valueString = VtValue::Cast<std::string>(*value).Get<std::string>();
 
-        // A value of 'repeat' in USD is equivalent to 'periodic' in Cycles
+        /* A value of 'repeat' in USD is equivalent to 'periodic' in Cycles. */
         if (valueString == "repeat") {
           *value = VtValue(CyclesMaterialTokens->periodic);
         }
@@ -141,9 +168,9 @@ class UsdToCycles {
           {TfToken("specularColor"), ustring("specular")},
           {TfToken("clearcoatRoughness"), ustring("coat_roughness")},
           {TfToken("opacity"), ustring("alpha")},
-          // opacityThreshold
-          // occlusion
-          // displacement
+          /* opacityThreshold */
+          /* occlusion */
+          /* displacement */
       }};
   const UsdToCyclesTexture UsdUVTexture = {
       "image_texture",
@@ -186,6 +213,20 @@ TfStaticData<UsdToCycles> sUsdToCyles;
 
 }  // namespace
 
+static void AddInstanceIdAOV(ShaderGraph *graph)
+{
+  /* Instance AOV is provided for every network, to make picking work. */
+  const ustring instanceId(HdAovTokens->instanceId.GetString());
+
+  OutputAOVNode *aovNode = graph->create_node<OutputAOVNode>();
+  aovNode->set_name(instanceId);
+
+  AttributeNode *instanceIdNode = graph->create_node<AttributeNode>();
+  instanceIdNode->set_attribute(instanceId);
+
+  graph->connect(instanceIdNode->output("Fac"), aovNode->input("Value"));
+}
+
 HdCyclesMaterial::HdCyclesMaterial(const SdfPath &sprimId) : HdMaterial(sprimId) {}
 
 HdCyclesMaterial::~HdCyclesMaterial() = default;
@@ -203,80 +244,79 @@ void HdCyclesMaterial::Sync(HdSceneDelegate *sceneDelegate,
     return;
   }
 
-  Initialize(renderParam);
-
-  const SceneLock lock(renderParam);
-
   const bool dirtyParams = (*dirtyBits & DirtyBits::DirtyParams);
   const bool dirtyResource = (*dirtyBits & DirtyBits::DirtyResource);
 
-  VtValue value;
   const SdfPath &id = GetId();
 
   if (dirtyResource || dirtyParams) {
-    value = sceneDelegate->GetMaterialResource(id);
+    const HdSceneIndexPrim prim = GetPrim(sceneDelegate, id);
+    const HdContainerDataSourceHandle &primDs = prim.dataSource;
 
-    const HdMaterialNetwork2 *network = nullptr;
-    std::unique_ptr<HdMaterialNetwork2> networkConverted;
-    if (value.IsHolding<HdMaterialNetwork2>()) {
-      network = &value.UncheckedGet<HdMaterialNetwork2>();
+    HdMaterialSchema matSchema = HdMaterialSchema::GetFromParent(primDs);
+    /* Prefer cycles network if it exists, otherwise use universal network. */
+    HdMaterialNetworkSchema network = matSchema.GetMaterialNetwork(CyclesMaterialTokens->cycles);
+    if (!network) {
+      network = matSchema.GetMaterialNetwork();
     }
-    else if (value.IsHolding<HdMaterialNetworkMap>()) {
-      const auto &networkOld = value.UncheckedGet<HdMaterialNetworkMap>();
-      // In the case of only parameter updates, there is no need to waste time converting to a
-      // HdMaterialNetwork2, as supporting HdMaterialNetworkMap for parameters only is trivial.
-      if (!_nodes.empty() && !dirtyResource) {
-        for (const auto &networkEntry : networkOld.map) {
-          UpdateParameters(networkEntry.second);
-        }
-        _shader->tag_modified();
-      }
-      else {
-        networkConverted = std::make_unique<HdMaterialNetwork2>();
-#if PXR_VERSION >= 2205
-        *networkConverted = HdConvertToHdMaterialNetwork2(networkOld);
-#else
-        HdMaterialNetwork2ConvertFromHdMaterialNetworkMap(networkOld, networkConverted.get());
-#endif
-        network = networkConverted.get();
-      }
+
+    const SceneLock lock(renderParam);
+
+    if (network && !_nodes.empty() && !dirtyResource) {
+      UpdateParameters(network);
+      _shader->tag_update(lock.scene);
     }
     else {
-      TF_RUNTIME_ERROR("Could not get a HdMaterialNetwork2.");
-    }
-
-    if (network) {
-      if (!_nodes.empty() && !dirtyResource) {
-        UpdateParameters(*network);
-        _shader->tag_modified();
+      unique_ptr<ShaderGraph> graph;
+      if (!network) {
+        TF_WARN("Could not get a material network for %s.", id.GetText());
       }
       else {
-        PopulateShaderGraph(*network);
+        graph = BuildShaderGraph(network);
+        if (!graph) {
+          TF_WARN("Could not build a shader graph for %s.", id.GetText());
+        }
       }
-    }
-  }
 
-  if (_shader->is_modified()) {
-    _shader->tag_update(lock.scene);
+      if (!graph) {
+        /* Default shader if translation failed, so something is visible. */
+        graph = make_unique<ShaderGraph>();
+        PrincipledBsdfNode *bsdf = graph->create_node<PrincipledBsdfNode>();
+        graph->connect(bsdf->output("BSDF"), graph->output()->input("Surface"));
+      }
+
+      AddInstanceIdAOV(graph.get());
+
+      if (!_shader) {
+        _shader = lock.scene->create_node<Shader>();
+      }
+
+      _shader->set_graph(std::move(graph));
+      _shader->tag_update(lock.scene);
+    }
   }
 
   *dirtyBits = DirtyBits::Clean;
 }
 
 void HdCyclesMaterial::UpdateParameters(NodeDesc &nodeDesc,
-                                        const std::map<TfToken, VtValue> &parameters,
+                                        HdMaterialNodeParameterContainerSchema params,
                                         const SdfPath &nodePath)
 {
-  for (const auto &param : parameters) {
-    VtValue value = param.second;
+  for (const TfToken &paramName : params.GetNames()) {
+    auto valueDs = params.Get(paramName).GetValue();
+    if (!valueDs) {
+      continue;
+    }
+    VtValue value = valueDs->GetValue(0.0f);
 
-    // See if the parameter name is in USDPreviewSurface terms, and needs to be converted
+    /* See if the parameter name is in USDPreviewSurface terms, and needs to be converted .*/
     const UsdToCyclesMapping *inputMapping = nodeDesc.mapping;
     const std::string inputName = inputMapping ?
-                                      inputMapping->parameterName(param.first, nullptr, &value) :
-                                      param.first.GetString();
+                                      inputMapping->parameterName(paramName, nullptr, &value) :
+                                      paramName.GetString();
 
-    // Find the input to write the parameter value to
+    /* Find the input to write the parameter value to. */
     const SocketType *input = nullptr;
     for (const SocketType &socket : nodeDesc.node->type->inputs) {
       if (string_iequals(socket.name.string(), inputName) || socket.ui_name == inputName) {
@@ -286,10 +326,27 @@ void HdCyclesMaterial::UpdateParameters(NodeDesc &nodeDesc,
     }
 
     if (!input) {
-      TF_WARN("Could not find parameter '%s' on node '%s' ('%s')",
-              param.first.GetText(),
-              nodePath.GetText(),
-              nodeDesc.node->name.c_str());
+      if (inputMapping) {
+        if (inputMapping->hasParameterMapping(paramName)) {
+          TF_WARN("USD input '%s' on node '%s' maps to unavailable Cycles input '%s' on '%s'",
+                  paramName.GetText(),
+                  nodePath.GetText(),
+                  inputName.c_str(),
+                  nodeDesc.node->name.c_str());
+        }
+        else {
+          TF_WARN("Unsupported USD input '%s' on node '%s' ('%s'); value ignored",
+                  paramName.GetText(),
+                  nodePath.GetText(),
+                  nodeDesc.node->name.c_str());
+        }
+      }
+      else {
+        TF_WARN("Could not find parameter '%s' on node '%s' ('%s')",
+                paramName.GetText(),
+                nodePath.GetText(),
+                nodeDesc.node->name.c_str());
+      }
       continue;
     }
 
@@ -297,10 +354,11 @@ void HdCyclesMaterial::UpdateParameters(NodeDesc &nodeDesc,
   }
 }
 
-void HdCyclesMaterial::UpdateParameters(const HdMaterialNetwork &network)
+void HdCyclesMaterial::UpdateParameters(HdMaterialNetworkSchema network)
 {
-  for (const HdMaterialNode &nodeEntry : network.nodes) {
-    const SdfPath &nodePath = nodeEntry.path;
+  HdMaterialNodeContainerSchema nodes = network.GetNodes();
+  for (const TfToken &nodeName : nodes.GetNames()) {
+    const SdfPath nodePath = MaterialNodeNameToSdfPath(nodeName);
 
     const auto nodeIt = _nodes.find(nodePath);
     if (nodeIt == _nodes.end()) {
@@ -308,39 +366,29 @@ void HdCyclesMaterial::UpdateParameters(const HdMaterialNetwork &network)
       continue;
     }
 
-    UpdateParameters(nodeIt->second, nodeEntry.parameters, nodePath);
-  }
-}
-
-void HdCyclesMaterial::UpdateParameters(const HdMaterialNetwork2 &network)
-{
-  for (const auto &nodeEntry : network.nodes) {
-    const SdfPath &nodePath = nodeEntry.first;
-
-    const auto nodeIt = _nodes.find(nodePath);
-    if (nodeIt == _nodes.end()) {
-      TF_RUNTIME_ERROR("Could not update parameters on missing node '%s'", nodePath.GetText());
-      continue;
-    }
-
-    UpdateParameters(nodeIt->second, nodeEntry.second.parameters, nodePath);
+    UpdateParameters(nodeIt->second, nodes.Get(nodeName).GetParameters(), nodePath);
   }
 }
 
 void HdCyclesMaterial::UpdateConnections(NodeDesc &nodeDesc,
-                                         const HdMaterialNode2 &matNode,
+                                         HdMaterialNodeSchema nodeSchema,
                                          const SdfPath &nodePath,
                                          ShaderGraph *shaderGraph)
 {
-  for (const auto &connection : matNode.inputConnections) {
-    const TfToken &dstSocketName = connection.first;
+  HdMaterialConnectionVectorContainerSchema conns = nodeSchema.GetInputConnections();
+  for (const TfToken &dstSocketName : conns.GetNames()) {
+    HdMaterialConnectionVectorSchema connVec = conns.Get(dstSocketName);
+    const size_t count = connVec.GetNumElements();
+    if (count == 0) {
+      continue;
+    }
 
     const UsdToCyclesMapping *inputMapping = nodeDesc.mapping;
     const std::string inputName = inputMapping ?
                                       inputMapping->parameterName(dstSocketName, nullptr) :
                                       dstSocketName.GetString();
 
-    // Find the input to connect to on the passed in node
+    /* Find the input to connect to on the passed in node. */
     ShaderInput *input = nullptr;
     for (ShaderInput *in : nodeDesc.node->inputs) {
       if (string_iequals(in->socket_type.name.string(), inputName)) {
@@ -357,21 +405,23 @@ void HdCyclesMaterial::UpdateConnections(NodeDesc &nodeDesc,
       continue;
     }
 
-    // Now find the output to connect from
-    const auto &connectedNodes = connection.second;
-    if (connectedNodes.empty()) {
-      continue;
-    }
-
-    // TODO: Hydra allows multiple connections of the same input
-    //       Unsure how to handle this in Cycles, so just use the first
-    if (connectedNodes.size() > 1) {
+    /* USD allows N connections per input (MaterialX <switch>, <combine>, struct
+     * inputs etc). Cycles inputs are single-connection, and the right lowering
+     * depends on the node type, so just take the first and warn. */
+    if (count > 1) {
       TF_WARN(
           "Ignoring multiple connections to '%s.%s'", nodePath.GetText(), dstSocketName.GetText());
     }
 
-    const SdfPath &upstreamNodePath = connectedNodes.front().upstreamNode;
-    const TfToken &upstreamOutputName = connectedNodes.front().upstreamOutputName;
+    HdMaterialConnectionSchema connSchema = connVec.GetElement(0);
+    const SdfPath upstreamNodePath =
+        connSchema.GetUpstreamNodePath() ?
+            MaterialNodeNameToSdfPath(connSchema.GetUpstreamNodePath()->GetTypedValue(0.0f)) :
+            SdfPath();
+    const TfToken upstreamOutputName = connSchema.GetUpstreamNodeOutputName() ?
+                                           connSchema.GetUpstreamNodeOutputName()->GetTypedValue(
+                                               0.0f) :
+                                           TfToken();
 
     const auto srcNodeIt = _nodes.find(upstreamNodePath);
     if (srcNodeIt == _nodes.end()) {
@@ -411,41 +461,48 @@ void HdCyclesMaterial::UpdateConnections(NodeDesc &nodeDesc,
   }
 }
 
-void HdCyclesMaterial::PopulateShaderGraph(const HdMaterialNetwork2 &networkMap)
+unique_ptr<ShaderGraph> HdCyclesMaterial::BuildShaderGraph(HdMaterialNetworkSchema network)
 {
   _nodes.clear();
 
   unique_ptr<ShaderGraph> graph = make_unique<ShaderGraph>();
 
-  // Iterate all the nodes first and build a complete but unconnected graph with parameters set
-  for (const auto &nodeEntry : networkMap.nodes) {
+  HdMaterialNodeContainerSchema nodes = network.GetNodes();
+
+  /* Iterate all the nodes first and build a complete but unconnected graph with parameters set. */
+  for (const TfToken &nodeName : nodes.GetNames()) {
+    HdMaterialNodeSchema nodeSchema = nodes.Get(nodeName);
+    const SdfPath nodePath = MaterialNodeNameToSdfPath(nodeName);
+
     NodeDesc nodeDesc = {};
-    const SdfPath &nodePath = nodeEntry.first;
 
     const auto nodeIt = _nodes.find(nodePath);
-    // Create new node only if it does not exist yet
+    /* Create new node only if it does not exist yet. */
     if (nodeIt != _nodes.end()) {
       nodeDesc = nodeIt->second;
     }
     else {
-      // E.g. cycles_principled_bsdf or UsdPreviewSurface
-      const std::string &nodeTypeId = nodeEntry.second.nodeTypeId.GetString();
+      /* E.g. cycles_principled_bsdf or UsdPreviewSurface. */
+      const TfToken nodeTypeIdToken = nodeSchema.GetNodeIdentifier() ?
+                                          nodeSchema.GetNodeIdentifier()->GetTypedValue(0.0f) :
+                                          TfToken();
+      const std::string &nodeTypeId = nodeTypeIdToken.GetString();
 
       ustring cyclesType(nodeTypeId);
-      // Interpret a node type ID prefixed with cycles_<type> or cycles:<type> as a node of <type>
-      if (nodeTypeId.rfind("cycles", 0) == 0) {
-        cyclesType = nodeTypeId.substr(7);
+      if (nodeTypeId.starts_with("cycles_") || nodeTypeId.starts_with("cycles:")) {
+        /* Native Cycles note embedded in USDShade. */
+        cyclesType = nodeTypeId.substr(strlen("cycles_"));
         nodeDesc.mapping = sUsdToCyles->findCycles(cyclesType);
       }
       else {
-        // Check if any remapping is needed (e.g. for USDPreviewSurface to Cycles nodes)
-        nodeDesc.mapping = sUsdToCyles->findUsd(nodeEntry.second.nodeTypeId);
+        /* Check if any remapping is needed (e.g. for USDPreviewSurface to Cycles nodes). */
+        nodeDesc.mapping = sUsdToCyles->findUsd(nodeTypeIdToken);
         if (nodeDesc.mapping) {
           cyclesType = nodeDesc.mapping->nodeType();
         }
       }
 
-      // If it's a native Cycles' node-type, just do the lookup now.
+      /* If it's a native Cycles' node-type, just do the lookup now. */
       if (const NodeType *nodeType = NodeType::find(cyclesType)) {
         nodeDesc.node = graph->create_node(nodeType);
         _nodes.emplace(nodePath, nodeDesc);
@@ -456,13 +513,13 @@ void HdCyclesMaterial::PopulateShaderGraph(const HdMaterialNetwork2 &networkMap)
       }
     }
 
-    UpdateParameters(nodeDesc, nodeEntry.second.parameters, nodePath);
+    UpdateParameters(nodeDesc, nodeSchema.GetParameters(), nodePath);
   }
 
-  // Now that all nodes have been constructed, iterate the network again and build up any
-  // connections between nodes
-  for (const auto &nodeEntry : networkMap.nodes) {
-    const SdfPath &nodePath = nodeEntry.first;
+  /* Now that all nodes have been constructed, iterate the network again and build up any
+   * connections between nodes. */
+  for (const TfToken &nodeName : nodes.GetNames()) {
+    const SdfPath nodePath = MaterialNodeNameToSdfPath(nodeName);
 
     const auto nodeIt = _nodes.find(nodePath);
     if (nodeIt == _nodes.end()) {
@@ -470,17 +527,25 @@ void HdCyclesMaterial::PopulateShaderGraph(const HdMaterialNetwork2 &networkMap)
       continue;
     }
 
-    UpdateConnections(nodeIt->second, nodeEntry.second, nodePath, graph.get());
+    UpdateConnections(nodeIt->second, nodes.Get(nodeName), nodePath, graph.get());
   }
 
-  // Finally connect the terminals to the graph output (Surface, Volume, Displacement)
-  for (const auto &terminalEntry : networkMap.terminals) {
-    const TfToken &terminalName = terminalEntry.first;
-    const HdMaterialConnection2 &connection = terminalEntry.second;
+  /* Finally connect the terminals to the graph output (Surface, Volume, Displacement). */
+  HdMaterialConnectionContainerSchema terminals = network.GetTerminals();
+  for (const TfToken &terminalName : terminals.GetNames()) {
+    HdMaterialConnectionSchema termSchema = terminals.Get(terminalName);
+    const SdfPath upstreamNodePath =
+        termSchema.GetUpstreamNodePath() ?
+            MaterialNodeNameToSdfPath(termSchema.GetUpstreamNodePath()->GetTypedValue(0.0f)) :
+            SdfPath();
+    const TfToken upstreamOutputName = termSchema.GetUpstreamNodeOutputName() ?
+                                           termSchema.GetUpstreamNodeOutputName()->GetTypedValue(
+                                               0.0f) :
+                                           TfToken();
 
-    const auto nodeIt = _nodes.find(connection.upstreamNode);
+    const auto nodeIt = _nodes.find(upstreamNodePath);
     if (nodeIt == _nodes.end()) {
-      TF_RUNTIME_ERROR("Could not find terminal node '%s'", connection.upstreamNode.GetText());
+      TF_RUNTIME_ERROR("Could not find terminal node '%s'", upstreamNodePath.GetText());
       continue;
     }
 
@@ -492,7 +557,7 @@ void HdCyclesMaterial::PopulateShaderGraph(const HdMaterialNetwork2 &networkMap)
         terminalName == CyclesMaterialTokens->cyclesSurface)
     {
       inputName = "Surface";
-      // Find default output name based on the node if none is provided
+      /* Find default output name based on the node if none is provided. */
       if (node->type->name == "add_closure" || node->type->name == "mix_closure") {
         outputName = "Closure";
       }
@@ -514,14 +579,17 @@ void HdCyclesMaterial::PopulateShaderGraph(const HdMaterialNetwork2 &networkMap)
       inputName = outputName = "Volume";
     }
 
-    if (!connection.upstreamOutputName.IsEmpty()) {
-      outputName = connection.upstreamOutputName.GetText();
+    /* For native Cycles nodes we use the upstream output name as is, for
+     * mapping from e.g. UsdPreviewSurface we need to use the default output
+     * name that is known to exist. */
+    if (!upstreamOutputName.IsEmpty() && nodeIt->second.mapping == nullptr) {
+      outputName = upstreamOutputName.GetText();
     }
 
     ShaderInput *const input = inputName ? graph->output()->input(inputName) : nullptr;
     if (!input) {
       TF_RUNTIME_ERROR("Could not find terminal input '%s.%s'",
-                       connection.upstreamNode.GetText(),
+                       upstreamNodePath.GetText(),
                        inputName ? inputName : "<null>");
       continue;
     }
@@ -529,7 +597,7 @@ void HdCyclesMaterial::PopulateShaderGraph(const HdMaterialNetwork2 &networkMap)
     ShaderOutput *const output = outputName ? node->output(outputName) : nullptr;
     if (!output) {
       TF_RUNTIME_ERROR("Could not find terminal output '%s.%s'",
-                       connection.upstreamNode.GetText(),
+                       upstreamNodePath.GetText(),
                        outputName ? outputName : "<null>");
       continue;
     }
@@ -537,20 +605,18 @@ void HdCyclesMaterial::PopulateShaderGraph(const HdMaterialNetwork2 &networkMap)
     graph->connect(output, input);
   }
 
-  // Create the instanceId AOV output
-  {
-    const ustring instanceId(HdAovTokens->instanceId.GetString());
-
-    OutputAOVNode *aovNode = graph->create_node<OutputAOVNode>();
-    aovNode->set_name(instanceId);
-
-    AttributeNode *instanceIdNode = graph->create_node<AttributeNode>();
-    instanceIdNode->set_attribute(instanceId);
-
-    graph->connect(instanceIdNode->output("Fac"), aovNode->input("Value"));
+  /* Return no graph if nothing got successfully linked due unsupported nodes,
+   * avoids the surface becoming transparent then. */
+  bool any_output_linked = false;
+  for (ShaderInput *input : graph->output()->inputs) {
+    any_output_linked |= input->link != nullptr;
+  }
+  if (!any_output_linked) {
+    _nodes.clear();
+    return nullptr;
   }
 
-  _shader->set_graph(std::move(graph));
+  return graph;
 }
 
 void HdCyclesMaterial::Finalize(HdRenderParam *renderParam)
@@ -568,17 +634,6 @@ void HdCyclesMaterial::Finalize(HdRenderParam *renderParam)
     lock.scene->delete_node(_shader);
   }
   _shader = nullptr;
-}
-
-void HdCyclesMaterial::Initialize(HdRenderParam *renderParam)
-{
-  if (_shader) {
-    return;
-  }
-
-  const SceneLock lock(renderParam);
-
-  _shader = lock.scene->create_node<Shader>();
 }
 
 HDCYCLES_NAMESPACE_CLOSE_SCOPE

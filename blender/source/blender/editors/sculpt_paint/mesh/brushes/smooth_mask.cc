@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup edsculpt
+ */
+
 #include "editors/sculpt_paint/mesh/brushes/brushes.hh"
 
 #include "DNA_brush_types.h"
@@ -92,7 +96,7 @@ static void apply_masks_faces(const Depsgraph &depsgraph,
 
   scale_factors(factors, strength);
 
-  calc_brush_texture_factors(ss, brush, positions_eval, verts, factors);
+  calc_brush_texture_factors(PaintMode::Sculpt, ss, brush, positions_eval, verts, factors);
 
   tls.new_masks.resize(verts.size());
   const MutableSpan<float> new_masks = tls.new_masks;
@@ -212,7 +216,7 @@ static void calc_grids(const Depsgraph &depsgraph,
 
   scale_factors(factors, strength);
 
-  calc_brush_texture_factors(ss, brush, positions, factors);
+  calc_brush_texture_factors(PaintMode::Sculpt, ss, brush, positions, factors);
 
   tls.masks.resize(positions.size());
   const MutableSpan<float> masks = tls.masks;
@@ -264,7 +268,7 @@ static void calc_bmesh(const Depsgraph &depsgraph,
 
   scale_factors(factors, strength);
 
-  calc_brush_texture_factors(ss, brush, positions, factors);
+  calc_brush_texture_factors(PaintMode::Sculpt, ss, brush, positions, factors);
 
   tls.masks.resize(verts.size());
   const MutableSpan<float> masks = tls.masks;
@@ -288,6 +292,7 @@ void do_smooth_mask_brush(const Depsgraph &depsgraph,
                           const IndexMask &node_mask,
                           float brush_strength)
 {
+  PRF_scope(ProfileCategory::Editor);
   SculptSession &ss = *object.runtime->sculpt_session;
   bke::pbvh::Tree &pbvh = *bke::object::pbvh_get(object);
   const Brush &brush = *BKE_paint_brush_for_read(&sd.paint);

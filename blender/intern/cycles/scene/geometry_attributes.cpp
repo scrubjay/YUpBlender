@@ -13,11 +13,14 @@
 #include "scene/light.h"
 #include "scene/mesh.h"
 #include "scene/object.h"
+#include "scene/pointcloud.h"
 #include "scene/scene.h"
 #include "scene/shader.h"
 #include "scene/shader_nodes.h"
 
+#include "util/map.h"
 #include "util/progress.h"
+#include "util/set.h"
 
 CCL_NAMESPACE_BEGIN
 
@@ -41,10 +44,16 @@ bool Geometry::need_attribute(const Scene *scene, AttributeStandard std)
   return false;
 }
 
-bool Geometry::need_attribute(Scene * /*scene*/, ustring name)
+bool Geometry::need_attribute(Scene *scene, ustring name)
 {
   if (name.empty()) {
     return false;
+  }
+
+  for (const Shader *shader : scene->shaders) {
+    if (shader->global_attributes.find(name)) {
+      return true;
+    }
   }
 
   for (Node *node : used_shaders) {
@@ -105,6 +114,12 @@ static void emit_attribute_map_entry(AttributeMap *attr_map,
   }
   else if (type == TypeRGBA) {
     attr_map[index].type = NODE_ATTR_RGBA;
+  }
+  else if (type == TypeQuaternion) {
+    attr_map[index].type = NODE_ATTR_QUATERNION;
+  }
+  else if (type == TypePackedSphericalHarmonicsRest) {
+    attr_map[index].type = NODE_ATTR_SPHERICAL_HARMONICS_REST;
   }
   else {
     attr_map[index].type = NODE_ATTR_FLOAT3;
@@ -297,7 +312,12 @@ class AttributeTableBuilder {
         attr_float3{dscene->attributes_float3, 0, 0},
         attr_float4{dscene->attributes_float4, 0, 0},
         attr_uchar4{dscene->attributes_uchar4, 0, 0},
-        attr_normal{dscene->attributes_normal, 0, 0}
+        attr_normal{dscene->attributes_normal, 0, 0},
+        attr_quaternion{dscene->attributes_quaternion, 0, 0},
+        attr_spherical_harmonics_rest{dscene->attributes_spherical_harmonics_rest, 0, 0},
+        tri_verts{dscene->tri_verts, 0, 0},
+        curve_keys{dscene->curve_keys, 0, 0},
+        points{dscene->points, 0, 0}
   {
   }
 
@@ -307,6 +327,13 @@ class AttributeTableBuilder {
   AttributeTableEntry<float4> attr_float4;
   AttributeTableEntry<uchar4> attr_uchar4;
   AttributeTableEntry<packed_normal> attr_normal;
+  AttributeTableEntry<Quaternion> attr_quaternion;
+  AttributeTableEntry<PackedSphericalHarmonicsRest> attr_spherical_harmonics_rest;
+
+  /* Positions in dedicated arrays, gives better BVH2 performance. */
+  AttributeTableEntry<packed_float3> tri_verts;
+  AttributeTableEntry<float4> curve_keys;
+  AttributeTableEntry<float4> points;
 
   void add(Geometry *geom,
            Attribute *mattr,
@@ -321,12 +348,24 @@ class AttributeTableBuilder {
       return;
     }
 
-    /* store element and type */
+    /* For hair and pointcloud, pack combined position + radius as float4. */
+    if (mattr->std == ATTR_STD_POSITION && (geom->is_hair() || geom->is_pointcloud())) {
+      add_position_radius(geom, mattr, type, desc);
+      return;
+    }
+    if (mattr->std == ATTR_STD_RADIUS && (geom->is_hair() || geom->is_pointcloud())) {
+      desc.element = ATTR_ELEMENT_NONE;
+      desc.offset = 0;
+      return;
+    }
+
+    /* Store element and type. */
     desc.element = mattr->element;
     type = mattr->type;
 
-    /* store attribute data in arrays */
-    const size_t size = Attribute::element_size(geom, mattr->element, prim);
+    /* Store attribute data in arrays, including possible motion steps. */
+    const size_t per_step = Attribute::element_size(geom, mattr->element, prim);
+    const int num_motion = mattr->motion.size();
 
     const AttributeElement &element = desc.element;
     int &offset = desc.offset;
@@ -337,35 +376,71 @@ class AttributeTableBuilder {
       offset = handle.kernel_id();
     }
     else if (mattr->element & ATTR_ELEMENT_IS_BYTE) {
-      offset = attr_uchar4.add(mattr->data_uchar4(), size, mattr->modified);
+      offset = attr_uchar4.add(mattr->data<uchar4>(), per_step, mattr->modified);
+      for (int step = 1; step <= num_motion; step++) {
+        attr_uchar4.add(mattr->data<uchar4>(step), per_step, mattr->modified);
+      }
     }
     else if (mattr->element & ATTR_ELEMENT_IS_NORMAL) {
-      offset = attr_normal.add(mattr->data_normal(), size, mattr->modified);
+      offset = attr_normal.add(mattr->data<packed_normal>(), per_step, mattr->modified);
+      for (int step = 1; step <= num_motion; step++) {
+        attr_normal.add(mattr->data<packed_normal>(step), per_step, mattr->modified);
+      }
     }
     else if (mattr->type == TypeFloat) {
-      offset = attr_float.add(mattr->data_float(), size, mattr->modified);
+      offset = attr_float.add(mattr->data<float>(), per_step, mattr->modified);
+      for (int step = 1; step <= num_motion; step++) {
+        attr_float.add(mattr->data<float>(step), per_step, mattr->modified);
+      }
     }
     else if (mattr->type == TypeFloat2) {
-      offset = attr_float2.add(mattr->data_float2(), size, mattr->modified);
+      offset = attr_float2.add(mattr->data<float2>(), per_step, mattr->modified);
+      for (int step = 1; step <= num_motion; step++) {
+        attr_float2.add(mattr->data<float2>(step), per_step, mattr->modified);
+      }
     }
     else if (mattr->type == TypeMatrix) {
-      offset = attr_float4.add((float4 *)mattr->data_transform(), size * 3, mattr->modified);
+      offset = attr_float4.add(
+          (const float4 *)mattr->data<Transform>(), per_step * 3, mattr->modified);
+      for (int step = 1; step <= num_motion; step++) {
+        attr_float4.add(
+            (const float4 *)mattr->data<Transform>(step), per_step * 3, mattr->modified);
+      }
+    }
+    else if (mattr->type == TypeQuaternion) {
+      offset = attr_quaternion.add(mattr->data<Quaternion>(), per_step, mattr->modified);
+      for (int step = 1; step <= num_motion; step++) {
+        attr_quaternion.add(mattr->data<Quaternion>(step), per_step, mattr->modified);
+      }
+    }
+    else if (mattr->type == TypePackedSphericalHarmonicsRest) {
+      offset = attr_spherical_harmonics_rest.add(
+          mattr->data<PackedSphericalHarmonicsRest>(), per_step, mattr->modified);
+      for (int step = 1; step <= num_motion; step++) {
+        attr_spherical_harmonics_rest.add(
+            mattr->data<PackedSphericalHarmonicsRest>(step), per_step, mattr->modified);
+      }
     }
     else if (mattr->type == TypeFloat4 || mattr->type == TypeRGBA) {
-      offset = attr_float4.add(mattr->data_float4(), size, mattr->modified);
+      offset = attr_float4.add(mattr->data<float4>(), per_step, mattr->modified);
+      for (int step = 1; step <= num_motion; step++) {
+        attr_float4.add(mattr->data<float4>(step), per_step, mattr->modified);
+      }
     }
     else {
-      offset = attr_float3.add(mattr->data_float3(), size, mattr->modified);
+      AttributeTableEntry<packed_float3> &table = (mattr->std == ATTR_STD_POSITION) ? tri_verts :
+                                                                                      attr_float3;
+      offset = table.add(mattr->data<packed_float3>(), per_step, mattr->modified);
+      for (int step = 1; step <= num_motion; step++) {
+        table.add(mattr->data<packed_float3>(step), per_step, mattr->modified);
+      }
     }
 
-    /* mesh vertex/curve index is global, not per object, so we sneak
-     * a correction for that in here */
-    if (geom->is_mesh()) {
+    /* Primitive index is global, not per object, so we sneak a correction
+     * for that in here. Vertex index is per object. */
+    if (geom->is_mesh() || geom->is_volume()) {
       Mesh *mesh = static_cast<Mesh *>(geom);
-      if (element & ATTR_ELEMENT_VERTEX) {
-        offset -= mesh->vert_offset;
-      }
-      else if (element & ATTR_ELEMENT_FACE) {
+      if (element & ATTR_ELEMENT_FACE) {
         offset -= mesh->prim_offset;
       }
       else if (element & ATTR_ELEMENT_CORNER) {
@@ -376,9 +451,6 @@ class AttributeTableBuilder {
       Hair *hair = static_cast<Hair *>(geom);
       if (element & ATTR_ELEMENT_CURVE) {
         offset -= hair->prim_offset;
-      }
-      else if (element & ATTR_ELEMENT_CURVE_KEY) {
-        offset -= hair->curve_key_offset;
       }
     }
     else if (geom->is_pointcloud()) {
@@ -394,7 +466,10 @@ class AttributeTableBuilder {
       return;
     }
 
-    const size_t size = Attribute::element_size(geom, mattr->element, prim);
+    /* Must match the number of steps written by add(), which is derived from
+     * the attribute's own stored motion steps rather than geom->get_motion_steps(). */
+    const int steps = mattr->num_motion_steps();
+    const size_t size = Attribute::element_size(geom, mattr->element, prim) * steps;
 
     if (mattr->element & ATTR_ELEMENT_VOXEL) {
       /* pass */
@@ -417,9 +492,60 @@ class AttributeTableBuilder {
     else if (mattr->type == TypeFloat4 || mattr->type == TypeRGBA) {
       attr_float4.reserve(size);
     }
-    else {
-      attr_float3.reserve(size);
+    else if (mattr->type == TypeQuaternion) {
+      attr_quaternion.reserve(size);
     }
+    else if (mattr->type == TypePackedSphericalHarmonicsRest) {
+      attr_spherical_harmonics_rest.reserve(size);
+    }
+    else {
+      AttributeTableEntry<packed_float3> &table = (mattr->std == ATTR_STD_POSITION) ? tri_verts :
+                                                                                      attr_float3;
+      table.reserve(size);
+    }
+  }
+
+  /* Pack combined position + radius for hair and point cloud. */
+  void add_position_radius(Geometry *geom,
+                           Attribute *attr_P,
+                           TypeDesc &type,
+                           AttributeDescriptor &desc)
+  {
+    Attribute *attr_R = geom->attributes.find(ATTR_STD_RADIUS);
+    const size_t base_size = attr_P->size;
+    const int steps = attr_P->has_motion() ? geom->get_motion_steps() : 1;
+    const size_t total_size = base_size * steps;
+
+    vector<float4> combined(total_size);
+    for (int step = 0; step < steps; step++) {
+      const packed_float3 *P = attr_P->data<packed_float3>(step);
+      const float *R = attr_R->data<float>(step);
+      const size_t dst_offset = size_t(step) * base_size;
+      for (size_t i = 0; i < base_size; i++) {
+        combined[dst_offset + i] = make_float4(P[i], R[i]);
+      }
+    }
+
+    desc.element = attr_P->element;
+    type = TypeFloat4;
+
+    int &offset = desc.offset;
+    const bool modified = attr_P->modified || attr_R->modified;
+    AttributeTableEntry<float4> &table = geom->is_hair() ? curve_keys : points;
+    offset = table.add(combined.data(), total_size, modified);
+
+    /* Pointcloud uses global primitive index. */
+    if (geom->is_pointcloud()) {
+      offset -= geom->prim_offset;
+    }
+  }
+
+  void reserve_position_radius(Geometry *geom, Attribute *attr_P)
+  {
+    const int steps = attr_P->has_motion() ? geom->get_motion_steps() : 1;
+    const size_t total_size = attr_P->size * steps;
+    AttributeTableEntry<float4> &table = geom->is_hair() ? curve_keys : points;
+    table.reserve(total_size);
   }
 
   void alloc()
@@ -430,6 +556,11 @@ class AttributeTableBuilder {
     attr_float4.alloc();
     attr_uchar4.alloc();
     attr_normal.alloc();
+    attr_quaternion.alloc();
+    attr_spherical_harmonics_rest.alloc();
+    tri_verts.alloc();
+    curve_keys.alloc();
+    points.alloc();
   }
 
   void copy_to_device_if_modified()
@@ -440,6 +571,11 @@ class AttributeTableBuilder {
     attr_float4.data.copy_to_device_if_modified();
     attr_uchar4.data.copy_to_device_if_modified();
     attr_normal.data.copy_to_device_if_modified();
+    attr_quaternion.data.copy_to_device_if_modified();
+    attr_spherical_harmonics_rest.data.copy_to_device_if_modified();
+    tri_verts.data.copy_to_device_if_modified();
+    curve_keys.data.copy_to_device_if_modified();
+    points.data.copy_to_device_if_modified();
   }
 };
 
@@ -470,15 +606,28 @@ void GeometryManager::device_update_attributes(Device *device,
 
     for (const Attribute &attr : geom->attributes.attributes) {
       switch (attr.std) {
+        case ATTR_STD_POSITION:
         case ATTR_STD_VERTEX_NORMAL:
-        case ATTR_STD_MOTION_VERTEX_NORMAL:
         case ATTR_STD_CORNER_NORMAL:
-        case ATTR_STD_MOTION_CORNER_NORMAL:
         case ATTR_STD_SHADOW_TRANSPARENCY:
           geom_attributes[i].add(attr.std);
           break;
         default:
           break;
+      }
+      if (geom->is_pointcloud() &&
+          static_cast<PointCloud *>(geom)->get_render_as() == PointCloud::RENDER_AS_GSPLATS)
+      {
+        switch (attr.std) {
+          case ATTR_STD_GSPLAT_RADIANCE_BASE:
+          case ATTR_STD_GSPLAT_RADIANCE_SPHERICAL_HARMONICS_REST:
+          case ATTR_STD_GSPLAT_SCALE:
+          case ATTR_STD_GSPLAT_ROTATION:
+            geom_attributes[i].add(attr.std);
+            break;
+          default:
+            break;
+        }
       }
     }
   }
@@ -528,8 +677,23 @@ void GeometryManager::device_update_attributes(Device *device,
   for (size_t i = 0; i < scene->geometry.size(); i++) {
     Geometry *geom = scene->geometry[i];
     AttributeRequestSet &attributes = geom_attributes[i];
+    unordered_set<const Attribute *> reserved;
     for (AttributeRequest &req : attributes.requests) {
       Attribute *attr = geom->attributes.find(req);
+      if (attr && !reserved.insert(attr).second) {
+        /* Store attribute requested in different ways once. */
+        continue;
+      }
+      if (attr && (geom->is_hair() || geom->is_pointcloud())) {
+        /* Special cases for packed position + radius. */
+        if (attr->std == ATTR_STD_POSITION) {
+          builder.reserve_position_radius(geom, attr);
+          continue;
+        }
+        if (attr->std == ATTR_STD_RADIUS) {
+          continue;
+        }
+      }
       builder.reserve(geom, attr, ATTR_PRIM_GEOMETRY);
     }
   }
@@ -545,13 +709,15 @@ void GeometryManager::device_update_attributes(Device *device,
   builder.alloc();
 
   /* The order of those flags needs to match that of AttrKernelDataType. */
-  const bool attributes_need_realloc[AttrKernelDataType::NUM] = {
+  const bool attributes_need_realloc[int(AttrKernelDataType::NUM)] = {
       dscene->attributes_float.need_realloc(),
       dscene->attributes_float2.need_realloc(),
       dscene->attributes_float3.need_realloc(),
       dscene->attributes_float4.need_realloc(),
       dscene->attributes_uchar4.need_realloc(),
       dscene->attributes_normal.need_realloc(),
+      dscene->attributes_quaternion.need_realloc(),
+      dscene->attributes_spherical_harmonics_rest.need_realloc(),
   };
 
   /* Fill in attributes. */
@@ -559,14 +725,23 @@ void GeometryManager::device_update_attributes(Device *device,
     Geometry *geom = scene->geometry[i];
     AttributeRequestSet &attributes = geom_attributes[i];
 
-    /* todo: we now store std and name attributes from requests even if
-     * they actually refer to the same mesh attributes, optimize */
+    unordered_map<const Attribute *, const AttributeRequest *> added;
+
     for (AttributeRequest &req : attributes.requests) {
       Attribute *attr = geom->attributes.find(req);
 
       if (attr) {
+        const auto it = added.find(attr);
+        if (it != added.end()) {
+          /* Store attribute requested in different ways once. */
+          req.type = it->second->type;
+          req.desc = it->second->desc;
+          continue;
+        }
+        added[attr] = &req;
+
         /* force a copy if we need to reallocate all the data */
-        attr->modified |= attributes_need_realloc[Attribute::kernel_type(*attr)];
+        attr->modified |= attributes_need_realloc[int(Attribute::kernel_type(*attr))];
       }
 
       builder.add(geom, attr, ATTR_PRIM_GEOMETRY, req.type, req.desc);
@@ -582,11 +757,22 @@ void GeometryManager::device_update_attributes(Device *device,
     AttributeRequestSet &attributes = object_attributes[i];
     AttributeSet &values = object_attribute_values[i];
 
+    unordered_map<const Attribute *, const AttributeRequest *> added;
+
     for (AttributeRequest &req : attributes.requests) {
       Attribute *attr = values.find(req);
 
       if (attr) {
-        attr->modified |= attributes_need_realloc[Attribute::kernel_type(*attr)];
+        const auto it = added.find(attr);
+        if (it != added.end()) {
+          /* Store attribute requested in different ways once. */
+          req.type = it->second->type;
+          req.desc = it->second->desc;
+          continue;
+        }
+        added[attr] = &req;
+
+        attr->modified |= attributes_need_realloc[int(Attribute::kernel_type(*attr))];
       }
 
       builder.add(object->geometry, attr, ATTR_PRIM_GEOMETRY, req.type, req.desc);

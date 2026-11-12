@@ -10,14 +10,16 @@
 #include <algorithm>
 #include <csetjmp>
 #include <cstdio>
+#include <limits>
 
 #include "MEM_guardedalloc.h"
 
-#include "BLI_fileops.h"
-#include "BLI_listbase.h"
-#include "BLI_string.h"
-#include "BLI_string_utf8.h"
-#include "BLI_utildefines.h"
+#include "BLI_fileops.hh"
+#include "BLI_listbase.hh"
+#include "BLI_math_base.hh"
+#include "BLI_string.hh"
+#include "BLI_string_utf8.hh"
+#include "BLI_utildefines.hh"
 
 #include "BKE_idprop.hh"
 
@@ -49,11 +51,13 @@ static void skip_input_data(j_decompress_ptr cinfo, long num_bytes);
 static void term_source(j_decompress_ptr cinfo);
 static void memory_source(j_decompress_ptr cinfo, const uchar *buffer, size_t size);
 static boolean handle_app1(j_decompress_ptr cinfo);
-static ImBuf *ibJpegImageFromCinfo(
-    jpeg_decompress_struct *cinfo, int flags, int max_size, size_t *r_width, size_t *r_height);
 
 static const uchar jpeg_default_quality = 75;
 static uchar ibuf_quality;
+
+/* -------------------------------------------------------------------- */
+/** \name JPG Magic Check
+ * \{ */
 
 bool imb_is_a_jpeg(const uchar *mem, const size_t size)
 {
@@ -64,9 +68,11 @@ bool imb_is_a_jpeg(const uchar *mem, const size_t size)
   return memcmp(mem, magic, sizeof(magic)) == 0;
 }
 
-/*----------------------------------------------------------
- * JPG ERROR HANDLING
- *---------------------------------------------------------- */
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name JPG Error Handling
+ * \{ */
 
 struct my_error_mgr {
   jpeg_error_mgr pub; /* "public" fields */
@@ -90,9 +96,11 @@ static void jpeg_error(j_common_ptr cinfo)
   longjmp(err->setjmp_buffer, 1);
 }
 
-/*----------------------------------------------------------
- * INPUT HANDLER FROM MEMORY
- *---------------------------------------------------------- */
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Input Handler from Memory
+ * \{ */
 
 struct my_source_mgr {
   jpeg_source_mgr pub; /* public fields */
@@ -166,6 +174,12 @@ static void memory_source(j_decompress_ptr cinfo, const uchar *buffer, size_t si
   src->buffer = buffer;
   src->size = size;
 }
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name APP1 Marker Handling
+ * \{ */
 
 #define MAKESTMT(stuff) \
   do { \
@@ -250,8 +264,17 @@ static boolean handle_app1(j_decompress_ptr cinfo)
   return true;
 }
 
-static ImBuf *ibJpegImageFromCinfo(
-    jpeg_decompress_struct *cinfo, int flags, int max_size, size_t *r_width, size_t *r_height)
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Load JPG Image
+ * \{ */
+
+static ImBuf *ibJpegImageFromCinfo(jpeg_decompress_struct *cinfo,
+                                   ImBufFlags flags,
+                                   int max_size,
+                                   size_t *r_width,
+                                   size_t *r_height)
 {
   JSAMPARRAY row_pointer;
   JSAMPLE *buffer = nullptr;
@@ -297,16 +320,28 @@ static ImBuf *ibJpegImageFromCinfo(
     x = cinfo->output_width;
     y = cinfo->output_height;
 
-    if (flags & IB_test) {
-      jpeg_abort_decompress(cinfo);
-      ibuf = IMB_allocImBuf(x, y, 8 * depth, 0);
+    ImColorMode color_mode = ImColorMode::RGBA;
+    if (depth == 1) {
+      color_mode = ImColorMode::BW;
     }
-    else if ((ibuf = IMB_allocImBuf(x, y, 8 * depth, IB_byte_data | IB_uninitialized_pixels)) ==
-             nullptr)
+    else if (depth == 3) {
+      color_mode = ImColorMode::RGB;
+    }
+
+    if (flag_is_set(flags, ImBufFlags::Test)) {
+      jpeg_abort_decompress(cinfo);
+      ibuf = IMB_allocImBuf(x, y, ImBufFlags::Zero);
+      if (ibuf) {
+        ibuf->color_mode = color_mode;
+      }
+    }
+    else if ((ibuf = IMB_allocImBuf(
+                  x, y, ImBufFlags::ByteData | ImBufFlags::UninitializedPixels)) == nullptr)
     {
       jpeg_abort_decompress(cinfo);
     }
     else {
+      ibuf->color_mode = color_mode;
       row_stride = cinfo->output_width * depth;
 
       row_pointer = (*cinfo->mem->alloc_sarray)(
@@ -391,9 +426,8 @@ static ImBuf *ibJpegImageFromCinfo(
            * the information when we write
            * it back to disk.
            */
-          IMB_metadata_ensure(&ibuf->metadata);
-          IMB_metadata_set_field(ibuf->metadata, "None", str);
-          ibuf->flags |= IB_metadata;
+          IMB_metadata_set_field(ibuf->metadata_for_write(), "None", str);
+          ibuf->flags |= ImBufFlags::Metadata;
           MEM_delete(str);
           goto next_stamp_marker;
         }
@@ -401,8 +435,7 @@ static ImBuf *ibJpegImageFromCinfo(
         key = strchr(str, ':');
         /*
          * A little paranoid, but the file maybe
-         * is broken... and a "extra" check is better
-         * then segfault ;)
+         * is broken... and a "extra" check is better then a segfault :)
          */
         if (!key) {
           MEM_delete(str);
@@ -418,9 +451,8 @@ static ImBuf *ibJpegImageFromCinfo(
 
         *value = '\0'; /* need finish the key string */
         value++;
-        IMB_metadata_ensure(&ibuf->metadata);
-        IMB_metadata_set_field(ibuf->metadata, key, value);
-        ibuf->flags |= IB_metadata;
+        IMB_metadata_set_field(ibuf->metadata_for_write(), key, value);
+        ibuf->flags |= ImBufFlags::Metadata;
         MEM_delete(str);
       next_stamp_marker:
         marker = marker->next;
@@ -452,7 +484,7 @@ static ImBuf *ibJpegImageFromCinfo(
 
 ImBuf *imb_load_jpeg(const uchar *buffer,
                      size_t size,
-                     int flags,
+                     ImBufFlags flags,
                      ImFileColorSpace & /*r_colorspace*/)
 {
   jpeg_decompress_struct _cinfo, *cinfo = &_cinfo;
@@ -483,6 +515,12 @@ ImBuf *imb_load_jpeg(const uchar *buffer,
   return ibuf;
 }
 
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Load JPG Thumbnail
+ * \{ */
+
 /* Defines for JPEG Header markers and segment size. */
 #define JPEG_MARKER_MSB (0xFF)
 #define JPEG_MARKER_SOI (0xD8)
@@ -490,7 +528,7 @@ ImBuf *imb_load_jpeg(const uchar *buffer,
 #define JPEG_APP1_MAX (1 << 16)
 
 ImBuf *imb_thumbnail_jpeg(const char *filepath,
-                          const int flags,
+                          const ImBufFlags flags,
                           const size_t max_thumb_size,
                           ImFileColorSpace &r_colorspace,
                           size_t *r_width,
@@ -564,6 +602,16 @@ ImBuf *imb_thumbnail_jpeg(const char *filepath,
 #undef JPEG_MARKER_APP1
 #undef JPEG_APP1_MAX
 
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Save JPG Image
+ * \{ */
+
+/* `libjpeg` has a maximum comment/marker length of 65533, however it does not provide a definition
+ * for that, so we hard-code it ourselves. */
+#define MAX_LIBJPEG_MARKER_LENGTH 65533
+
 static void write_jpeg(jpeg_compress_struct *cinfo, ImBuf *ibuf)
 {
   JSAMPLE *buffer = nullptr;
@@ -579,12 +627,12 @@ static void write_jpeg(jpeg_compress_struct *cinfo, ImBuf *ibuf)
   memset(neogeo_word, 0, sizeof(*neogeo_word));
   neogeo_word->quality = ibuf->foptions.quality;
   jpeg_write_marker(cinfo, 0xe1, reinterpret_cast<JOCTET *>(neogeo), 10);
-  if (ibuf->metadata) {
+  if (ibuf->metadata()) {
 
     /* Static storage array for the short metadata. */
     char static_text[1024];
     const size_t static_text_size = ARRAY_SIZE(static_text);
-    for (IDProperty &prop : ibuf->metadata->data.group) {
+    for (IDProperty &prop : ibuf->metadata()->data.group) {
       if (prop.type == IDP_STRING) {
         size_t text_len;
         if (STREQ(prop.name, "None")) {
@@ -615,6 +663,14 @@ static void write_jpeg(jpeg_compress_struct *cinfo, ImBuf *ibuf)
          */
         text_len = BLI_snprintf_utf8_rlen(
             text, text_size, "Blender:%s:%s", prop.name, IDP_string_get(&prop));
+        /* Truncate the data if it does not fit in a single marker, as giving a buffer to `libjpeg`
+         * bigger that #MAX_LIBJPEG_MARKER_LENGTH will result in the JPEG file not being written.
+         * See #158751.
+         */
+        if (text_len > MAX_LIBJPEG_MARKER_LENGTH) {
+          CLOG_WARN(&LOG, "Writing truncated data for \"%s\"", prop.name);
+          text_len = MAX_LIBJPEG_MARKER_LENGTH;
+        }
         /* Don't write the null byte (not expected by the JPEG format). */
         jpeg_write_marker(cinfo, JPEG_COM, reinterpret_cast<JOCTET *>(text), uint(text_len));
 
@@ -628,9 +684,10 @@ static void write_jpeg(jpeg_compress_struct *cinfo, ImBuf *ibuf)
     }
   }
 
-  /* Write ICC profile if there is one associated with the colorspace. */
+  /* Write ICC profile if there is one associated with the colorspace.
+   * Our profiles are only valid for RGB channels. */
   const ColorSpace *colorspace = ibuf->byte_buffer.colorspace;
-  if (colorspace) {
+  if (colorspace && cinfo->in_color_space == JCS_RGB) {
     Vector<char> icc_profile = IMB_colormanagement_space_to_icc_profile(colorspace);
     if (!icc_profile.is_empty()) {
       icc_profile.prepend({'I', 'C', 'C', '_', 'P', 'R', 'O', 'F', 'I', 'L', 'E', 0, 0, 1});
@@ -680,6 +737,29 @@ static void write_jpeg(jpeg_compress_struct *cinfo, ImBuf *ibuf)
   MEM_delete(row_pointer[0]);
 }
 
+/**
+ * Round the pixels-per-meter density to the 16 bit integers JFIF stores.
+ *
+ * \return The relative error introduced by rounding or a dummy (maximum) value
+ * when the result is outside the range JFIF supports.
+ */
+static double jpeg_density_from_ppm(const double ppm[2],
+                                    const double unit_scale,
+                                    UINT16 r_density[2])
+{
+  double error = 0.0;
+  for (int i = 0; i < 2; i++) {
+    const double density = ppm[i] * unit_scale;
+    const double density_round = math::round(density);
+    if (!(density_round >= 1.0 && density_round <= double(std::numeric_limits<UINT16>::max()))) {
+      return std::numeric_limits<double>::max();
+    }
+    r_density[i] = UINT16(density_round);
+    error += math::abs(density_round - density) / density;
+  }
+  return error;
+}
+
 static int init_jpeg(FILE *outfile, jpeg_compress_struct *cinfo, ImBuf *ibuf)
 {
   int quality;
@@ -697,17 +777,9 @@ static int init_jpeg(FILE *outfile, jpeg_compress_struct *cinfo, ImBuf *ibuf)
   cinfo->image_height = ibuf->y;
 
   cinfo->in_color_space = JCS_RGB;
-  if (ibuf->planes == 8) {
+  if (ibuf->color_mode == ImColorMode::BW) {
     cinfo->in_color_space = JCS_GRAYSCALE;
   }
-#if 0
-  /* just write RGBA as RGB,
-   * unsupported feature only confuses other s/w */
-
-  if (ibuf->planes == 32) {
-    cinfo->in_color_space = JCS_UNKNOWN;
-  }
-#endif
   switch (cinfo->in_color_space) {
     case JCS_RGB:
       cinfo->input_components = 3;
@@ -729,6 +801,31 @@ static int init_jpeg(FILE *outfile, jpeg_compress_struct *cinfo, ImBuf *ibuf)
 
   cinfo->dct_method = JDCT_FLOAT;
   jpeg_set_quality(cinfo, quality, true);
+
+  /* JFIF stores the density as integers in either dots per inch or centimeter.
+   * Use whichever unit rounds with the least error. */
+  if (ibuf->ppm[0] > 0.0 && ibuf->ppm[1] > 0.0) {
+    /* The JFIF unit code & the size of the unit in meters. */
+    struct Unit {
+      UINT8 code;
+      double scale;
+    };
+    const Unit units[] = {
+        {1, 0.0254}, /* Inches. */
+        {2, 0.01},   /* Centimeters. */
+    };
+    double error_best = std::numeric_limits<double>::max();
+    for (const Unit &unit : units) {
+      UINT16 density[2];
+      const double error_test = jpeg_density_from_ppm(ibuf->ppm, unit.scale, density);
+      if (error_test < error_best) {
+        error_best = error_test;
+        cinfo->density_unit = unit.code;
+        cinfo->X_density = density[0];
+        cinfo->Y_density = density[1];
+      }
+    }
+  }
 
   return 0;
 }
@@ -767,11 +864,13 @@ static bool save_stdjpeg(const char *filepath, ImBuf *ibuf)
   return true;
 }
 
-bool imb_savejpeg(ImBuf *ibuf, const char *filepath, int flags)
+bool imb_savejpeg(ImBuf *ibuf, const char *filepath, ImBufFlags flags)
 {
 
   ibuf->flags = flags;
   return save_stdjpeg(filepath, ibuf);
 }
+
+/** \} */
 
 }  // namespace blender

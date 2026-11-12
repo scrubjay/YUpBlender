@@ -11,7 +11,7 @@
 #include "../../BPy_Convert.h"
 #include "../../Interface0D/BPy_SVertex.h"
 
-#include "BLI_sys_types.h"
+#include "BLI_sys_types.hh"
 
 using namespace Freestyle;
 
@@ -28,18 +28,22 @@ PyDoc_STRVAR(
     "a face of the input mesh. It can be a silhouette, a ridge or valley,\n"
     "a suggestive contour.\n"
     "\n"
-    ".. method:: __init__()\n"
-    "            __init__(brother)\n"
-    "            __init__(first_vertex, second_vertex)\n"
+    ".. method:: __init__(*args)\n"
+    "\n"
+    "   Accepted call signatures:\n"
+    "\n"
+    "   - ``__init__()``\n"
+    "   - ``__init__(brother)``\n"
+    "   - ``__init__(first_vertex, second_vertex)``\n"
     "\n"
     "   Builds an :class:`FEdgeSmooth` using the default constructor,\n"
     "   copy constructor, or between two :class:`SVertex`.\n"
     "\n"
-    "   :arg brother: An FEdgeSmooth object.\n"
+    "   :param brother: An FEdgeSmooth object.\n"
     "   :type brother: :class:`FEdgeSmooth`\n"
-    "   :arg first_vertex: The first SVertex object.\n"
+    "   :param first_vertex: The first SVertex object.\n"
     "   :type first_vertex: :class:`SVertex`\n"
-    "   :arg second_vertex: The second SVertex object.\n"
+    "   :param second_vertex: The second SVertex object.\n"
     "   :type second_vertex: :class:`SVertex`\n");
 static int FEdgeSmooth_init(BPy_FEdgeSmooth *self, PyObject *args, PyObject *kwds)
 {
@@ -47,7 +51,14 @@ static int FEdgeSmooth_init(BPy_FEdgeSmooth *self, PyObject *args, PyObject *kwd
   static const char *kwlist_2[] = {"first_vertex", "second_vertex", nullptr};
   PyObject *obj1 = nullptr, *obj2 = nullptr;
 
-  if (PyArg_ParseTupleAndKeywords(args, kwds, "|O!", (char **)kwlist_1, &FEdgeSmooth_Type, &obj1))
+  if (PyArg_ParseTupleAndKeywords(args,
+                                  kwds,
+                                  "|"  /* Optional arguments. */
+                                  "O!" /* `brother` */
+                                  ":__init__",
+                                  (char **)kwlist_1,
+                                  &FEdgeSmooth_Type,
+                                  &obj1))
   {
     if (!obj1) {
       self->fes = new FEdgeSmooth();
@@ -57,8 +68,16 @@ static int FEdgeSmooth_init(BPy_FEdgeSmooth *self, PyObject *args, PyObject *kwd
     }
   }
   else if ((void)PyErr_Clear(),
-           PyArg_ParseTupleAndKeywords(
-               args, kwds, "O!O!", (char **)kwlist_2, &SVertex_Type, &obj1, &SVertex_Type, &obj2))
+           PyArg_ParseTupleAndKeywords(args,
+                                       kwds,
+                                       "O!" /* `first_vertex` */
+                                       "O!" /* `second_vertex` */
+                                       ":__init__",
+                                       (char **)kwlist_2,
+                                       &SVertex_Type,
+                                       &obj1,
+                                       &SVertex_Type,
+                                       &obj2))
   {
     self->fes = new FEdgeSmooth(((BPy_SVertex *)obj1)->sv, ((BPy_SVertex *)obj2)->sv);
   }

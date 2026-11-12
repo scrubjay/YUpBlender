@@ -28,12 +28,12 @@
 #include "DNA_vfont_types.h"
 
 #include "BLI_kdtree.hh"
-#include "BLI_linklist.h"
-#include "BLI_listbase.h"
-#include "BLI_math_matrix.h"
-#include "BLI_math_vector.h"
-#include "BLI_string_utf8.h"
-#include "BLI_utildefines.h"
+#include "BLI_linklist.hh"
+#include "BLI_listbase.hh"
+#include "BLI_math_matrix_c.hh"
+#include "BLI_math_vector_c.hh"
+#include "BLI_string_utf8.hh"
+#include "BLI_utildefines.hh"
 #include "BLI_vector_set.hh"
 
 #include "BLT_translation.hh"
@@ -64,6 +64,7 @@
 #include "BKE_node_tree_interface.hh"
 #include "BKE_object.hh"
 #include "BKE_object_types.hh"
+#include "BKE_paint.hh"
 #include "BKE_report.hh"
 #include "BKE_scene.hh"
 
@@ -135,7 +136,7 @@ static wmOperatorStatus vertex_parent_set_exec(bContext *C, wmOperator *op)
 
     BMEditMesh *em = mesh->runtime->edit_mesh.get();
 
-    BKE_editmesh_looptris_and_normals_calc(em);
+    BKE_editmesh_looptris_and_normals_calc(em, BKE_editmesh_bmesh_get_for_write(mesh));
 
     /* Make sure the evaluated mesh is updated.
      *
@@ -147,7 +148,8 @@ static wmOperatorStatus vertex_parent_set_exec(bContext *C, wmOperator *op)
     BMVert *eve;
     BMIter iter;
     int curr_index;
-    BM_ITER_MESH_INDEX (eve, &iter, em->bm, BM_VERTS_OF_MESH, curr_index) {
+    BMesh *bm = BKE_editmesh_bmesh_get_for_write(obedit);
+    BM_ITER_MESH_INDEX (eve, &iter, bm, BM_VERTS_OF_MESH, curr_index) {
       if (BM_elem_flag_test(eve, BM_ELEM_SELECT)) {
         if (par1 == INDEX_UNSET) {
           par1 = curr_index;
@@ -170,7 +172,7 @@ static wmOperatorStatus vertex_parent_set_exec(bContext *C, wmOperator *op)
   else if (ELEM(obedit->type, OB_SURF, OB_CURVES_LEGACY)) {
     ListBaseT<Nurb> *editnurb = object_editcurve_get(obedit);
     int curr_index = 0;
-    for (Nurb *nu = static_cast<Nurb *>(editnurb->first); nu != nullptr; nu = nu->next) {
+    for (Nurb *nu = editnurb->first(); nu != nullptr; nu = nu->next) {
       if (nu->type == CU_BEZIER) {
         BezTriple *bezt = nu->bezt;
         for (int nurb_index = 0; nurb_index < nu->pntsu; nurb_index++, bezt++, curr_index++) {
@@ -261,6 +263,7 @@ static wmOperatorStatus vertex_parent_set_exec(bContext *C, wmOperator *op)
       else {
         BKE_view_layer_synced_ensure(*bmain, scene, view_layer);
         ob->parent = BKE_view_layer_active_object_get(view_layer);
+        BKE_collection_object_parented_sort_index_reset(*bmain, *ob);
         if (par3 != INDEX_UNSET) {
           ob->partype = PARVERT3;
           ob->par1 = par1;
@@ -339,7 +342,7 @@ static void object_remove_parent_deform_modifiers(Object *ob, const Object *par)
     ModifierData *md, *mdn;
 
     /* assume that we only need to remove the first instance of matching deform modifier here */
-    for (md = static_cast<ModifierData *>(ob->modifiers.first); md; md = mdn) {
+    for (md = ob->modifiers.first(); md; md = mdn) {
       bool free = false;
 
       mdn = md->next;
@@ -382,12 +385,15 @@ static void parent_clear_data(Object *ob)
   ob->parsubstr[0] = '\0';
 }
 
-void parent_clear(Object *ob, const int type)
+void parent_clear(Main *bmain, Object *ob, const int type)
 {
   if (ob->parent == nullptr) {
     return;
   }
   uint flags = ID_RECALC_TRANSFORM | ID_RECALC_GEOMETRY | ID_RECALC_ANIMATION;
+  if (type != CLEAR_PARENT_INVERSE) {
+    BKE_collection_object_parent_clear_sort_index_reset(*bmain, *ob);
+  }
   switch (type) {
     case CLEAR_PARENT_ALL: {
       /* for deformers, remove corresponding modifiers to prevent
@@ -431,7 +437,7 @@ static wmOperatorStatus parent_clear_exec(bContext *C, wmOperator *op)
   const int type = RNA_enum_get(op->ptr, "type");
 
   CTX_DATA_BEGIN (C, Object *, ob, selected_editable_objects) {
-    parent_clear(ob, type);
+    parent_clear(bmain, ob, type);
   }
   CTX_DATA_END;
 
@@ -464,7 +470,7 @@ void OBJECT_OT_parent_clear(wmOperatorType *ot)
 /** \name Make Parent Operator
  * \{ */
 
-void parent_set(Object *ob, Object *par, const int type, const char *substr)
+void parent_set(Object *ob, Object *par, const eObject_Partype type, const char *substr)
 {
   /* Always clear parentinv matrix for sake of consistency, see #41950. */
   unit_m4(ob->parentinv);
@@ -556,7 +562,7 @@ static bool parent_set_with_depsgraph(ReportList *reports,
         FCurve *fcu = animrig::action_fcurve_ensure_ex(bmain, act, &id_ptr, {"eval_time", 0});
 
         /* setup dummy 'generator' modifier here to get 1-1 correspondence still working */
-        if (!fcu->bezt && !fcu->fpt && !fcu->modifiers.first) {
+        if (!fcu->bezt && !fcu->fpt && !fcu->modifiers.first_) {
           add_fmodifier(&fcu->modifiers, FMODIFIER_TYPE_GENERATOR, fcu);
         }
       }
@@ -590,6 +596,7 @@ static bool parent_set_with_depsgraph(ReportList *reports,
   /* Set the parent (except for follow-path constraint option). */
   if (partype != PAR_PATH_CONST) {
     ob->parent = par;
+    BKE_collection_object_parented_sort_index_reset(*bmain, *ob);
     /* Always clear parentinv matrix for sake of consistency, see #41950. */
     unit_m4(ob->parentinv);
   }
@@ -685,16 +692,16 @@ static bool parent_set_with_depsgraph(ReportList *reports,
       break;
     case PAR_BONE:
       ob->partype = PARBONE; /* NOTE: DNA define, not operator property. */
-      if (pchan->bone) {
-        pchan->bone->flag &= ~BONE_RELATIVE_PARENTING;
-        pchan_eval->bone->flag &= ~BONE_RELATIVE_PARENTING;
+      if (Bone *bone = pchan->bone_get(*par)) {
+        bone->flag &= ~BONE_RELATIVE_PARENTING;
+        pchan_eval->bone_get(*parent_eval)->flag &= ~BONE_RELATIVE_PARENTING;
       }
       break;
     case PAR_BONE_RELATIVE:
       ob->partype = PARBONE; /* NOTE: DNA define, not operator property. */
-      if (pchan->bone) {
-        pchan->bone->flag |= BONE_RELATIVE_PARENTING;
-        pchan_eval->bone->flag |= BONE_RELATIVE_PARENTING;
+      if (Bone *bone = pchan->bone_get(*par)) {
+        bone->flag |= BONE_RELATIVE_PARENTING;
+        pchan_eval->bone_get(*parent_eval)->flag |= BONE_RELATIVE_PARENTING;
       }
       break;
     case PAR_VERTEX:
@@ -807,14 +814,14 @@ bool parent_set(ReportList *reports,
                                    vert_par);
 }
 
-static void parent_set_vert_find(KDTree_3d *tree, Object *child, int vert_par[3], bool is_tri)
+static void parent_set_vert_find(KDTree<float3> *tree, Object *child, int vert_par[3], bool is_tri)
 {
   const float *co_find = child->object_to_world().location();
   if (is_tri) {
-    KDTreeNearest_3d nearest[3];
+    KDTreeNearest<float3> nearest[3];
     int tot;
 
-    tot = kdtree_3d_find_nearest_n(tree, co_find, nearest, 3);
+    tot = kdtree_find_nearest_n<float3>(tree, co_find, nearest, 3);
     BLI_assert(tot == 3);
     UNUSED_VARS(tot);
 
@@ -822,10 +829,10 @@ static void parent_set_vert_find(KDTree_3d *tree, Object *child, int vert_par[3]
     vert_par[1] = nearest[1].index;
     vert_par[2] = nearest[2].index;
 
-    BLI_assert(min_iii(UNPACK3(vert_par)) >= 0);
+    BLI_assert(std::min({UNPACK3(vert_par)}) >= 0);
   }
   else {
-    vert_par[0] = kdtree_3d_find_nearest(tree, co_find, nullptr);
+    vert_par[0] = kdtree_find_nearest<float3>(tree, co_find, nullptr);
     BLI_assert(vert_par[0] >= 0);
     vert_par[1] = 0;
     vert_par[2] = 0;
@@ -876,7 +883,7 @@ static bool parent_set_nonvertex_parent(bContext *C, ParentingContext *parenting
 
 static bool parent_set_vertex_parent_with_kdtree(bContext *C,
                                                  ParentingContext *parenting_context,
-                                                 KDTree_3d *tree)
+                                                 KDTree<float3> *tree)
 {
   int vert_par[3] = {0, 0, 0};
 
@@ -907,23 +914,24 @@ static bool parent_set_vertex_parent_with_kdtree(bContext *C,
 
 static bool parent_set_vertex_parent(bContext *C, ParentingContext *parenting_context)
 {
-  KDTree_3d *tree = nullptr;
+  KDTree<float3> *tree = nullptr;
   int tree_tot;
 
   Depsgraph *depsgraph = CTX_data_ensure_evaluated_depsgraph(C);
   Object *par_eval = DEG_get_evaluated(depsgraph, parenting_context->par);
 
   tree = BKE_object_as_kdtree(par_eval, &tree_tot);
-  BLI_assert(tree != nullptr);
+  /* Zero & null for unsupported object types. */
+  BLI_assert((tree != nullptr) || (tree_tot == 0));
 
   if (tree_tot < (parenting_context->is_vertex_tri ? 3 : 1)) {
     BKE_report(parenting_context->reports, RPT_ERROR, "Not enough vertices for vertex-parent");
-    kdtree_3d_free(tree);
+    kdtree_free<float3>(tree);
     return false;
   }
 
   const bool ok = parent_set_vertex_parent_with_kdtree(C, parenting_context, tree);
-  kdtree_3d_free(tree);
+  kdtree_free<float3>(tree);
   return ok;
 }
 
@@ -1236,7 +1244,7 @@ static wmOperatorStatus object_track_clear_exec(bContext *C, wmOperator *op)
     DEG_id_tag_update(&ob->id, ID_RECALC_TRANSFORM | ID_RECALC_GEOMETRY | ID_RECALC_ANIMATION);
 
     /* also remove all tracking constraints */
-    for (con = static_cast<bConstraint *>(ob->constraints.last); con; con = pcon) {
+    for (con = ob->constraints.last(); con; con = pcon) {
       pcon = con->prev;
       if (ELEM(con->type,
                CONSTRAINT_TYPE_TRACKTO,
@@ -1514,7 +1522,10 @@ static bool allow_make_links_data(const int type, Object *ob_src, Object *ob_dst
 {
   switch (type) {
     case MAKE_LINKS_OBDATA:
-      if (ob_src->type == ob_dst->type && ob_src->type != OB_EMPTY) {
+      /* Replacing data of an object in edit-mode is not supported, see #160956. */
+      if (ob_src->type == ob_dst->type && ob_src->type != OB_EMPTY &&
+          (ob_dst->mode & OB_MODE_EDIT) == 0)
+      {
         return true;
       }
       break;
@@ -1537,7 +1548,7 @@ static bool allow_make_links_data(const int type, Object *ob_src, Object *ob_dst
     case MAKE_LINKS_GROUP:
       return true;
     case MAKE_LINKS_MODIFIERS:
-      if (!ELEM(OB_EMPTY, ob_src->type, ob_dst->type)) {
+      if (BKE_object_supports_modifiers(ob_src) && BKE_object_supports_modifiers(ob_dst)) {
         return true;
       }
       break;
@@ -1597,6 +1608,7 @@ static wmOperatorStatus make_links_data_exec(bContext *C, wmOperator *op)
             id_us_plus(obdata_id);
             ob_dst->data = obdata_id;
 
+            BKE_sculptsession_free_pbvh(*ob_dst);
             /* if amount of material indices changed: */
             BKE_object_materials_sync_length(bmain, ob_dst, ob_dst->data);
 
@@ -1804,7 +1816,9 @@ void OBJECT_OT_make_links_data(wmOperatorType *ot)
 
   /* API callbacks. */
   ot->exec = make_links_data_exec;
-  ot->poll = ED_operator_object_active;
+  /* The object must not be in edit-mode because multiple objects in edit-mode
+   * sharing data is an invalid state which can cause crashes. See: #160956. */
+  ot->poll = ED_operator_object_active_objectmode;
 
   /* flags */
   ot->flag = OPTYPE_REGISTER | OPTYPE_UNDO;
@@ -1835,10 +1849,7 @@ static void libblock_relink_collection(Main *bmain,
     BKE_libblock_relink_to_newid(bmain, &collection->id, 0);
   }
 
-  for (CollectionObject *cob = static_cast<CollectionObject *>(collection->gobject.first);
-       cob != nullptr;
-       cob = cob->next)
-  {
+  for (CollectionObject *cob = collection->gobject.first(); cob != nullptr; cob = cob->next) {
     BKE_libblock_relink_to_newid(bmain, &cob->ob->id, 0);
   }
 
@@ -1880,8 +1891,8 @@ static Collection *single_object_users_collection(Main *bmain,
   /* Since master collection has already be duplicated as part of scene copy,    * we do not
    * duplicate it here. However, this means its children need to be re-added manually here,    *
    * otherwise their parent lists are empty (which will lead to crashes, see #63101). */
-  CollectionChild *child_next, *child = static_cast<CollectionChild *>(collection->children.first);
-  CollectionChild *orig_child_last = static_cast<CollectionChild *>(collection->children.last);
+  CollectionChild *child_next, *child = collection->children.first();
+  CollectionChild *orig_child_last = collection->children.last();
   for (; child != nullptr; child = child_next) {
     child_next = child->next;
     Collection *collection_child_new = single_object_users_collection(
@@ -2079,7 +2090,7 @@ static void single_obdata_users(
   }
   FOREACH_OBJECT_FLAG_END;
 
-  Mesh *mesh = static_cast<Mesh *>(bmain->meshes.first);
+  Mesh *mesh = bmain->meshes.first();
   while (mesh) {
     ID_NEW_REMAP(mesh->texcomesh);
     mesh = static_cast<Mesh *>(mesh->id.next);
@@ -2148,13 +2159,19 @@ static void single_mat_users(
 
   FOREACH_OBJECT_FLAG_BEGIN (bmain, scene, view_layer, v3d, flag, ob) {
     if (BKE_id_is_editable(bmain, &ob->id)) {
+      const bool is_obdata_editable = ob->data ? BKE_id_is_editable(bmain, ob->data) : false;
       for (a = 1; a <= ob->totcol; a++) {
+        if (!ob->matbits[a - 1] && !is_obdata_editable) {
+          /* Cannot edit material usage of obdata if it's not editable (e.g. local object using a
+           * linked mesh). See also #161211. */
+          continue;
+        }
         ma = BKE_object_material_get(ob, short(a));
         if (single_data_needs_duplication(&ma->id)) {
           man = id_cast<Material *>(
               BKE_id_copy_ex(bmain, &ma->id, nullptr, LIB_ID_COPY_DEFAULT | LIB_ID_COPY_ACTIONS));
           man->id.us = 0;
-          BKE_object_material_assign(bmain, ob, man, short(a), BKE_MAT_ASSIGN_USERPREF);
+          BKE_object_material_assign(bmain, ob, man, short(a), BKE_MAT_ASSIGN_EXISTING);
         }
       }
     }
@@ -2211,7 +2228,7 @@ static void tag_localizable_objects(bContext *C, const int mode)
    * FIXME This is ignoring all other linked ID types potentially using the selected tagged
    * objects! Probably works fine in most 'usual' cases though.
    */
-  for (Object *object = static_cast<Object *>(bmain->objects.first); object;
+  for (Object *object = bmain->objects.first(); object;
        object = static_cast<Object *>(object->id.next))
   {
     if ((object->id.tag & ID_TAG_DOIT) == 0 && ID_IS_LINKED(object)) {
@@ -2242,9 +2259,7 @@ static bool make_local_all__instance_indirect_unused(Main *bmain,
   Object *ob;
   bool changed = false;
 
-  for (ob = static_cast<Object *>(bmain->objects.first); ob;
-       ob = static_cast<Object *>(ob->id.next))
-  {
+  for (ob = bmain->objects.first(); ob; ob = static_cast<Object *>(ob->id.next)) {
     if (ID_IS_LINKED(ob) && (ob->id.us == 0)) {
       Base *base;
 
@@ -2728,7 +2743,7 @@ static bool make_override_library_poll(bContext *C)
 {
   Base *base_act = CTX_data_active_base(C);
   /* If the active object is not selected, do nothing (operators rely on selection too, they will
-   * misbehave if the active object is not also selected, see e.g. #120701. */
+   * misbehave if the active object is not also selected, see e.g. #120701). */
   if ((base_act == nullptr) || ((base_act->flag & BASE_SELECTED) == 0)) {
     return false;
   }
@@ -2785,7 +2800,7 @@ static bool reset_clear_override_library_poll(bContext *C)
 {
   Base *base_act = CTX_data_active_base(C);
   /* If the active object is not selected, do nothing (operators rely on selection too, they will
-   * misbehave if the active object is not also selected, see e.g. #120701. */
+   * misbehave if the active object is not also selected, see e.g. #120701). */
   if ((base_act == nullptr) || ((base_act->flag & BASE_SELECTED) == 0)) {
     return false;
   }
@@ -3185,7 +3200,7 @@ static wmOperatorStatus drop_geometry_nodes_invoke(bContext *C,
 
   nmd->node_group = node_tree;
   id_us_plus(&node_tree->id);
-  MOD_nodes_update_interface(ob, nmd);
+  MOD_nodes_update_interface(*bmain, ob, nmd);
 
   DEG_id_tag_update(&ob->id, ID_RECALC_GEOMETRY);
   WM_event_add_notifier(C, NC_OBJECT | ND_MODIFIER, nullptr);

@@ -7,7 +7,7 @@
 #include "DNA_tracking_types.h"
 
 #include "BKE_tracking.hh"
-#include "BLI_math_vector.h"
+#include "BLI_math_vector_c.hh"
 #include "BLI_math_vector_types.hh"
 
 namespace blender {
@@ -19,7 +19,7 @@ class TrackingTest : public ::testing::Test {
   MovieTrackingMarker *addMarkerToTrack(MovieTrackingTrack *track,
                                         int frame_number,
                                         const float2 &position = float2(0.0f, 0.0f),
-                                        int flag = 0)
+                                        TrackingMarkerFlag flag = TrackingMarkerFlag{})
   {
     MovieTrackingMarker marker = {{0.0f}};
     copy_v2_v2(marker.pos, position);

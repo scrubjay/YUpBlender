@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup nodes
+ */
+
 #pragma once
 
 #include "BKE_node.hh"
@@ -43,6 +47,7 @@ class ClosureSignature {
                                                    bool allow_auto_structure_type);
   static ClosureSignature from_evaluate_closure_node(const bNode &node,
                                                      bool allow_auto_structure_type);
+  static ClosureSignature from_closure_to_list_node(const bNode &node);
 
   void set_auto_structure_types();
 };

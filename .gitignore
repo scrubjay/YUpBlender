@@ -28,3 +28,18 @@ blender/**/__pycache__/
 blender/**/*.py[cod]
 blender/doc/python_api/sphinx-out/
 blender/tests/data/
+
+# Large release artifacts (use GitHub Releases, not git)
+blender_yup_gpu_win64.zip
+blender_yup_*.zip
+
+# Runtime Python bytecode caches in release dir
+release/*/python/
+release/*/__pycache__/
+release/**/*.pyc
+release/**/*.pyo
+
+# Blender upstream test assets (LFS blobs live on projects.blender.org, not GitHub LFS)
+# These are not needed for building and would require uploading hundreds of GB to GitHub LFS
+blender/tests/files/
+blender/assets/

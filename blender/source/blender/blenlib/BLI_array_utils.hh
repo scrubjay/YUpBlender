@@ -14,10 +14,12 @@
 #include "BLI_generic_span.hh"
 #include "BLI_generic_virtual_array.hh"
 #include "BLI_index_mask.hh"
-#include "BLI_math_base.h"
+#include "BLI_math_base_c.hh"
 #include "BLI_offset_indices.hh"
 #include "BLI_task.hh"
 #include "BLI_virtual_array.hh"
+
+#include "PRF_profile.hh"
 
 namespace blender::array_utils {
 
@@ -54,12 +56,12 @@ inline void copy(const VArray<T> &src, MutableSpan<T> dst, const Mode mode = {})
 {
   BLI_assert(src.size() == dst.size());
   if constexpr (!mode.is_parallel) {
-    src.materialize_compressed_to_uninitialized(dst.index_range(), dst);
+    src.materialize_compressed(dst.index_range(), dst);
   }
   else {
     const int64_t grain_size = calc_copy_grain_size(mode, sizeof(T));
     threading::parallel_for(src.index_range(), grain_size, [&](const IndexRange range) {
-      src.materialize_to_uninitialized(range, dst);
+      src.materialize(range, dst);
     });
   }
 }
@@ -188,14 +190,15 @@ inline void gather(const VArray<T> &src,
                    MutableSpan<T> dst,
                    const Mode mode = {})
 {
+  PRF_scope_with_name("array_utils::gather", ProfileCategory::Default);
   BLI_assert(indices.size() >= dst.size());
   if constexpr (!mode.is_parallel) {
-    src.materialize_compressed_to_uninitialized(indices, dst);
+    src.materialize_compressed(indices, dst);
   }
   else {
     const int64_t grain_size = calc_copy_grain_size(mode, sizeof(T));
     threading::parallel_for(indices.index_range(), grain_size, [&](const IndexRange range) {
-      src.materialize_compressed_to_uninitialized(indices.slice(range), dst.slice(range));
+      src.materialize_compressed(indices.slice(range), dst.slice(range));
     });
   }
 }
@@ -210,6 +213,7 @@ inline void gather(const Span<T> src,
                    MutableSpan<T> dst,
                    const Mode mode = {})
 {
+  PRF_scope_with_name("array_utils::gather", ProfileCategory::Default);
   BLI_assert(indices.size() >= dst.size());
   dst_mask.foreach_index_optimized<int64_t>([&](const int64_t i) { dst[i] = src[indices[i]]; },
                                             exec_mode_tag_for_copy(mode, sizeof(T)));
@@ -237,6 +241,7 @@ inline void gather(const VArray<T> &src,
                    MutableSpan<T> dst,
                    const Mode mode = {})
 {
+  PRF_scope_with_name("array_utils::gather", ProfileCategory::Default);
   BLI_assert(indices.size() >= dst_mask.min_array_size());
   const CommonVArrayInfo info = src.common_info();
   switch (info.type) {
@@ -281,6 +286,20 @@ inline void gather_group_to_group(const OffsetIndices<int> src_offsets,
         dst.slice(dst_offsets[dst_i]).copy_from(src.slice(src_offsets[src_i]));
       },
       exec_mode::grain_size(512));
+}
+
+template<typename T>
+inline void gather_group_to_group(const OffsetIndices<int> src_offsets,
+                                  const OffsetIndices<int> dst_offsets,
+                                  const Span<int> selection,
+                                  const Span<T> src,
+                                  MutableSpan<T> dst)
+{
+  threading::parallel_for(selection.index_range(), 512, [&](const IndexRange range) {
+    for (const int dst_i : range) {
+      dst.slice(dst_offsets[dst_i]).copy_from(src.slice(src_offsets[selection[dst_i]]));
+    }
+  });
 }
 
 template<typename T>
@@ -337,6 +356,20 @@ void copy_group_to_group(OffsetIndices<int> src_offsets,
  * \note The memory referenced by the two spans must not overlap.
  */
 void count_indices(Span<int> indices, MutableSpan<int> counts);
+
+/**
+ * Find a compact index for every unique arbitrary ID, in the order that the IDs first appear.
+ *
+ * \param mask: The elements whose IDs are processed.
+ * \param r_group_indices: The group index of every element, for every index in the mask.
+ * \param r_first_indices: Optional. Filled with the first element with each ID, for every group,
+ * which can be useful to choose a representative element for each group.
+ * \return The number of groups.
+ */
+int group_ids_to_indices(Span<int> ids,
+                         const IndexMask &mask,
+                         MutableSpan<int> r_group_indices,
+                         Vector<int> *r_first_indices = nullptr);
 
 void invert_booleans(MutableSpan<bool> span);
 void invert_booleans(MutableSpan<bool> span, const IndexMask &mask);
@@ -401,6 +434,26 @@ template<typename T> inline Vector<IndexRange> find_all_ranges(const Span<T> spa
 template<typename T> inline void fill_index_range(MutableSpan<T> span, const T start = 0)
 {
   std::iota(span.begin(), span.end(), start);
+}
+
+template<typename T, exec_mode::Tag Mode = exec_mode::Parallel>
+inline void fill_index_range(const IndexMask &mask, MutableSpan<T> span, const Mode mode = {})
+{
+  mask.foreach_index_optimized<T>([&](const T index) { span[index] = index; }, mode);
+}
+
+template<typename T, exec_mode::Tag Mode = exec_mode::Parallel>
+inline void fill_index_range(const IndexMask &mask,
+                             MutableSpan<T> span,
+                             const T start,
+                             const Mode mode = {})
+{
+  if (start == 0) {
+    fill_index_range(mask, span, mode);
+  }
+  else {
+    mask.foreach_index_optimized<T>([&](const T index) { span[index] = start + index; }, mode);
+  }
 }
 
 template<typename T>

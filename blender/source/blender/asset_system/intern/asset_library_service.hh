@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <utility>
 
@@ -16,7 +18,7 @@
 #include "BLI_function_ref.hh"
 #include "BLI_map.hh"
 
-#include <memory>
+#include "essentials_library.hh"
 
 namespace blender {
 
@@ -27,7 +29,7 @@ namespace asset_system {
 
 class AllAssetLibrary;
 class OnDiskAssetLibrary;
-class RemoteAssetLibrary;
+class PreferencesRemoteAssetLibrary;
 class RuntimeAssetLibrary;
 
 /**
@@ -52,10 +54,16 @@ class AssetLibraryService {
    * library may point to the same path as a custom library.
    */
   using OnDiskLibraryIdentifier = std::pair<eAssetLibraryType, std::string>;
-  /** Mapping of a (type, root path) pair to the AssetLibrary instance. */
+  /**
+   * Mapping of a (type, root path) pair to the AssetLibrary instance.
+   * Always protect access with #on_disk_libraries_mutex_ below.
+   */
   Map<OnDiskLibraryIdentifier, std::unique_ptr<OnDiskAssetLibrary>> on_disk_libraries_;
+  mutable std::recursive_mutex on_disk_libraries_mutex_;
   using URLLibraryIdentifier = std::string;
-  Map<URLLibraryIdentifier, std::unique_ptr<RemoteAssetLibrary>> remote_libraries_;
+  /** Always protect access with #remote_libraries_mutex_ below. */
+  Map<URLLibraryIdentifier, std::unique_ptr<PreferencesRemoteAssetLibrary>> remote_libraries_;
+  mutable std::recursive_mutex remote_libraries_mutex_;
   /**
    * Library without a known path, i.e. the "Current File" library if the file isn't saved yet. If
    * the file was saved, a valid path for the library can be determined and #on_disk_libraries_
@@ -64,6 +72,7 @@ class AssetLibraryService {
   std::unique_ptr<RuntimeAssetLibrary> current_file_library_;
   /** The "all" asset library, merging all other libraries into one. */
   std::unique_ptr<AllAssetLibrary> all_library_;
+  std::unique_ptr<OnlineEssentialsLibrary> online_essentials_library_;
 
   /** Handlers for managing the life cycle of the AssetLibraryService instance. */
   bCallbackFuncStore on_load_callback_store_;
@@ -110,8 +119,10 @@ class AssetLibraryService {
    * Preferences.
    */
   AssetLibrary *get_asset_library_on_disk_custom_preferences(bUserAssetLibrary *custom_library);
-  /** Get a builtin (not user defined) asset library. I.e. a library that is **not** of type
-   * #ASSET_LIBRARY_CUSTOM. */
+  /**
+   * Get a builtin (not user defined) asset library. I.e. a library that is **not** of type
+   * #ASSET_LIBRARY_CUSTOM.
+   */
   AssetLibrary *get_asset_library_on_disk_builtin(eAssetLibraryType type, StringRefNull root_path);
   /** Get the "Current File" asset library. */
   AssetLibrary *get_asset_library_current_file();
@@ -137,8 +148,10 @@ class AssetLibraryService {
    */
   std::string normalize_asset_weak_reference_relative_asset_identifier(
       const AssetWeakReference &asset_reference);
-  /** Get a valid library path from the weak reference. Empty if e.g. the reference is to a local
-   * asset. */
+  /**
+   * Get a valid library path from the weak reference. Empty if e.g. the reference is to a local
+   * asset.
+   */
   std::string resolve_asset_weak_reference_to_library_path(
       const AssetWeakReference &asset_reference);
   /**
@@ -149,24 +162,34 @@ class AssetLibraryService {
    * \note Only works for asset libraries on disk (others can't be resolved).
    */
   std::string resolve_asset_weak_reference_to_full_path(const AssetWeakReference &asset_reference);
-  /** Struct to hold results from path explosion functions
-   * (#resolve_asset_weak_reference_to_exploded_path()). */
+  /**
+   * Struct to hold results from path explosion functions
+   * (#resolve_asset_weak_reference_to_exploded_path()).
+   */
   struct ExplodedPath {
-    /** The string buffer containing the fully resolved path, if resolving was successful. Pointer
-     * so that the contained string address doesn't change when moving this object. */
+    /**
+     * The string buffer containing the fully resolved path, if resolving was successful. Pointer
+     * so that the contained string address doesn't change when moving this object.
+     */
     std::unique_ptr<std::string> full_path;
-    /** Reference into the part of #full_path that is the library directory path. That is, it ends
-     * with the library .blend file ("directory" is misleading). */
+    /**
+     * Reference into the part of #full_path that is the library directory path. That is, it ends
+     * with the library .blend file ("directory" is misleading).
+     */
     StringRef dir_component = "";
-    /** Reference into the part of #full_path that is the ID group name ("Object", "Material",
-     * "Brush", ...). */
+    /**
+     * Reference into the part of #full_path that is the ID group name ("Object", "Material",
+     * "Brush", ...).
+     */
     StringRef group_component = "";
     /** Reference into the part of #full_path that is the ID name. */
     StringRef name_component = "";
   };
-  /** Similar to #BKE_blendfile_library_path_explode, returns the full path as
+  /**
+   * Similar to #BKE_blendfile_library_path_explode, returns the full path as
    * #resolve_asset_weak_reference_to_library_path, with StringRefs to the `dir` (i.e. blendfile
-   * path), `group` (i.e. ID type) and `name` (i.e. ID name) parts. */
+   * path), `group` (i.e. ID type) and `name` (i.e. ID name) parts.
+   */
   std::optional<ExplodedPath> resolve_asset_weak_reference_to_exploded_path(
       const AssetWeakReference &asset_reference);
 
@@ -185,7 +208,8 @@ class AssetLibraryService {
 
   AssetLibrary *find_loaded_on_disk_asset_library_from_name(StringRef name) const;
 
-  AssetLibrary *get_remote_asset_library(const bUserAssetLibrary &custom_library);
+  AssetLibrary *get_online_essentials_asset_library();
+  AssetLibrary *get_preferences_remote_asset_library(const bUserAssetLibrary &custom_library);
   /**
    * Get the given asset library. Opens it (i.e. creates a new AssetLibrary instance) if necessary.
    *
@@ -200,7 +224,8 @@ class AssetLibraryService {
                                           bUserAssetLibrary *preferences_library = nullptr);
   /**
    * Ensure the AssetLibraryService instance is destroyed before a new blend file is loaded.
-   * This makes memory management simple, and ensures a fresh start for every blend file. */
+   * This makes memory management simple, and ensures a fresh start for every blend file.
+   */
   void app_handler_register();
   void app_handler_unregister();
 };

@@ -14,7 +14,7 @@
 
 #include "MEM_guardedalloc.h"
 
-#include "BLI_utildefines.h"
+#include "BLI_utildefines.hh"
 
 #include "idprop_py_api.hh"
 #include "idprop_py_ui_api.hh"
@@ -126,7 +126,7 @@ static PyObject *idprop_py_from_idp_idparray(ID *id, IDProperty *prop)
     PyObject *wrap = BPy_IDGroup_WrapData(id, array++, prop);
 
     /* BPy_IDGroup_MapDataToPy sets the error */
-    if (UNLIKELY(wrap == nullptr)) {
+    if (wrap == nullptr) [[unlikely]] {
       Py_DECREF(seq);
       return nullptr;
     }
@@ -253,6 +253,12 @@ static int BPy_IDGroup_SetData(BPy_IDProperty *self, IDProperty *prop, PyObject 
 }
 #endif
 
+PyDoc_STRVAR(
+    /* Wrap. */
+    BPy_IDGroup_GetName_doc,
+    "The name of this Group.\n"
+    "\n"
+    ":type: str\n");
 static PyObject *BPy_IDGroup_GetName(BPy_IDProperty *self, void * /*closure*/)
 {
   return PyUnicode_FromString(self->prop->name);
@@ -299,7 +305,7 @@ static PyGetSetDef BPy_IDGroup_getseters[] = {
     {"name",
      reinterpret_cast<getter>(BPy_IDGroup_GetName),
      reinterpret_cast<setter>(BPy_IDGroup_SetName),
-     "The name of this Group.",
+     BPy_IDGroup_GetName_doc,
      nullptr},
     {nullptr, nullptr, nullptr, nullptr, nullptr},
 };
@@ -957,13 +963,23 @@ static IDProperty *idp_from_PyMapping(IDProperty * /*prop_exist*/,
   PyObject *keys, *vals, *key, *pval;
   int i, len;
   /* yay! we get into recursive stuff now! */
+  len = PyMapping_Length(ob);
+  if (len == -1) {
+    return nullptr;
+  }
   keys = PyMapping_Keys(ob);
+  if (keys == nullptr) {
+    return nullptr;
+  }
   vals = PyMapping_Values(ob);
+  if (vals == nullptr) {
+    Py_DECREF(keys);
+    return nullptr;
+  }
 
   /* We allocate the group first; if we hit any invalid data,
    * we can delete it easily enough. */
   prop = bke::idprop::create_group(name).release();
-  len = PyMapping_Length(ob);
   for (i = 0; i < len; i++) {
     key = PySequence_GetItem(keys, i);
     pval = PySequence_GetItem(vals, i);
@@ -1262,7 +1278,7 @@ PyObject *BPy_IDGroup_MapDataToPy(IDProperty *prop)
         PyObject *wrap = BPy_IDGroup_MapDataToPy(array++);
 
         /* BPy_IDGroup_MapDataToPy sets the error */
-        if (UNLIKELY(wrap == nullptr)) {
+        if (wrap == nullptr) [[unlikely]] {
           Py_DECREF(seq);
           return nullptr;
         }
@@ -1275,11 +1291,11 @@ PyObject *BPy_IDGroup_MapDataToPy(IDProperty *prop)
       PyObject *dict = _PyDict_NewPresized(prop->len);
       IDProperty *loop;
 
-      for (loop = static_cast<IDProperty *>(prop->data.group.first); loop; loop = loop->next) {
+      for (loop = prop->data.group.first(); loop; loop = loop->next) {
         PyObject *wrap = BPy_IDGroup_MapDataToPy(loop);
 
         /* BPy_IDGroup_MapDataToPy sets the error */
-        if (UNLIKELY(wrap == nullptr)) {
+        if (wrap == nullptr) [[unlikely]] {
           Py_DECREF(dict);
           return nullptr;
         }
@@ -1458,7 +1474,7 @@ static PyObject *IDGroup_Iter_New_WithType(BPy_IDProperty *group,
     BLI_assert(!PyObject_GC_IsTracked((PyObject *)iter));
     PyObject_GC_Track(iter);
     iter->cur = static_cast<IDProperty *>(
-        (reversed ? group->prop->data.group.last : group->prop->data.group.first));
+        (reversed ? group->prop->data.group.last() : group->prop->data.group.first()));
     iter->len_init = group->prop->len;
   }
   else {
@@ -1737,7 +1753,14 @@ static PyObject *BPy_IDGroup_pop(BPy_IDProperty *self, PyObject *args)
   char *key;
   PyObject *def = nullptr;
 
-  if (!PyArg_ParseTuple(args, "s|O:pop", &key, &def)) {
+  if (!PyArg_ParseTuple(args,
+                        "s" /* `key` */
+                        "|" /* Optional arguments. */
+                        "O" /* `default` */
+                        ":pop",
+                        &key,
+                        &def))
+  {
     return nullptr;
   }
 
@@ -1783,9 +1806,7 @@ PyObject *BPy_Wrap_GetKeys(IDProperty *prop)
   IDProperty *loop;
   int i;
 
-  for (i = 0, loop = static_cast<IDProperty *>(prop->data.group.first); loop && (i < prop->len);
-       loop = loop->next, i++)
-  {
+  for (i = 0, loop = prop->data.group.first(); loop && (i < prop->len); loop = loop->next, i++) {
     PyList_SET_ITEM(list, i, PyUnicode_FromString(loop->name));
   }
 
@@ -1810,9 +1831,7 @@ PyObject *BPy_Wrap_GetValues(ID *id, IDProperty *prop)
   IDProperty *loop;
   int i;
 
-  for (i = 0, loop = static_cast<IDProperty *>(prop->data.group.first); loop;
-       loop = loop->next, i++)
-  {
+  for (i = 0, loop = prop->data.group.first(); loop; loop = loop->next, i++) {
     PyList_SET_ITEM(list, i, BPy_IDGroup_WrapData(id, loop, prop));
   }
 
@@ -1832,9 +1851,7 @@ PyObject *BPy_Wrap_GetItems(ID *id, IDProperty *prop)
   IDProperty *loop;
   int i;
 
-  for (i = 0, loop = static_cast<IDProperty *>(prop->data.group.first); loop;
-       loop = loop->next, i++)
-  {
+  for (i = 0, loop = prop->data.group.first(); loop; loop = loop->next, i++) {
     PyObject *item = PyTuple_New(2);
     PyTuple_SET_ITEMS(
         item, PyUnicode_FromString(loop->name), BPy_IDGroup_WrapData(id, loop, prop));
@@ -1950,7 +1967,7 @@ static PyObject *BPy_IDGroup_update(BPy_IDProperty *self, PyObject *value)
 
   if (BPy_IDGroup_Check(value)) {
     BPy_IDProperty *other = reinterpret_cast<BPy_IDProperty *>(value);
-    if (UNLIKELY(self->prop == other->prop)) {
+    if (self->prop == other->prop) [[unlikely]] {
       Py_RETURN_NONE;
     }
 
@@ -2020,7 +2037,14 @@ static PyObject *BPy_IDGroup_get(BPy_IDProperty *self, PyObject *args)
   const char *key;
   PyObject *def = Py_None;
 
-  if (!PyArg_ParseTuple(args, "s|O:get", &key, &def)) {
+  if (!PyArg_ParseTuple(args,
+                        "s" /* `key` */
+                        "|" /* Optional arguments. */
+                        "O" /* `default` */
+                        ":get",
+                        &key,
+                        &def))
+  {
     return nullptr;
   }
 
@@ -2108,7 +2132,11 @@ PyDoc_STRVAR(
     /* Wrap. */
     BPy_IDGroup_Type_doc,
     "A dictionary-like group of ID properties, "
-    "supporting key access, iteration, and membership testing.");
+    "supporting key access, iteration, and membership testing.\n"
+    "\n"
+    ".. note::\n"
+    "\n"
+    "   Only supports a maximum of 1024 levels of nesting.");
 
 PyTypeObject BPy_IDGroup_Type = {
     /*ob_base*/ PyVarObject_HEAD_INIT(nullptr, 0)
@@ -2200,7 +2228,9 @@ PyDoc_STRVAR(
     BPy_IDArray_get_typecode_doc,
     "The type of the data in the array "
     "{'f': float (32-bit), 'd': double (64-bit), 'i': int, 'b': bool}. "
-    "Both 'f' and 'd' use Python's :class:`float` type but differ in storage precision.");
+    "Both 'f' and 'd' use Python's :class:`float` type but differ in storage precision.\n"
+    "\n"
+    ":type: Literal['f', 'd', 'i', 'b']\n");
 static PyObject *BPy_IDArray_get_typecode(BPy_IDArray *self, void * /*closure*/)
 {
   const char *typecode;
@@ -2745,6 +2775,8 @@ static PyObject *BPyInit_idprop_types()
   PyModule_AddType(submodule, &BPy_IDGroup_IterItems_Type);
 
   PyModule_AddType(submodule, &BPy_IDArray_Type);
+
+  PyModule_AddType(submodule, &BPy_IDPropertyUIManager_Type);
 
   return submodule;
 }

@@ -50,9 +50,9 @@ PyDoc_STRVAR(
     "   Must be overload by inherited classes. It evaluates a relation\n"
     "   between two Interface0D objects.\n"
     "\n"
-    "   :arg inter1: The first Interface0D object.\n"
+    "   :param inter1: The first Interface0D object.\n"
     "   :type inter1: :class:`Interface0D`\n"
-    "   :arg inter2: The second Interface0D object.\n"
+    "   :param inter2: The second Interface0D object.\n"
     "   :type inter2: :class:`Interface0D`\n"
     "   :return: True or false.\n"
     "   :rtype: bool\n");
@@ -87,8 +87,16 @@ static PyObject *BinaryPredicate0D___call__(BPy_BinaryPredicate0D *self,
   static const char *kwlist[] = {"inter1", "inter2", nullptr};
   BPy_Interface0D *obj1, *obj2;
 
-  if (!PyArg_ParseTupleAndKeywords(
-          args, kwds, "O!O!", (char **)kwlist, &Interface0D_Type, &obj1, &Interface0D_Type, &obj2))
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "O!" /* `inter1` */
+                                   "O!" /* `inter2` */
+                                   ":__call__",
+                                   (char **)kwlist,
+                                   &Interface0D_Type,
+                                   &obj1,
+                                   &Interface0D_Type,
+                                   &obj2))
   {
     return nullptr;
   }

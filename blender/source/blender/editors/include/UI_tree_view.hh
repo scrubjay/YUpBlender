@@ -183,6 +183,10 @@ class AbstractTreeView : public AbstractView, public TreeViewItemContainer {
    * height. */
   void set_default_rows(int default_rows);
   TreeViewSortOrder invert_sort_type_get() const;
+  /**
+   * Scroll the view so the active item is visible.
+   */
+  void scroll_active_into_view(bContext *C, bool scroll_active_to_center = false) override;
 
  protected:
   virtual void build_tree() = 0;
@@ -202,18 +206,20 @@ class AbstractTreeView : public AbstractView, public TreeViewItemContainer {
   bool supports_scrolling() const override;
 
   void draw_hierarchy_lines(const ARegion &region, const Block &block) const;
-  void get_hierarchy_lines(const ARegion &region,
-                           const TreeViewOrItem &parent,
+  void get_hierarchy_lines(const TreeViewOrItem &parent,
                            const float aspect,
                            Vector<std::pair<int2, int2>> &lines,
                            int &visible_item_index) const;
 
   int count_visible_descendants(const AbstractTreeViewItem &parent) const;
-  /**
-   * Scroll the view so the active item is visible.
-   */
-  void scroll_active_into_view();
   void sort_inverted();
+  AbstractViewItem *find_active_or_visible_item() const override;
+  AbstractViewItem *navigate_left(AbstractViewItem *from) override;
+  AbstractViewItem *navigate_right(AbstractViewItem *from) override;
+  AbstractViewItem *navigate_up(AbstractViewItem *from) override;
+  AbstractViewItem *navigate_down(AbstractViewItem *from) override;
+
+  void page_scroll(bContext *C, PageScrollDirection direction) override;
 };
 
 /** \} */
@@ -305,6 +311,9 @@ class AbstractTreeViewItem : public AbstractViewItem, public TreeViewItemContain
   bool is_collapsible() const;
 
   int count_parents() const;
+  AbstractTreeViewItem *get_parent();
+  /* Return first child view item. */
+  AbstractTreeViewItem *get_child();
 
   void on_filter() override;
   StringRefNull label() const;

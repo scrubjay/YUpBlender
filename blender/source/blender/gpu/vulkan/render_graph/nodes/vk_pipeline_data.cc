@@ -62,7 +62,11 @@ void vk_pipeline_data_build_commands(VKCommandBufferInterface &command_buffer,
     command_buffer.bind_pipeline(vk_pipeline_bind_point, r_bound_pipeline.vk_pipeline);
   }
 
-  if (assign_if_different(r_bound_pipeline.vk_descriptor_set, pipeline_data.vk_descriptor_set) &&
+  const bool descriptor_set_changed = assign_if_different(r_bound_pipeline.vk_descriptor_set,
+                                                          pipeline_data.vk_descriptor_set);
+  const bool layout_changed = assign_if_different(r_bound_pipeline.vk_pipeline_layout,
+                                                  pipeline_data.vk_pipeline_layout);
+  if ((descriptor_set_changed || layout_changed) &&
       r_bound_pipeline.vk_descriptor_set != VK_NULL_HANDLE)
   {
     command_buffer.bind_descriptor_sets(vk_pipeline_bind_point,
@@ -107,10 +111,10 @@ void vk_vertex_buffer_bindings_build_links(VKResourceStateTracker &resources,
                                            VKRenderGraphLinks &links,
                                            const VKVertexBufferBindings &vertex_buffers)
 {
-  for (const VkBuffer vk_buffer :
-       Span<VkBuffer>(vertex_buffers.buffer, vertex_buffers.buffer_count))
+  for (const ResourceHandle resource_handle :
+       Span<ResourceHandle>(vertex_buffers.resource_handles, vertex_buffers.buffer_count))
   {
-    ResourceWithStamp resource = resources.get_buffer(vk_buffer);
+    ResourceWithStamp resource = resources.get_buffer(resource_handle);
     links.buffers.append({resource, VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT});
   }
 }

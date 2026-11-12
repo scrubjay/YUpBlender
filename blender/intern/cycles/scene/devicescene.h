@@ -26,9 +26,9 @@ class DeviceScene {
   device_vector<float2> prim_time;
 
   /* mesh */
-  device_vector<packed_float3> tri_verts;
   device_vector<uint> tri_shader;
   device_vector<packed_uint3> tri_vindex;
+  device_vector<packed_float3> tri_verts;
 
   device_vector<KernelCurve> curves;
   device_vector<float4> curve_keys;
@@ -56,6 +56,8 @@ class DeviceScene {
   device_vector<float4> attributes_float4;
   device_vector<uchar4> attributes_uchar4;
   device_vector<packed_normal> attributes_normal;
+  device_vector<Quaternion> attributes_quaternion;
+  device_vector<PackedSphericalHarmonicsRest> attributes_spherical_harmonics_rest;
 
   /* lights */
   device_vector<KernelLightDistribution> light_distribution;

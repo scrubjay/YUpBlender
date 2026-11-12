@@ -7,6 +7,7 @@
 #include "scene/scene.h"
 
 #include "util/hash.h"
+#include "util/tbb.h"
 
 #include "blender/attribute_convert.h"
 #include "blender/sync.h"
@@ -23,31 +24,30 @@ static void attr_create_motion_from_velocity(PointCloud *pointcloud,
                                              const blender::Span<blender::float3> b_attribute,
                                              const float motion_scale)
 {
-  const int num_points = pointcloud->get_points().size();
+  const int num_points = pointcloud->num_points();
 
   /* Override motion steps to fixed number. */
   pointcloud->set_motion_steps(3);
 
-  /* Find or add attribute */
-  float3 *P = pointcloud->get_points().data();
-  float *radius = pointcloud->get_radius().data();
-  Attribute *attr_mP = pointcloud->attributes.find(ATTR_STD_MOTION_VERTEX_POSITION);
-
-  if (!attr_mP) {
-    attr_mP = pointcloud->attributes.add(ATTR_STD_MOTION_VERTEX_POSITION);
-  }
+  /* Set motion steps on position and radius attributes. */
+  Attribute *attr_P = pointcloud->attributes.find(ATTR_STD_POSITION);
+  Attribute *attr_R = pointcloud->attributes.find(ATTR_STD_RADIUS);
+  attr_P->add_motion(pointcloud);
+  attr_R->add_motion(pointcloud);
+  const packed_float3 *P = pointcloud->get_position();
+  const float *radius = pointcloud->get_radius();
 
   /* Only export previous and next frame, we don't have any in between data. */
   const float motion_times[2] = {-1.0f, 1.0f};
-  for (int step = 0; step < 2; step++) {
-    const float relative_time = motion_times[step] * 0.5f * motion_scale;
-    float4 *mP = attr_mP->data_float4_for_write() + step * num_points;
+  for (int step = 1; step <= 2; step++) {
+    const float relative_time = motion_times[step - 1] * 0.5f * motion_scale;
+    packed_float3 *mP = attr_P->data_for_write<packed_float3>(step);
+    float *mR = attr_R->data_for_write<float>(step);
 
     for (int i = 0; i < num_points; i++) {
-      const float3 Pi = P[i] +
-                        make_float3(b_attribute[i][0], b_attribute[i][1], b_attribute[i][2]) *
-                            relative_time;
-      mP[i] = make_float4(Pi, radius[i]);
+      mP[i] = float3(P[i]) +
+              make_float3(b_attribute[i][0], b_attribute[i][1], b_attribute[i][2]) * relative_time;
+      mR[i] = radius[i];
     }
   }
 }
@@ -116,6 +116,144 @@ static void copy_attributes(PointCloud *pointcloud,
   });
 }
 
+static void export_pointcloud_gsplat_attributes(
+    PointCloud *pointcloud, const blender::bke::AttributeAccessor &b_attributes)
+{
+  const size_t num_points = pointcloud->num_points();
+
+  /* Base radiance and opacity. */
+  sync_attribute_from_blender(
+      pointcloud->attributes,
+      ATTR_STD_GSPLAT_RADIANCE_BASE,
+      b_attributes.lookup<blender::float4>("radiance:base", blender::bke::AttrDomain::Point),
+      num_points);
+
+  /* Scale. */
+  sync_attribute_from_blender(
+      pointcloud->attributes,
+      ATTR_STD_GSPLAT_SCALE,
+      b_attributes.lookup<blender::float3>("scale", blender::bke::AttrDomain::Point),
+      num_points);
+
+  /* Rotation. */
+  sync_attribute_from_blender(
+      pointcloud->attributes,
+      ATTR_STD_GSPLAT_ROTATION,
+      b_attributes.lookup<blender::math::Quaternion>("rotation", blender::bke::AttrDomain::Point),
+      num_points);
+
+  /* Spherical harmonics. */
+  vector<blender::bke::AttributeReader<blender::float3>> sh_attribute_readers;
+  vector<blender::VArraySpan<blender::float3>> sh_attribute_spans;
+  for (int i = 0; i < PackedSphericalHarmonicsRest::MAX_COEFFICIENTS; ++i) {
+    const string sh_attr_name = "radiance:sh_" + std::to_string(i);
+    blender::bke::AttributeReader<blender::float3> reader = b_attributes.lookup<blender::float3>(
+        sh_attr_name, blender::bke::AttrDomain::Point);
+    if (!reader) {
+      break;
+    }
+    sh_attribute_readers.push_back(std::move(reader));
+    sh_attribute_spans.push_back(
+        blender::VArraySpan<blender::float3>(*sh_attribute_readers.back()));
+  }
+  if (!sh_attribute_readers.empty()) {
+    Attribute *attr = pointcloud->attributes.add(
+        ATTR_STD_GSPLAT_RADIANCE_SPHERICAL_HARMONICS_REST);
+    PackedSphericalHarmonicsRest *sh_data = attr->data_for_write<PackedSphericalHarmonicsRest>();
+    parallel_for(blocked_range<size_t>(0, num_points, 32), [&](const blocked_range<size_t> &r) {
+      for (size_t point_index = r.begin(); point_index != r.end(); point_index++) {
+        spherical_harmonics_rest_fill_zero(sh_data[point_index]);
+        for (int sh_index = 0; sh_index < int(sh_attribute_readers.size()); ++sh_index) {
+          spherical_harmonics_rest_set_coefficient(
+              sh_data[point_index],
+              sh_index,
+              make_float3(sh_attribute_spans[sh_index][point_index].x,
+                          sh_attribute_spans[sh_index][point_index].y,
+                          sh_attribute_spans[sh_index][point_index].z));
+        }
+      }
+    });
+  }
+
+  pointcloud->create_missing_gsplat_attributes();
+}
+
+static void export_pointcloud_motion_gsplat_attributes(
+    PointCloud *pointcloud,
+    Attribute *attr_radiance_base,
+    Attribute *attr_scale,
+    Attribute *attr_rotation,
+    const blender::PointCloud &b_pointcloud,
+    const blender::bke::AttributeAccessor &b_attributes,
+    const int attr_step)
+{
+  const blender::Span<blender::float3> b_positions = b_pointcloud.positions();
+  const int num_points = pointcloud->num_points();
+  const bool size_matches = (b_positions.size() == num_points);
+
+  if (size_matches) {
+    if (!sync_attribute_motion_step_from_blender(
+            *attr_radiance_base,
+            attr_step,
+            b_attributes.lookup<blender::float4>("radiance:base",
+                                                 blender::bke::AttrDomain::Point)))
+    {
+      float4 *motion_radiance_base = attr_radiance_base->data_for_write<float4>(attr_step);
+      std::fill_n(motion_radiance_base, num_points, PointCloud::DEFAULT_GSPLAT_RADIANCE_BASE);
+    }
+
+    if (!sync_attribute_motion_step_from_blender(
+            *attr_scale,
+            attr_step,
+            b_attributes.lookup<blender::float3>("scale", blender::bke::AttrDomain::Point)))
+    {
+      packed_float3 *motion_scale = attr_scale->data_for_write<packed_float3>(attr_step);
+      std::fill_n(motion_scale, num_points, PointCloud::DEFAULT_GSPLAT_SCALE);
+    }
+
+    if (!sync_attribute_motion_step_from_blender(*attr_rotation,
+                                                 attr_step,
+                                                 b_attributes.lookup<blender::math::Quaternion>(
+                                                     "rotation", blender::bke::AttrDomain::Point)))
+    {
+      Quaternion *motion_rotation = attr_rotation->data_for_write<Quaternion>(attr_step);
+      std::fill_n(motion_rotation, num_points, identity_quaternion());
+    }
+    return;
+  }
+
+  /* Slow path: point count differs, copy what overlaps. */
+  const blender::VArraySpan b_radiance_base = *b_attributes.lookup<blender::float4>(
+      "radiance:base", blender::bke::AttrDomain::Point);
+  const blender::VArraySpan b_scale = *b_attributes.lookup<blender::float3>(
+      "scale", blender::bke::AttrDomain::Point);
+  const blender::VArraySpan b_rotation = *b_attributes.lookup<blender::math::Quaternion>(
+      "rotation", blender::bke::AttrDomain::Point);
+  float4 *motion_radiance_base = attr_radiance_base->data_for_write<float4>(attr_step);
+  packed_float3 *motion_scale = attr_scale->data_for_write<packed_float3>(attr_step);
+  Quaternion *motion_rotation = attr_rotation->data_for_write<Quaternion>(attr_step);
+
+  parallel_for(blocked_range<size_t>(0, std::min<int>(num_points, b_positions.size()), 32),
+               [&](const blocked_range<size_t> &r) {
+                 for (size_t i = r.begin(); i != r.end(); i++) {
+                   motion_radiance_base[i] = b_radiance_base.is_empty() ?
+                                                 PointCloud::DEFAULT_GSPLAT_RADIANCE_BASE :
+                                                 make_float4(b_radiance_base[i][0],
+                                                             b_radiance_base[i][1],
+                                                             b_radiance_base[i][2],
+                                                             b_radiance_base[i][3]);
+                   motion_scale[i] = b_scale.is_empty() ?
+                                         PointCloud::DEFAULT_GSPLAT_SCALE :
+                                         make_float3(b_scale[i][0], b_scale[i][1], b_scale[i][2]);
+                   motion_rotation[i] = b_rotation.is_empty() ? identity_quaternion() :
+                                                                make_quaternion(b_rotation[i][0],
+                                                                                b_rotation[i][1],
+                                                                                b_rotation[i][2],
+                                                                                b_rotation[i][3]);
+                 }
+               });
+}
+
 static void export_pointcloud(Scene *scene,
                               PointCloud *pointcloud,
                               const blender::PointCloud &b_pointcloud,
@@ -123,22 +261,29 @@ static void export_pointcloud(Scene *scene,
                               const float motion_scale)
 {
   const blender::Span<blender::float3> b_positions = b_pointcloud.positions();
-  const blender::VArraySpan b_radius = *b_pointcloud.attributes().lookup<float>(
-      "radius", blender::bke::AttrDomain::Point);
+  const blender::bke::AttributeAccessor b_attributes = b_pointcloud.attributes();
 
   pointcloud->resize(b_positions.size());
 
-  float3 *points = pointcloud->get_points().data();
+  /* Sync positions, sharing with Blender when possible. */
+  sync_attribute_from_blender(
+      pointcloud->attributes,
+      ATTR_STD_POSITION,
+      b_attributes.lookup<blender::float3>("position", blender::bke::AttrDomain::Point),
+      b_positions.size());
+  pointcloud->tag_position_modified();
 
-  for (const int i : b_positions.index_range()) {
-    points[i] = make_float3(b_positions[i][0], b_positions[i][1], b_positions[i][2]);
-  }
-
-  float *radius = pointcloud->get_radius().data();
-  if (!b_radius.is_empty()) {
-    std::copy(b_radius.data(), b_radius.data() + b_positions.size(), radius);
+  /* Sync radius, sharing with Blender when possible, or filling default. */
+  if (sync_attribute_from_blender(
+          pointcloud->attributes,
+          ATTR_STD_RADIUS,
+          b_attributes.lookup<float>("radius", blender::bke::AttrDomain::Point),
+          b_positions.size()))
+  {
+    pointcloud->tag_radius_modified();
   }
   else {
+    float *radius = pointcloud->get_radius_for_write();
     std::fill(radius, radius + b_positions.size(), 0.01f);
   }
 
@@ -147,10 +292,15 @@ static void export_pointcloud(Scene *scene,
 
   if (pointcloud->need_attribute(scene, ATTR_STD_POINT_RANDOM)) {
     Attribute *attr_random = pointcloud->attributes.add(ATTR_STD_POINT_RANDOM);
-    float *data = attr_random->data_float_for_write();
+    float *data = attr_random->data_for_write<float>();
     for (const int i : b_positions.index_range()) {
       data[i] = hash_uint2_to_float(i, 0);
     }
+  }
+
+  if (b_pointcloud.type == blender::PointCloudType::GSplat) {
+    export_pointcloud_gsplat_attributes(pointcloud, b_attributes);
+    pointcloud->set_render_as(PointCloud::RENDER_AS_GSPLATS);
   }
 
   copy_attributes(pointcloud, b_pointcloud, need_motion, motion_scale);
@@ -160,38 +310,98 @@ static void export_pointcloud_motion(PointCloud *pointcloud,
                                      const blender::PointCloud &b_pointcloud,
                                      const int motion_step)
 {
-  /* Find or add attribute. */
-  Attribute *attr_mP = pointcloud->attributes.find(ATTR_STD_MOTION_VERTEX_POSITION);
+  const bool is_gsplat = (b_pointcloud.type == blender::PointCloudType::GSplat);
+
+  /* Set motion steps on position and radius attributes. */
+  Attribute *attr_P = pointcloud->attributes.find(ATTR_STD_POSITION);
+  Attribute *attr_R = pointcloud->attributes.find(ATTR_STD_RADIUS);
+  Attribute *attr_radiance_base = is_gsplat ?
+                                      pointcloud->attributes.find(ATTR_STD_GSPLAT_RADIANCE_BASE) :
+                                      nullptr;
+  Attribute *attr_scale = is_gsplat ? pointcloud->attributes.find(ATTR_STD_GSPLAT_SCALE) : nullptr;
+  Attribute *attr_rotation = is_gsplat ? pointcloud->attributes.find(ATTR_STD_GSPLAT_ROTATION) :
+                                         nullptr;
+  const bool has_gsplat_attributes = (attr_radiance_base && attr_scale && attr_rotation);
   bool new_attribute = false;
 
-  if (!attr_mP) {
-    attr_mP = pointcloud->attributes.add(ATTR_STD_MOTION_VERTEX_POSITION);
+  if (!attr_P->has_motion()) {
+    attr_P->add_motion(pointcloud);
+    attr_R->add_motion(pointcloud);
+    if (is_gsplat && has_gsplat_attributes) {
+      attr_radiance_base->add_motion(pointcloud);
+      attr_scale->add_motion(pointcloud);
+      attr_rotation->add_motion(pointcloud);
+    }
     new_attribute = true;
   }
 
   const int num_points = pointcloud->num_points();
-  /* Point cloud attributes are stored as float4 with the radius in the w element.
-   * This is explicit now as float3 is no longer interchangeable with float4 as it
-   * is packed now. */
-  float4 *mP = attr_mP->data_float4_for_write() + motion_step * num_points;
-  bool have_motion = false;
-  const array<float3> &pointcloud_points = pointcloud->get_points();
-
+  const int attr_step = motion_step + 1;
   const blender::Span<blender::float3> b_positions = b_pointcloud.positions();
-  const blender::VArraySpan b_radius = *b_pointcloud.attributes().lookup<float>(
-      "radius", blender::bke::AttrDomain::Point);
+  const blender::bke::AttributeAccessor b_attributes = b_pointcloud.attributes();
+  const bool size_matches = (b_positions.size() == num_points);
 
-  for (int i = 0; i < std::min<int>(num_points, b_positions.size()); i++) {
-    const float3 P = make_float3(b_positions[i][0], b_positions[i][1], b_positions[i][2]);
-    const float radius = b_radius.is_empty() ? 0.01f : b_radius[i];
-    mP[i] = make_float4(P, radius);
-    have_motion = have_motion || (P != pointcloud_points[i]);
+  bool have_motion = false;
+
+  if (size_matches) {
+    /* Fast path: point count unchanged, sync the whole step from Blender,
+     * sharing the buffer when possible. */
+    sync_attribute_motion_step_from_blender(
+        *attr_P,
+        attr_step,
+        b_attributes.lookup<blender::float3>("position", blender::bke::AttrDomain::Point));
+    if (!sync_attribute_motion_step_from_blender(
+            *attr_R,
+            attr_step,
+            b_attributes.lookup<float>("radius", blender::bke::AttrDomain::Point)))
+    {
+      float *mR = attr_R->data_for_write<float>(attr_step);
+      std::fill(mR, mR + num_points, 0.01f);
+    }
+
+    /* If the buffer is shared from Blender and unchanged across frames, the
+     * pointer matches the center step's, so the memcmp is skipped. */
+    const packed_float3 *motion_P = attr_P->data<packed_float3>(attr_step);
+    const packed_float3 *center_P = pointcloud->get_position();
+    have_motion = motion_P != center_P &&
+                  std::memcmp(motion_P, center_P, num_points * sizeof(packed_float3)) != 0;
+  }
+  else {
+    /* Slow path: point count differs, copy what overlaps. Remaining points
+     * keep the center data. */
+    pointcloud->copy_center_to_motion_step(motion_step);
+
+    const blender::VArraySpan b_radius = *b_attributes.lookup<float>(
+        "radius", blender::bke::AttrDomain::Point);
+    packed_float3 *mP = attr_P->data_for_write<packed_float3>(attr_step);
+    float *mR = attr_R->data_for_write<float>(attr_step);
+    for (int i = 0; i < std::min<int>(num_points, b_positions.size()); i++) {
+      mP[i] = make_float3(b_positions[i][0], b_positions[i][1], b_positions[i][2]);
+      mR[i] = b_radius.is_empty() ? 0.01f : b_radius[i];
+    }
   }
 
-  /* In case of new attribute, we verify if there really was any motion. */
+  if (is_gsplat && has_gsplat_attributes) {
+    export_pointcloud_motion_gsplat_attributes(pointcloud,
+                                               attr_radiance_base,
+                                               attr_scale,
+                                               attr_rotation,
+                                               b_pointcloud,
+                                               b_attributes,
+                                               attr_step);
+    /* TODO(sergey): Remove constant radiance base, scale, and rotation attributes. */
+  }
+
+  /* In case of new attribute, verify if there really was any motion. */
   if (new_attribute) {
-    if (b_positions.size() != num_points || !have_motion) {
-      pointcloud->attributes.remove(ATTR_STD_MOTION_VERTEX_POSITION);
+    if (!size_matches || !have_motion) {
+      attr_P->remove_motion();
+      attr_R->remove_motion();
+      if (is_gsplat && has_gsplat_attributes) {
+        attr_radiance_base->remove_motion();
+        attr_scale->remove_motion();
+        attr_rotation->remove_motion();
+      }
     }
     else if (motion_step > 0) {
       /* Motion, fill up previous steps that we might have skipped because
@@ -225,9 +435,26 @@ void BlenderSync::sync_pointcloud(PointCloud *pointcloud, BObjectInfo &b_ob_info
                                              0.0f;
   export_pointcloud(scene, &new_pointcloud, *b_pointcloud, need_motion, motion_scale);
 
-  pointcloud->clear_non_sockets();
+  if (scene->need_motion() == Scene::MOTION_PASS_INTERACTIVE &&
+      pointcloud->num_points() == new_pointcloud.num_points())
+  {
+    new_pointcloud.set_motion_steps(2);
+
+    Attribute *attr_P = pointcloud->attributes.find(ATTR_STD_POSITION);
+    Attribute *new_attr_P = new_pointcloud.attributes.find(ATTR_STD_POSITION);
+    if (attr_P->has_motion()) {
+      new_attr_P->take_motion_from(*attr_P);
+    }
+    else {
+      new_attr_P->add_motion(&new_pointcloud);
+      new_pointcloud.copy_center_to_motion_step(0);
+    }
+  }
 
   /* Update original sockets. */
+
+  pointcloud->clear_non_sockets();
+
   for (const SocketType &socket : new_pointcloud.type->inputs) {
     /* Those sockets are updated in sync_object, so do not modify them. */
     if (socket.name == "use_motion_blur" || socket.name == "used_shaders") {

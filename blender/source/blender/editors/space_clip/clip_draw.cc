@@ -16,12 +16,12 @@
 #include "IMB_imbuf.hh"
 #include "IMB_imbuf_types.hh"
 
-#include "BLI_listbase.h"
-#include "BLI_math_base.h"
-#include "BLI_math_geom.h"
-#include "BLI_rect.h"
-#include "BLI_string_utf8.h"
-#include "BLI_utildefines.h"
+#include "BLI_listbase.hh"
+#include "BLI_math_base_c.hh"
+#include "BLI_math_geom_c.hh"
+#include "BLI_rect.hh"
+#include "BLI_string_utf8.hh"
+#include "BLI_utildefines.hh"
 
 #include "BKE_context.hh"
 #include "BKE_image.hh"
@@ -304,7 +304,7 @@ static void draw_movieclip_muted(ARegion *region, int width, int height, float z
 static void draw_movieclip_buffer(const bContext *C,
                                   SpaceClip *sc,
                                   ARegion *region,
-                                  ImBuf *ibuf,
+                                  const ImBuf *ibuf,
                                   int width,
                                   int height,
                                   float zoomx,
@@ -318,7 +318,7 @@ static void draw_movieclip_buffer(const bContext *C,
   ui::view2d_view_to_region(&region->v2d, 0.0f, 0.0f, &x, &y);
 
   /* checkerboard for case alpha */
-  if (ibuf->planes == 32) {
+  if (ibuf->can_contain_alpha()) {
     GPU_blend(GPU_BLEND_ALPHA);
 
     imm_draw_box_checker_2d(x, y, x + zoomx * ibuf->x, y + zoomy * ibuf->y);
@@ -333,7 +333,7 @@ static void draw_movieclip_buffer(const bContext *C,
 
   ED_draw_imbuf_ctx(C, ibuf, x, y, use_filter, zoomx * width / ibuf->x, zoomy * height / ibuf->y);
 
-  if (ibuf->planes == 32) {
+  if (ibuf->can_contain_alpha()) {
     GPU_blend(GPU_BLEND_NONE);
   }
 
@@ -359,9 +359,8 @@ static void draw_stabilization_border(
     const uint shdr_pos = GPU_vertformat_attr_add(
         immVertexFormat(), "pos", gpu::VertAttrType::SFLOAT_32_32);
 
-    /* Exclusive OR allows to get orig value when second operand is 0,
-     * and negative of orig value when second operand is 1. */
-    GPU_logic_op_xor_set(true);
+    /* Use invert blend mode for highly visible border */
+    GPU_blend(GPU_BLEND_INVERT);
 
     GPU_matrix_push();
     GPU_matrix_translate_2f(x, y);
@@ -387,7 +386,7 @@ static void draw_stabilization_border(
 
     GPU_matrix_pop();
 
-    GPU_logic_op_xor_set(false);
+    GPU_blend(GPU_BLEND_NONE);
   }
 }
 
@@ -829,14 +828,15 @@ static void draw_marker_areas(SpaceClip *sc,
       immUniform1f("dash_width", 6.0f);
       immUniform1f("udash_factor", 0.5f);
 
-      GPU_logic_op_xor_set(true);
+      /* Use invert blend mode for highly visible border */
+      GPU_blend(GPU_BLEND_INVERT);
 
       immBegin(GPU_PRIM_LINES, 2);
       immVertex2fv(shdr_pos, pos);
       immVertex2fv(shdr_pos, marker_pos);
       immEnd();
 
-      GPU_logic_op_xor_set(false);
+      GPU_blend(GPU_BLEND_NONE);
       immUnbindProgram();
     }
   }
@@ -1052,7 +1052,7 @@ static void draw_marker_texts(SpaceClip *sc,
 {
   char str[128] = {0}, state[64] = {0};
   float dx = 0.0f, dy = 0.0f, fontsize, pos[3];
-  uiStyle *style = static_cast<uiStyle *>(U.uistyles.first);
+  uiStyle *style = U.uistyles.first();
   int fontid = style->widget.uifont_id;
 
   if (!TRACK_VIEW_SELECTED(sc, track)) {
@@ -1193,21 +1193,53 @@ static void draw_plane_marker_image(Scene *scene,
                                     MovieTrackingPlaneMarker *plane_marker)
 {
   Image *image = plane_track->image;
-  ImBuf *ibuf;
-  void *lock;
-
   if (image == nullptr) {
     return;
   }
 
-  ibuf = BKE_image_acquire_ibuf(image, nullptr, &lock);
+  void *lock;
+  ImBuf *ibuf = BKE_image_acquire_ibuf(image, nullptr, &lock);
 
   if (ibuf) {
-    void *cache_handle;
-    const uchar *display_buffer = IMB_display_buffer_acquire(
-        ibuf, &scene->view_settings, &scene->display_settings, &cache_handle);
+    GPUVertFormat *imm_format = immVertexFormat();
+    uint pos = GPU_vertformat_attr_add(imm_format, "pos", gpu::VertAttrType::SFLOAT_32_32_32);
+    uint texCoord = GPU_vertformat_attr_add(
+        imm_format, "texCoord", gpu::VertAttrType::SFLOAT_32_32);
 
-    if (display_buffer) {
+    const ColorSpace *colorspace = ibuf->float_data() ? ibuf->float_buffer.colorspace :
+                                                        ibuf->byte_buffer.colorspace;
+    const bool predivide = IMB_alpha_affects_rgb(ibuf);
+    if (IMB_colormanagement_setup_glsl_draw_from_space(&scene->view_settings,
+                                                       &scene->display_settings,
+                                                       colorspace,
+                                                       ibuf->dither,
+                                                       predivide,
+                                                       false,
+                                                       DISPLAY_SPACE_DRAW,
+                                                       plane_track->image_opacity))
+    {
+      const void *texture_data = nullptr;
+      gpu::TextureFormat texture_format = gpu::TextureFormat::Invalid;
+      eGPUDataFormat data_format = GPU_DATA_FLOAT;
+      if (ibuf->float_data()) {
+        data_format = GPU_DATA_FLOAT;
+        if (ibuf->channels == 4) {
+          texture_format = gpu::TextureFormat::SFLOAT_16_16_16_16;
+        }
+        else if (ibuf->channels == 3) {
+          texture_format = gpu::TextureFormat::SFLOAT_16_16_16;
+        }
+        else if (ibuf->channels == 1) {
+          texture_format = gpu::TextureFormat::SFLOAT_16;
+        }
+        texture_data = ibuf->float_data();
+      }
+      else {
+        data_format = GPU_DATA_UBYTE;
+        texture_format = gpu::TextureFormat::UNORM_8_8_8_8;
+        texture_data = ibuf->byte_data();
+      }
+
       float frame_corners[4][2] = {{0.0f, 0.0f}, {1.0f, 0.0f}, {1.0f, 1.0f}, {0.0f, 1.0f}};
       float perspective_matrix[3][3];
       float gl_matrix[4][4];
@@ -1217,7 +1249,7 @@ static void draw_plane_marker_image(Scene *scene,
 
       homogeneous_2d_to_gl_matrix(perspective_matrix, gl_matrix);
 
-      if (plane_track->image_opacity != 1.0f || ibuf->planes == 32) {
+      if (plane_track->image_opacity != 1.0f || ibuf->can_contain_alpha()) {
         transparent = true;
         GPU_blend(GPU_BLEND_ALPHA);
       }
@@ -1226,25 +1258,15 @@ static void draw_plane_marker_image(Scene *scene,
                                                     ibuf->x,
                                                     ibuf->y,
                                                     1,
-                                                    gpu::TextureFormat::UNORM_8_8_8_8,
+                                                    texture_format,
                                                     GPU_TEXTURE_USAGE_SHADER_READ,
                                                     nullptr);
-      GPU_texture_update(texture, GPU_DATA_UBYTE, display_buffer);
+      GPU_texture_update(texture, data_format, texture_data);
       GPU_texture_filter_mode(texture, false);
+      GPU_texture_bind(texture, 0);
 
       GPU_matrix_push();
       GPU_matrix_mul(gl_matrix);
-
-      GPUVertFormat *imm_format = immVertexFormat();
-      uint pos = GPU_vertformat_attr_add(imm_format, "pos", gpu::VertAttrType::SFLOAT_32_32_32);
-      uint texCoord = GPU_vertformat_attr_add(
-          imm_format, "texCoord", gpu::VertAttrType::SFLOAT_32_32);
-
-      /* Use 3D image for correct display of planar tracked images. */
-      immBindBuiltinProgram(GPU_SHADER_3D_IMAGE_COLOR);
-
-      immBindTexture("image", texture);
-      immUniformColor4f(1.0f, 1.0f, 1.0f, plane_track->image_opacity);
 
       immBegin(GPU_PRIM_TRI_FAN, 4);
 
@@ -1262,8 +1284,6 @@ static void draw_plane_marker_image(Scene *scene,
 
       immEnd();
 
-      immUnbindProgram();
-
       GPU_matrix_pop();
 
       GPU_texture_unbind(texture);
@@ -1274,7 +1294,7 @@ static void draw_plane_marker_image(Scene *scene,
       }
     }
 
-    IMB_display_buffer_release(cache_handle);
+    IMB_colormanagement_finish_glsl_draw();
   }
 
   BKE_image_release_ibuf(image, ibuf, lock);
@@ -1821,10 +1841,10 @@ static void draw_distortion(SpaceClip *sc,
   }
 
   if (sc->flag & SC_MANUAL_CALIBRATION && gpd) {
-    bGPDlayer *layer = static_cast<bGPDlayer *>(gpd->layers.first);
+    bGPDlayer *layer = gpd->layers.first();
 
     while (layer) {
-      bGPDframe *frame = static_cast<bGPDframe *>(layer->frames.first);
+      bGPDframe *frame = layer->frames.first();
 
       if (layer->flag & GP_LAYER_HIDE) {
         layer = layer->next;
@@ -1837,7 +1857,7 @@ static void draw_distortion(SpaceClip *sc,
       GPU_point_size(float(layer->thickness + 2));
 
       while (frame) {
-        bGPDstroke *stroke = static_cast<bGPDstroke *>(frame->strokes.first);
+        bGPDstroke *stroke = frame->strokes.first();
 
         while (stroke) {
           if (stroke->flag & GP_STROKE_2DSPACE) {

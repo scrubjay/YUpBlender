@@ -14,7 +14,8 @@
 #include "DNA_screen_types.h"
 #include "DNA_space_types.h"
 
-#include "BLI_math_color.h"
+#include "BLI_math_color_c.hh"
+#include "BLI_math_vector.hh"
 
 #include "ED_image.hh"
 #include "ED_view3d.hh"
@@ -36,7 +37,6 @@ class Grid : Overlay {
   StorageVectorBuffer<float4> tile_pos_buf_;
 
   /* Config data */
-  float2 grid_offs_ = float2(0.0f);
   int grid_flag_ = 0;
   int axis_flag_ = 0;
   uint num_iters_ = 0;
@@ -171,17 +171,28 @@ class Grid : Overlay {
     std::array<float, SI_GRID_STEPS_LEN> steps_x, steps_y;
     ED_space_image_grid_steps(sima, steps_x.data(), steps_y.data(), SI_GRID_STEPS_LEN);
     for (int i : IndexRange(SI_GRID_STEPS_LEN)) {
-      /* If the current level is not specified, or the same size as the previous level,
-       * we apply a 10x scale to the previous level and use that. */
-      float step_mult = (i > 0 && (steps_x[i] == 0.0f || steps_x[i] == steps_x[i - 1])) ? 20.0f :
-                                                                                          2.0f;
-      grid_ubo_.steps[i].x = steps_x[i] * step_mult;
-      grid_ubo_.steps[i].z = grid_ubo_.steps[i].x;
-      grid_ubo_.steps[i].y = steps_y[i] * step_mult;
+      /* NOTE(not_mark): grid steps data appears to be flipped on X/Y. */
+      grid_ubo_.steps[i].x = steps_x[i];
+      grid_ubo_.steps[i].y = grid_ubo_.steps[i].z = steps_y[i];
     }
 
-    /* Align the grid to the tile origin */
-    grid_ubo_.offset = float2(-1.0f);
+    /* Clip rectangle can be specified in UV editor view. */
+    grid_ubo_.clip_rect.x = float(sima->tile_grid_shape[0]);
+    grid_ubo_.clip_rect.y = float(sima->tile_grid_shape[1]);
+    /* Outline draws lines around tile grid */
+    tile_pos_buf_.clear();
+    for (const int x : IndexRange(sima->tile_grid_shape[0])) {
+      for (const int y : IndexRange(sima->tile_grid_shape[1])) {
+        tile_pos_buf_.append(float4(x, y, 0.0f, 0.0f));
+      }
+    }
+    tile_pos_buf_.push_update();
+
+    /* Align the grid to the camera center. */
+    grid_ubo_.offset.x = 0.5f * (v2d->cur.xmax + v2d->cur.xmin);
+    grid_ubo_.offset.y = 0.5f * (v2d->cur.ymax + v2d->cur.ymin);
+    /* Restrict center to the clip rect. */
+    grid_ubo_.offset = math::clamp(grid_ubo_.offset, float2(0.0f), grid_ubo_.clip_rect);
 
     /* Query grid image zoom level. Then find the lowest relevant grid level + fractional. */
     float dist = ED_space_image_zoom_level(v2d, SI_GRID_STEPS_LEN) * 4.0f;
@@ -196,21 +207,19 @@ class Grid : Overlay {
       }
     }
 
-    /* Clip rectangle can be specified in UV editor view. */
-    grid_ubo_.clip_rect.x = float(sima->tile_grid_shape[0]);
-    grid_ubo_.clip_rect.y = float(sima->tile_grid_shape[1]);
+    /* Determine the practical size of the viewport in line steps. */
+    const uint lowest_level = std::min(uint(grid_ubo_.level), uint(OVERLAY_GRID_STEPS_LEN - 1));
+    const float2 lowest_step = grid_ubo_.steps[lowest_level].xy();
+    float2 viewport_size = float2((v2d->cur.xmax - v2d->cur.xmin),
+                                  (v2d->cur.ymax - v2d->cur.ymin));
+    viewport_size = math::min(viewport_size, grid_ubo_.clip_rect);
 
-    /* Outline draws lines around tile grid */
-    tile_pos_buf_.clear();
-    for (const int x : IndexRange(sima->tile_grid_shape[0])) {
-      for (const int y : IndexRange(sima->tile_grid_shape[1])) {
-        tile_pos_buf_.append(float4(x, y, 0.0f, 0.0f));
-      }
-    }
-    tile_pos_buf_.push_update();
-
-    /* This suffices for most cases, and in others we fade to hide it. */
-    grid_ubo_.num_lines = 601u;
+    /* We limit to 8192 lines per axis. This hits the current maximum framebuffer size on
+     * the VK roadmap. In addition, lines are faded when they are 2-4 pixels apart. */
+    const float viewport_extent = math::reduce_max(viewport_size);
+    uint max_lines_x = 2u * uint(ceilf(viewport_extent / lowest_step.x)) + 1u;
+    uint max_lines_y = 2u * uint(ceilf(viewport_extent / lowest_step.y)) + 1u;
+    grid_ubo_.num_lines = std::min(std::max(max_lines_x, max_lines_y), 8192u);
     num_iters_ = 1u;
 
     return true;
@@ -232,9 +241,12 @@ class Grid : Overlay {
     const View3D *v3d = state.v3d;
     const RegionView3D *rv3d = state.rv3d;
 
+    /* Camera parameters. */
+    float3 drw_view_position = rv3d->viewinv[3], drw_view_forward = rv3d->viewinv[2];
+
     /* Set `grid_flag_` dependent on view configuration. */
-    if (rv3d->is_persp || rv3d->view == RV3D_VIEW_USER) {
-      /* Perspective/user view: Y-up floor is the XZ plane (Y=0). */
+    if (rv3d->is_persp) {
+      /* Perspective: set selected axes and floor plane (Y-up floor = XZ). */
       axis_flag_ |= (show_axis_x ? AXIS_X : OVERLAY_GridBits(0));
       axis_flag_ |= (show_axis_y ? AXIS_Y : OVERLAY_GridBits(0));
       axis_flag_ |= (show_axis_z ? AXIS_Z : OVERLAY_GridBits(0));
@@ -251,28 +263,54 @@ class Grid : Overlay {
         grid_flag_ |= (show_axis_z ? AXIS_Z : OVERLAY_GridBits(0));
       }
     }
+    else if (rv3d->view == RV3D_VIEW_USER) {
+      /* User orthographic: set selected axes. */
+      axis_flag_ |= (show_axis_x ? AXIS_X : OVERLAY_GridBits(0));
+      axis_flag_ |= (show_axis_y ? AXIS_Y : OVERLAY_GridBits(0));
+      axis_flag_ |= (show_axis_z ? AXIS_Z : OVERLAY_GridBits(0));
+
+      /* Determine which plane to display based on view direction. */
+      OVERLAY_GridBits user_plane = PLANE_XZ;
+      if (abs(drw_view_forward.z) > 0.707f) {
+        user_plane = PLANE_XY;
+      }
+      else if (abs(drw_view_forward.x) > 0.707f) {
+        user_plane = PLANE_YZ;
+      }
+
+      const bool show_grid_user = show_persp || show_ortho;
+      grid_flag_ |= (show_grid_user ? user_plane : OVERLAY_GridBits(0));
+
+      /* If any options were set, set SHOW_AXES/SHOW_GRID. */
+      axis_flag_ |= (axis_flag_ ? SHOW_AXES : OVERLAY_GridBits(0));
+      grid_flag_ |= (grid_flag_ ? SHOW_GRID : OVERLAY_GridBits(0));
+
+      /* Axes are passed to the grid flag for correct occlusion. */
+      if (grid_flag_) {
+        grid_flag_ |= (show_axis_x ? AXIS_X : OVERLAY_GridBits(0));
+        grid_flag_ |= (show_axis_y ? AXIS_Y : OVERLAY_GridBits(0));
+        grid_flag_ |= (show_axis_z ? AXIS_Z : OVERLAY_GridBits(0));
+      }
+    }
     else {
-      /* Fixed plane orthographic for Y-up:
-       *   Right/Left  view → YZ plane (show Y and Z axes)
-       *   Top/Bottom  view → XZ plane (show X and Z axes)  [Y is depth]
-       *   Front/Back  view → XY plane (show X and Y axes)  [Z is depth]
-       */
+      /* Fixed plane orthographic: set axis/plane bits dependent on the view
+       * (top, right, left, etc.) that is selected. */
       if (ELEM(rv3d->view, RV3D_VIEW_RIGHT, RV3D_VIEW_LEFT)) {
         axis_flag_ = (show_axis_y ? (AXIS_Y | GRID_ALIGNED) : OVERLAY_GridBits(0)) |
                      (show_axis_z ? (AXIS_Z | GRID_ALIGNED) : OVERLAY_GridBits(0));
         grid_flag_ = (show_ortho ? (PLANE_YZ | GRID_ALIGNED) : OVERLAY_GridBits(0));
       }
-      else if (ELEM(rv3d->view, RV3D_VIEW_TOP, RV3D_VIEW_BOTTOM)) {
-        /* Y-up Top view: looking down -Y, XZ is the horizontal plane. */
-        axis_flag_ = (show_axis_x ? (AXIS_X | GRID_ALIGNED) : OVERLAY_GridBits(0)) |
-                     (show_axis_z ? (AXIS_Z | GRID_ALIGNED) : OVERLAY_GridBits(0));
-        grid_flag_ = (show_ortho ? (PLANE_XZ | GRID_ALIGNED) : OVERLAY_GridBits(0));
-      }
       else if (ELEM(rv3d->view, RV3D_VIEW_FRONT, RV3D_VIEW_BACK)) {
-        /* Y-up Front view: looking along -Z, XY is the visible plane. */
+        /* Looking along Z at the XY plane: show X and Y axes, XY grid. */
         axis_flag_ = (show_axis_x ? (AXIS_X | GRID_ALIGNED) : OVERLAY_GridBits(0)) |
                      (show_axis_y ? (AXIS_Y | GRID_ALIGNED) : OVERLAY_GridBits(0));
         grid_flag_ = (show_ortho ? (PLANE_XY | GRID_ALIGNED) : OVERLAY_GridBits(0));
+      }
+      else if (ELEM(rv3d->view, RV3D_VIEW_TOP, RV3D_VIEW_BOTTOM)) {
+        /* Looking along Y at the XZ floor plane: show X and Z axes, XZ grid. */
+        axis_flag_ = (show_axis_x ? (AXIS_X | GRID_ALIGNED) : OVERLAY_GridBits(0)) |
+                     (show_axis_z ? (AXIS_Z | GRID_ALIGNED) : OVERLAY_GridBits(0));
+        grid_flag_ = (show_ortho ? (PLANE_XZ | GRID_ALIGNED) : OVERLAY_GridBits(0));
       }
 
       /* If any axes are set, set SHOW_AXES. If `grid` is toggled, set SHOW_GRID.
@@ -308,54 +346,60 @@ class Grid : Overlay {
       }
     }
 
-    /* Camera parameters. */
-    float3 drw_view_position = rv3d->viewinv[3], drw_view_forward = rv3d->viewinv[2];
-
-    /* Compute distance to a relevant floor point-of-interest from the camera.
-     * Y-up: floor is XZ plane (Y=0). Height = Y coordinate. */
+    /* Compute distance to a relevant floor point-of-interest from the camera. The grid translates
+     * with this point and is only drawn around it. */
     float dist;
     if (rv3d->is_persp) {
-      /* Scale depends on distance to a point on the XZ floor plane; interpolate between
-       * the point viewed by the camera and the point directly below it (along -Y). */
+      /* Scale depends on distance to a point on the floor plane (Y-up: XZ plane, height is Y);
+       * we interpolate between the point viewed by the camera and the point directly below it,
+       * dependent on azimuth. */
       dist = interpolate(abs(drw_view_position.y / drw_view_forward.y),
                          abs(drw_view_position.y),
                          1.0f - abs(drw_view_forward.y));
     }
     else if (bool(grid_flag_ & GRID_ALIGNED) || bool(axis_flag_ & GRID_ALIGNED)) {
-      /* #155497: mirror `ED_view3d_grid_view_scale` for axis-aligned orthographic views. */
+      /* #155497: use the same zoom-derived distance as `ED_view3d_grid_view_scale()` for
+       * axis-aligned orthographic views. */
       dist = 10.0f * 12.0f / (state.region->sizex * rv3d->winmat[0][0]);
+      /* Keep the selected level from going below the smallest available grid step. */
+      const float min_step = std::min(grid_ubo_.steps[0].x, grid_ubo_.steps[0].y);
+      dist = std::max(dist, min_step);
     }
     else {
       /* Scale is simply specified by orthographic view. */
       dist = rv3d->dist;
     }
 
-    /* Extract 2D grid offset for moving grid "with the camera" on the floor plane.
-     * Y-up: Right/Left→YZ offset, Top/Bottom→XZ offset, Front/Back→XY offset,
-     *       Persp/Ortho user→XZ (the Y-up floor plane). */
+    /* Extract 2D grid offset for moving grid "with the camera" on the floor plane. */
     if (ELEM(rv3d->view, RV3D_VIEW_RIGHT, RV3D_VIEW_LEFT)) {
       grid_ubo_.offset = drw_view_position.yz();
     }
-    else if (ELEM(rv3d->view, RV3D_VIEW_TOP, RV3D_VIEW_BOTTOM)) {
-      /* Top view: looking down -Y, so XZ is the grid plane. */
-      grid_ubo_.offset = float2(drw_view_position.x, drw_view_position.z);
-    }
     else if (ELEM(rv3d->view, RV3D_VIEW_FRONT, RV3D_VIEW_BACK)) {
-      /* Front view: looking along -Z, so XY is the grid plane. */
       grid_ubo_.offset = drw_view_position.xy();
     }
+    else if (ELEM(rv3d->view, RV3D_VIEW_TOP, RV3D_VIEW_BOTTOM)) {
+      grid_ubo_.offset = float2(drw_view_position.x, drw_view_position.z);
+    }
     else if (rv3d->is_persp) {
-      /* Perspective user view: project onto XZ floor plane (Y=0). */
       float3 camera_offs = drw_view_position - dist * drw_view_forward;
       grid_ubo_.offset = float2(camera_offs.x, camera_offs.z);
     }
-    else { /* Orthographic user view: project camera ray onto XZ plane. */
-      const float forward_y = drw_view_forward.y;
+    else { /* Orthographic user view. */
       constexpr float eps = 1e-6f;
-      if (abs(forward_y) > eps) {
-        /* Center the grid on the intersection of the view ray with the XZ plane (Y=0). */
+      if (abs(drw_view_forward.z) > 0.707f) {
         float3 camera_offs = drw_view_position -
-                             drw_view_forward * safe_divide(drw_view_position.y, forward_y);
+                             drw_view_forward * safe_divide(drw_view_position.z, drw_view_forward.z);
+        grid_ubo_.offset = camera_offs.xy();
+      }
+      else if (abs(drw_view_forward.x) > 0.707f) {
+        float3 camera_offs = drw_view_position -
+                             drw_view_forward * safe_divide(drw_view_position.x, drw_view_forward.x);
+        grid_ubo_.offset = camera_offs.yz();
+      }
+      else if (abs(drw_view_forward.y) > eps) {
+        /* Center the grid on the intersection of the orthographic view ray with the XZ plane. */
+        float3 camera_offs = drw_view_position -
+                             drw_view_forward * safe_divide(drw_view_position.y, drw_view_forward.y);
         grid_ubo_.offset = float2(camera_offs.x, camera_offs.z);
       }
       else {
@@ -392,21 +436,38 @@ class Grid : Overlay {
       grid_ubo_.clip_rect = float2(clip_dist);
     }
     else {
-      /* WATCH(not_mark): This appears to function in ortho/VR, but I'm not convinced. */
       bool use_clip_end = rv3d->is_persp ||
                           ((v3d->flag & (V3D_XR_SESSION_SURFACE | V3D_XR_SESSION_MIRROR)) != 0);
-      if (use_clip_end) {
-        grid_ubo_.clip_rect = float2(v3d->clip_end);
-      }
-      else {
-        grid_ubo_.clip_rect = float2(4.0f / rv3d->winmat[0][0], 4.0f / rv3d->winmat[1][1]);
-      }
+      grid_ubo_.clip_rect = use_clip_end ? float2(v3d->clip_end) :
+                                           float2(std::max(4.0f / rv3d->winmat[0][0],
+                                                           4.0f / rv3d->winmat[1][1]));
     }
 
     /* This suffices for most cases, and in others we fade to hide it. */
-    /* TODO (not_mark): make this view-dependent in orthographic to have full coverage */
-    grid_ubo_.num_lines = rv3d->is_persp ? 151u : 301u;
-    num_iters_ = rv3d->is_persp ? OVERLAY_GRID_ITER_LEN : 1u;
+    if (rv3d->is_persp) {
+      /* In perspective views, we draw a fixed number of lines, but draw them N times
+       * at different Z to mitigate flickering. */
+      grid_ubo_.num_lines = 151u;
+      num_iters_ = OVERLAY_GRID_ITER_LEN;
+    }
+    else if ((grid_flag_ & GRID_ALIGNED) != 0) {
+      /* Determine the practical size of the viewport in line steps. */
+      const uint lowest_level = std::min(uint(grid_ubo_.level), uint(OVERLAY_GRID_STEPS_LEN - 1));
+      const float2 lowest_step = grid_ubo_.steps[lowest_level].xy();
+      float2 viewport_size = float2(1.0f / rv3d->winmat[0][0], 1.0f / rv3d->winmat[1][1]);
+
+      /* We limit to 8192 lines per axis. This hits the current maximum framebuffer size on
+       * the VK roadmap. In addition, lines are faded when they are 2-4 pixels apart. */
+      uint max_lines_x = 2u * uint(ceilf(viewport_size.x / lowest_step.x)) + 1u;
+      uint max_lines_y = 2u * uint(ceilf(viewport_size.y / lowest_step.y)) + 1u;
+      grid_ubo_.num_lines = std::min(std::max(max_lines_x, max_lines_y), 8192u);
+      num_iters_ = 1u;
+    }
+    else {
+      /* In other orthographic views, we draw a fixed number of lines. */
+      grid_ubo_.num_lines = 301u;
+      num_iters_ = 1;
+    }
 
     return true;
   }

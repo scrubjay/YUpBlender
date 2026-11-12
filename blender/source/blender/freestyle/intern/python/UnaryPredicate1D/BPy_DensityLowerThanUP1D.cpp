@@ -25,10 +25,10 @@ PyDoc_STRVAR(
     "\n"
     "   Builds a DensityLowerThanUP1D object.\n"
     "\n"
-    "   :arg threshold: The value of the threshold density. Any Interface1D\n"
+    "   :param threshold: The value of the threshold density. Any Interface1D\n"
     "      having a density lower than this threshold will match.\n"
     "   :type threshold: float\n"
-    "   :arg sigma: The sigma value defining the density evaluation window\n"
+    "   :param sigma: The sigma value defining the density evaluation window\n"
     "      size used in the :class:`freestyle.functions.DensityF0D` functor.\n"
     "   :type sigma: float\n"
     "\n"
@@ -37,7 +37,7 @@ PyDoc_STRVAR(
     "   Returns true if the density evaluated for the Interface1D is less\n"
     "   than a user-defined density value.\n"
     "\n"
-    "   :arg inter: An Interface1D object.\n"
+    "   :param inter: An Interface1D object.\n"
     "   :type inter: :class:`freestyle.types.Interface1D`\n"
     "   :return: True if the density is lower than a threshold.\n"
     "   :rtype: bool\n");
@@ -48,7 +48,16 @@ static int DensityLowerThanUP1D___init__(BPy_DensityLowerThanUP1D *self,
   static const char *kwlist[] = {"threshold", "sigma", nullptr};
   double d1, d2 = 2.0;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "d|d", (char **)kwlist, &d1, &d2)) {
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "d" /* `threshold` */
+                                   "|" /* Optional arguments. */
+                                   "d" /* `sigma` */
+                                   ":__init__",
+                                   (char **)kwlist,
+                                   &d1,
+                                   &d2))
+  {
     return -1;
   }
   self->py_up1D.up1D = new Predicates1D::DensityLowerThanUP1D(d1, d2);

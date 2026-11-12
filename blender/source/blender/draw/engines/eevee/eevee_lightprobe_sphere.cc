@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup eevee
+ */
+
 #include "eevee_lightprobe_sphere.hh"
 #include "eevee_instance.hh"
 
@@ -18,7 +22,7 @@ int SphereProbeModule::probe_render_extent() const
 
 void SphereProbeModule::init()
 {
-  if (!instance_.is_viewport()) {
+  if (!instance_.is_viewport() || instance_.is_image_render) {
     /* TODO(jbakker): should we check on the subtype as well? Now it also populates even when
      * there are other light probes in the scene. */
     update_probes_next_sample_ = DEG_id_type_any_exists(instance_.depsgraph, ID_LP);
@@ -170,8 +174,14 @@ void SphereProbeModule::end_sync()
 void SphereProbeModule::ensure_cubemap_render_target(int resolution)
 {
   eGPUTextureUsage usage = GPU_TEXTURE_USAGE_ATTACHMENT | GPU_TEXTURE_USAGE_SHADER_READ;
-  cubemap_tx_.ensure_cube(gpu::TextureFormat::SFLOAT_16_16_16_16, resolution, usage);
-  /* TODO(fclem): deallocate it. */
+  /* 32 bit float because sun light extraction reads this before anything clamps it, and a world
+   * can be far brighter than the 65504 a 16 bit float holds. The atlas stays 16 bit. */
+  cubemap_tx_.ensure_cube(gpu::TextureFormat::SFLOAT_32_32_32_32, resolution, usage);
+}
+
+void SphereProbeModule::release_render_target()
+{
+  cubemap_tx_.free();
 }
 
 SphereProbeModule::UpdateInfo SphereProbeModule::update_info_from_probe(SphereProbe &probe)
@@ -185,8 +195,6 @@ SphereProbeModule::UpdateInfo SphereProbeModule::update_info_from_probe(SpherePr
 
   probe.do_render = false;
   probe.use_for_render = true;
-
-  ensure_cubemap_render_target(info.cube_target_extent);
   return info;
 }
 

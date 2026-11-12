@@ -27,6 +27,7 @@ class Outline : Overlay {
   PassMain outline_prepass_ps_ = {"Prepass"};
   PassMain::Sub *prepass_curves_ps_ = nullptr;
   PassMain::Sub *prepass_pointcloud_ps_ = nullptr;
+  PassMain::Sub *prepass_gsplat_ps_ = nullptr;
   PassMain::Sub *prepass_gpencil_ps_ = nullptr;
   PassMain::Sub *prepass_mesh_ps_ = nullptr;
   PassMain::Sub *prepass_volume_ps_ = nullptr;
@@ -80,6 +81,12 @@ class Outline : Overlay {
         sub.shader_set(res.shaders->outline_prepass_pointcloud.get());
         sub.push_constant("is_transform", is_transform);
         prepass_pointcloud_ps_ = &sub;
+      }
+      {
+        auto &sub = pass.sub("GSplat");
+        sub.shader_set(res.shaders->outline_prepass_gsplat.get());
+        sub.push_constant("is_transform", is_transform);
+        prepass_gsplat_ps_ = &sub;
       }
       {
         auto &sub = pass.sub("GreasePencil");
@@ -164,7 +171,7 @@ class Outline : Overlay {
 
           /* Display flat object as a line when view is orthogonal to them.
            * This fixes only the biggest case which is a plane in ortho view. */
-          int flat_axis = FlatObjectRef::flat_axis_index_get(ob_ref.object);
+          int flat_axis = FlatObjectRef::flat_axis_index_get(ob_ref);
           if (flat_axis != -1) {
             geom = DRW_cache_mesh_edge_detection_get(ob_ref.object, nullptr);
             flat_objects_.append({geom, manager.unique_handle(ob_ref), flat_axis});
@@ -175,8 +182,11 @@ class Outline : Overlay {
         /* Looks bad in wireframe mode. Could be relaxed if we draw a wireframe of some sort in
          * the future. */
         if (!state.is_wireframe_mode) {
-          geom = pointcloud_sub_pass_setup(*prepass_pointcloud_ps_, ob_ref.object);
-          prepass_pointcloud_ps_->draw(geom, manager.unique_handle(ob_ref));
+          PassMain::Sub *ps = pointcloud_is_gsplat(ob_ref.object) ? prepass_gsplat_ps_ :
+                                                                    prepass_pointcloud_ps_;
+          ResourceHandleRange res_handle = manager.unique_handle(ob_ref);
+          geom = pointcloud_sub_pass_setup(*ps, ob_ref, res_handle);
+          ps->draw(geom, manager.unique_handle(ob_ref));
         }
         break;
       case OB_VOLUME:
@@ -243,8 +253,8 @@ class Outline : Overlay {
     int2 render_size = int2(res.depth_tx.size());
 
     eGPUTextureUsage usage = GPU_TEXTURE_USAGE_SHADER_READ | GPU_TEXTURE_USAGE_ATTACHMENT;
-    tmp_depth_tx_.acquire(render_size, gpu::TextureFormat::SFLOAT_32_DEPTH_UINT_8, usage);
-    object_id_tx_.acquire(render_size, gpu::TextureFormat::UINT_16, usage);
+    tmp_depth_tx_.acquire_2d(render_size, gpu::TextureFormat::SFLOAT_32_DEPTH_UINT_8, usage);
+    object_id_tx_.acquire_2d(render_size, gpu::TextureFormat::UINT_16, usage);
 
     prepass_fb_.ensure(GPU_ATTACHMENT_TEXTURE(tmp_depth_tx_),
                        GPU_ATTACHMENT_TEXTURE(object_id_tx_));

@@ -10,8 +10,8 @@
 
 #include "BKE_unit.hh"
 
-#include "BLI_math_matrix.h"
-#include "BLI_math_rotation.h"
+#include "BLI_math_matrix_c.hh"
+#include "BLI_math_rotation_c.hh"
 
 #include "BLT_translation.hh"
 
@@ -39,6 +39,7 @@ static std::string format_unit_value(float value, PropertySubType subtype, Layou
                            RNA_TRANSLATION_PREC_DEFAULT,
                            RNA_SUBTYPE_UNIT_VALUE(unit_type),
                            *unit,
+                           true,
                            true);
   return std::string(new_str);
 }
@@ -57,13 +58,13 @@ static std::string format_coefficient(float value)
  * Defaults to XYZ Euler. */
 static int rotation_mode_index = ROT_MODE_EUL;
 
-static void rotation_mode_menu_callback(bContext *, Layout *layout, void *)
+static void rotation_mode_menu_callback(bContext * /*C*/, Layout *layout, void * /*arg1*/)
 {
   for (size_t i = 0; i < RNA_enum_items_count(rna_enum_object_rotation_mode_items); i++) {
     const EnumPropertyItem &mode_info = rna_enum_object_rotation_mode_items[i];
     const int yco = -1.5f * UI_UNIT_Y;
     const int width = 9 * UI_UNIT_X;
-    Button *but = uiDefButI(layout->block(),
+    Button *but = uiDefButV(layout->block(),
                             ButtonType::Row,
                             IFACE_(mode_info.name),
                             0,
@@ -97,7 +98,7 @@ static void draw_matrix_template(Layout &layout, PointerRNA &ptr, PropertyRNA &p
   float m3[3][3];
   copy_m3_m4(m3, m4);
   if (!is_orthogonal_m3(m3)) {
-    layout_.label(RPT_("Matrix has a shear"), ICON_ERROR);
+    layout_.label(RPT_("Matrix has a shear"), ICON_STATUS_WARNING);
   }
 
   float loc[3], quat[4], size[3];

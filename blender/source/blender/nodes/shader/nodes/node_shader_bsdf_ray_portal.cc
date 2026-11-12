@@ -2,9 +2,13 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup shdnodes
+ */
+
 #include "node_shader_util.hh"
 
-#include "BLI_math_vector.h"
+#include "BLI_math_vector_c.hh"
 
 namespace blender {
 
@@ -28,10 +32,11 @@ static int node_shader_gpu_bsdf_ray_portal(GPUMaterial *mat,
                                            GPUNodeStack *in,
                                            GPUNodeStack *out)
 {
-  if (in[0].link || !is_zero_v3(in[0].vec)) {
+  if (in[0].link || !is_zero_v3(std::get<float4>(in[0].value))) {
     GPU_material_flag_set(mat, GPU_MATFLAG_TRANSPARENT);
   }
-  return GPU_stack_link(mat, node, "node_bsdf_ray_portal", in, out);
+  return GPU_stack_link(
+      mat, node, "node_bsdf_ray_portal", in, out, GPU_kernel_globals(), GPU_shading_data());
 }
 
 NODE_SHADER_MATERIALX_BEGIN
@@ -70,7 +75,7 @@ void register_node_type_sh_bsdf_ray_portal()
   ntype.ui_description = "Continue tracing from an arbitrary new position and in a new direction";
   ntype.enum_name_legacy = "BSDF_RAY_PORTAL";
   ntype.nclass = NODE_CLASS_SHADER;
-  ntype.add_ui_poll = object_shader_nodes_poll;
+  ntype.add_ui_poll = object_cycles_shader_nodes_poll;
   ntype.declare = file_ns::node_declare;
   ntype.gather_link_search_ops = search_link_ops_for_shader_bsdf_node;
   ntype.gpu_fn = file_ns::node_shader_gpu_bsdf_ray_portal;

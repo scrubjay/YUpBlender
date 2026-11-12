@@ -115,7 +115,10 @@ class Integrator : public Node {
   NODE_SOCKET_API(float, scrambling_distance)
 
   NODE_SOCKET_API(bool, use_pixel_jitter);
+  NODE_SOCKET_API(bool, use_custom_pixel_jitter_sample);
+  NODE_SOCKET_API_ARRAY(array<float>, custom_pixel_jitter_sample);
   HaltonSequence pixel_jitter_state;
+  int pixel_jitter_frame = 0;
 
   NODE_SOCKET_API(bool, use_denoise);
   NODE_SOCKET_API(DenoiserType, denoiser_type);
@@ -137,6 +140,7 @@ class Integrator : public Node {
   };
 
   bool shadow_catcher_needs_recalc_ = true;
+  bool scene_has_shadow_catcher_ = false;
 
   Integrator();
   ~Integrator() override;
@@ -146,7 +150,7 @@ class Integrator : public Node {
 
   void tag_update(Scene *scene, const uint32_t flag);
 
-  uint get_kernel_features() const;
+  uint64_t get_kernel_features() const;
 
   AdaptiveSampling get_adaptive_sampling() const;
   DenoiseParams get_denoise_params() const;

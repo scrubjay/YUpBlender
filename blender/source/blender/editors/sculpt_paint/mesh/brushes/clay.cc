@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup edsculpt
+ */
+
 #include "editors/sculpt_paint/mesh/brushes/brushes.hh"
 
 #include "DNA_brush_types.h"
@@ -12,7 +16,9 @@
 #include "BKE_subdiv_ccg.hh"
 
 #include "BLI_enumerable_thread_specific.hh"
-#include "BLI_math_geom.h"
+#include "BLI_math_geom_c.hh"
+
+#include "PRF_profile.hh"
 
 #include "editors/sculpt_paint/mesh/mesh_brush_common.hh"
 #include "editors/sculpt_paint/mesh/sculpt_automask.hh"
@@ -34,6 +40,7 @@ BLI_NOINLINE static void calc_closest_to_plane(const float4 &test_plane,
                                                const Span<int> verts,
                                                const MutableSpan<float3> translations)
 {
+  PRF_scope(ProfileCategory::Editor);
   /* Equivalent to #closest_to_plane_normalized_v3 */
   BLI_assert(verts.size() == translations.size());
   for (const int i : verts.index_range()) {
@@ -46,6 +53,7 @@ BLI_NOINLINE static void calc_closest_to_plane(const float4 &test_plane,
                                                const Span<float3> positions,
                                                const MutableSpan<float3> translations)
 {
+  PRF_scope(ProfileCategory::Editor);
   /* Equivalent to #closest_to_plane_normalized_v3 */
   BLI_assert(positions.size() == translations.size());
   for (const int i : positions.index_range()) {
@@ -63,13 +71,14 @@ static void calc_faces(const Depsgraph &depsgraph,
                        const Span<float3> vert_normals,
                        const bke::pbvh::MeshNode &node,
                        Object &object,
-                       LocalData &tls,
                        const PositionDeformData &position_data)
 {
   SculptSession &ss = *object.runtime->sculpt_session;
 
   const Span<int> verts = node.verts();
 
+  Array<float, bke::pbvh::MESH_LEAF_LIMIT> factors(verts.size());
+  Array<float, bke::pbvh::MESH_LEAF_LIMIT> distances(verts.size());
   calc_factors_common_mesh_indexed(depsgraph,
                                    brush,
                                    object,
@@ -77,15 +86,14 @@ static void calc_faces(const Depsgraph &depsgraph,
                                    position_data.eval,
                                    vert_normals,
                                    node,
-                                   tls.factors,
-                                   tls.distances);
+                                   factors,
+                                   distances);
 
-  tls.translations.resize(verts.size());
-  const MutableSpan<float3> translations = tls.translations;
+  Array<float3, bke::pbvh::MESH_LEAF_LIMIT> translations(verts.size());
 
   calc_closest_to_plane(test_plane, position_data.eval, verts, translations);
   scale_translations(translations, strength);
-  scale_translations(translations, tls.factors);
+  scale_translations(translations, factors);
 
   clip_and_lock_translations(sd, ss, position_data.eval, verts, translations);
   position_data.deform(translations, verts);
@@ -153,6 +161,7 @@ void do_clay_brush(const Depsgraph &depsgraph,
                    Object &object,
                    const IndexMask &node_mask)
 {
+  PRF_scope(ProfileCategory::Editor);
   SculptSession &ss = *object.runtime->sculpt_session;
   bke::pbvh::Tree &pbvh = *bke::object::pbvh_get(object);
   const Brush &brush = *BKE_paint_brush_for_read(&sd.paint);
@@ -191,7 +200,6 @@ void do_clay_brush(const Depsgraph &depsgraph,
       MutableSpan<bke::pbvh::MeshNode> nodes = pbvh.nodes<bke::pbvh::MeshNode>();
       node_mask.foreach_index(
           [&](const int i) {
-            LocalData &tls = all_tls.local();
             calc_faces(depsgraph,
                        sd,
                        brush,
@@ -201,7 +209,6 @@ void do_clay_brush(const Depsgraph &depsgraph,
                        vert_normals,
                        nodes[i],
                        object,
-                       tls,
                        position_data);
             bke::pbvh::update_node_bounds_mesh(position_data.eval, nodes[i]);
           },

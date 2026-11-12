@@ -58,21 +58,26 @@ class GLContext : public Context {
 
   static bool debug_layer_support;
   static bool direct_state_access_support;
-  static bool explicit_location_support;
   static bool framebuffer_fetch_support;
+  /* layered_rendering_support requires GL_ARB_shader_viewport_layer_array, which is a superset of
+   * GL_AMD_vertex_shader_viewport_index (vertex_shader_viewport_index_support) and
+   * GL_AMD_vertex_shader_layer (vertex_shader_layer_support) with additional support for
+   * tessellation evaluation shaders (which are not used by the GPU module). */
   static bool layered_rendering_support;
+  static bool vertex_shader_viewport_index_support;
+  static bool vertex_shader_layer_support;
   static bool native_barycentric_support;
   static bool multi_bind_support;
   static bool multi_bind_image_support;
   static bool stencil_texturing_support;
   static bool texture_barrier_support;
   static bool texture_filter_anisotropic_support;
+  static bool derivative_control_support;
 
   /** Workarounds. */
 
   static bool debug_layer_workaround;
   static bool unused_fb_slot_workaround;
-  static bool generate_mipmap_workaround;
 
   /** VBO for missing vertex attribute binding. Avoid undefined behavior on some implementation. */
   GLuint default_attr_vbo_;
@@ -115,8 +120,12 @@ class GLContext : public Context {
 
   void process_frame_timings();
 
+  class GHOST_IContext *ghost_context_;
+
  public:
-  GLContext(GHOST_IWindow *ghost_window, GLSharedOrphanLists &shared_orphan_list);
+  GLContext(GHOST_IWindow *ghost_window,
+            GHOST_IContext *ghost_context,
+            GLSharedOrphanLists &shared_orphan_list);
   ~GLContext();
 
   static void check_error(const char *info);

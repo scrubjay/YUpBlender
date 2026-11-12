@@ -2,7 +2,11 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
-#include "BLI_math_base_safe.h"
+/** \file
+ * \ingroup fn
+ */
+
+#include "BLI_math_base_safe.hh"
 #include "BLI_math_vector.hh"
 
 #include "FN_init.hh"
@@ -551,7 +555,17 @@ static void register_common_functions_impl()
   });
   registry::add_new_cb([] {
     return mf::build::SI2_SO<int, int, int>(
-        "int ** int", [](int a, int b) { return math::pow(a, b); }, exec_fast);
+        "int ** int",
+        [](int base, int exponent) {
+          if (exponent < 0) {
+            if (base == 1 || base == -1) {
+              return (base < 0 && (exponent & 1) != 0) ? -1 : 1;
+            }
+            return 0;
+          }
+          return pow_i(base, exponent);
+        },
+        exec_fast);
   });
   registry::add_new_cb([] {
     return mf::build::SI3_SO<int, int, int, int>(
@@ -664,11 +678,22 @@ static void register_common_functions_impl()
         },
         exec_fast);
   });
+  registry::add_new_cb([] {
+    return mf::build::SI2_SO<float3, int, float>(
+        "float3[int]",
+        [](const float3 &vec, const int index) {
+          if (index >= 0 && index <= 2) {
+            return vec[index];
+          }
+          return 0.0f;
+        },
+        exec_fast);
+  });
 }
 
 void register_common_functions()
 {
-  /* Make sure the functions are only registered once even if called multiple times.*/
+  /* Make sure the functions are only registered once even if called multiple times. */
   [[maybe_unused]] static bool registered = []() {
     register_common_functions_impl();
     return true;

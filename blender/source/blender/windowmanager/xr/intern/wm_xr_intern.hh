@@ -23,12 +23,62 @@ namespace blender {
 
 struct bContext;
 struct ARegion;
+struct Camera;
+struct GPUOffScreen;
 struct Object;
 struct wmWindow;
 struct wmWindowManager;
 struct wmXrActionSet;
 struct wmXrController;
 struct wmXrData;
+
+namespace gpu {
+class Texture;
+}
+
+struct wmXrViewfinderState {
+  /** Internal Runtime values. */
+  float capture_position[3];
+  float capture_orientation_quat[4];
+
+  GPUOffScreen *offscreen;
+  GPUViewport *viewport;
+  gpu::Texture *backside_logo_texture;
+
+  Camera *render_cam_data_id;
+  double smoothing_delta_t;
+
+  /** Runtime values set by RNA methods called from Python. */
+  double last_flash_trigger_time;
+  double last_focus_hit_time;
+  bool last_focus_hit_success;
+
+  /** Capture settings. */
+  bool capture_dof_enabled;
+  float capture_lens_focal;
+  float capture_dof_distance;
+  float capture_dof_fstop;
+
+  /** Playback settings. */
+  bool playback_show_active_capture_in_space_enabled;
+
+  /** Active modes, concept differs from the rest of the Blender UI. */
+  eXrViewfinderMode active_mode;
+  eXrViewfinderLiveAction active_action_live;
+  eXrViewfinderPlaybackAction active_action_playback;
+  eXrViewfinderConfirmAction active_action_confirm;
+
+  /* Constants. */
+  /**
+   * Rendered view resolution. Using a low resolution helps with performances, and also increases
+   * the displayed overlay line width.
+   */
+  static constexpr int view_resolution = 800;
+  /** Transparent accent color used for UI outlines and the backside logo. */
+  static constexpr float accent_color[4] = {0.26f, 0.26f, 0.26f, 0.2f};
+  /** Factor used to size UI widgets in XR world space. Going from scene to UI units. */
+  static constexpr float xr_ui_unit_fac = 0.05f;
+};
 
 struct wmXrSessionState {
   bool is_started;
@@ -41,8 +91,12 @@ struct wmXrSessionState {
   float viewer_mat_base[4][4];
   float focal_len;
 
-  /** Copy of XrSessionSettings.base_pose_ data to detect changes that need
-   * resetting to base pose. */
+  wmXrViewfinderState viewfinder;
+
+  /**
+   * Copy of XrSessionSettings.base_pose_ data to detect changes that need
+   * resetting to base pose.
+   */
   char prev_base_pose_type; /* #eXRSessionBasePoseType. */
   Object *prev_base_pose_object;
   /** Copy of XrSessionSettings.flag created on the last draw call, stored to detect changes. */
@@ -67,8 +121,10 @@ struct wmXrSessionState {
   float nav_scale;
   float viewer_scale;
 
-  /** Navigation transforms and viewer scale from the last action sync, used to calculate the
-   * viewer/controller poses. */
+  /**
+   * Navigation transforms and viewer scale from the last action sync, used to calculate the
+   * viewer/controller poses.
+   */
   GHOST_XrPose nav_pose_last_actions_sync;
   float viewer_scale_last_actions_sync;
   bool is_navigation_dirty;
@@ -76,11 +132,13 @@ struct wmXrSessionState {
   /** Last known controller data. */
   ListBaseT<wmXrController> controllers;
 
-  /** The currently active action set that will be updated on calls to
+  /**
+   * The currently active action set that will be updated on calls to
    * #wm_xr_session_actions_update(). If NULL, all action sets will be treated as active and
-   * updated. */
+   * updated.
+   */
   struct wmXrActionSet *active_action_set;
-  /* Name of the action set (if any) to activate before the next actions sync. */
+  /** Name of the action set (if any) to activate before the next actions sync. */
   char active_action_set_next[64]; /* #MAX_NAME. */
 
   /** The current view vignette aperture, appears on movement. */
@@ -90,13 +148,13 @@ struct wmXrSessionState {
 };
 
 struct wmXrRuntimeData {
-  /* GHOST XR context. */
+  /** GHOST XR context. */
   GHOST_IXrContext *ghost_context;
 
-  /* XR-specific Blender context. */
+  /** XR-specific Blender context. */
   bContext *b_context;
 
-  /* Owning pointer to the XR offscreen area. Must be freed on XR session exit. */
+  /** Owning pointer to the XR offscreen area. Must be freed on XR session exit. */
   ScrArea *offscreen_area;
 
   /** Although this struct is internal, RNA gets a handle to this for state information queries. */
@@ -128,14 +186,18 @@ struct wmXrDrawData {
   wmXrData *xr_data;
   wmXrSurfaceData *surface_data;
 
-  /** The pose (location + rotation) to which eye deltas will be applied to when drawing (world
+  /**
+   * The pose (location + rotation) to which eye deltas will be applied to when drawing (world
    * space). With positional tracking enabled, it should be the same as the base pose, when
-   * disabled it also contains a location delta from the moment the option was toggled. */
+   * disabled it also contains a location delta from the moment the option was toggled.
+   */
   GHOST_XrPose base_pose;
   /** Base scale (uniform, world space). */
   float base_scale;
-  /** Offset to _subtract_ from the OpenXR eye and viewer pose to get the wanted effective pose
-   * (e.g. a pose exactly at the landmark position). */
+  /**
+   * Offset to _subtract_ from the OpenXR eye and viewer pose to get the wanted effective pose
+   * (e.g. a pose exactly at the landmark position).
+   */
   float eye_position_ofs[3]; /* Local/view space. */
 };
 
@@ -276,5 +338,13 @@ bool wm_xr_passthrough_enabled(void *customdata);
  * It's assigned to Ghost-XR as a callback (see GHOST_XrDisablePassthroughFunc()).
  */
 void wm_xr_disable_passthrough(void *customdata);
+
+/* `wm_xr_location_scouting.cc` */
+
+bool wm_xr_viewfinder_operator_event_match_hand(bContext *C, const wmEvent *event);
+void wm_xr_viewfinder_render_view(wmXrData *xr_data);
+void wm_xr_viewfinder_draw(const bContext *C,
+                           const XrSessionSettings *settings,
+                           wmXrSessionState *state);
 
 }  // namespace blender

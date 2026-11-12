@@ -2,11 +2,15 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup spnode
+ */
+
 #include "BKE_library.hh"
 #include "BKE_screen.hh"
 
-#include "BLI_listbase.h"
-#include "BLI_string_utf8.h"
+#include "BLI_listbase.hh"
+#include "BLI_string_utf8.hh"
 
 #include "BLT_translation.hh"
 
@@ -72,11 +76,11 @@ void node_tree_interface_draw(bContext &C, ui::Layout &layout, bNodeTree &tree)
   layout.use_property_split_set(true);
   layout.use_property_decorate_set(false);
 
-  if (active_item->item_type == NODE_INTERFACE_SOCKET) {
+  if (active_item->item_type == NodeTreeInterfaceItemType::Socket) {
     bNodeTreeInterfaceSocket *socket = reinterpret_cast<bNodeTreeInterfaceSocket *>(active_item);
     const bke::bNodeSocketType *stype = socket->socket_typeinfo();
     layout.prop(&active_item_ptr, "socket_type", UI_ITEM_NONE, IFACE_("Type"), ICON_NONE);
-    layout.prop(&active_item_ptr, "description", UI_ITEM_NONE, std::nullopt, ICON_NONE);
+    layout.textbox(&C, &active_item_ptr, "description");
     if (tree.type == NTREE_GEOMETRY) {
       if (nodes::socket_type_supports_attributes(stype->type)) {
         if (socket->flag & NODE_INTERFACE_SOCKET_OUTPUT) {
@@ -90,9 +94,9 @@ void node_tree_interface_draw(bContext &C, ui::Layout &layout, bNodeTree &tree)
       stype->interface_draw(&tree.id, socket, &C, &layout);
     }
   }
-  if (active_item->item_type == NODE_INTERFACE_PANEL) {
+  if (active_item->item_type == NodeTreeInterfaceItemType::Panel) {
     bNodeTreeInterfacePanel *panel_item = reinterpret_cast<bNodeTreeInterfacePanel *>(active_item);
-    layout.prop(&active_item_ptr, "description", UI_ITEM_NONE, std::nullopt, ICON_NONE);
+    layout.textbox(&C, &active_item_ptr, "description");
     layout.prop(
         &active_item_ptr, "default_closed", UI_ITEM_NONE, IFACE_("Closed by Default"), ICON_NONE);
 

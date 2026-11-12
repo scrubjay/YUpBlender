@@ -21,31 +21,36 @@
 #include "DNA_userdef_types.h"
 #include "DNA_windowmanager_types.h"
 
-#include "BLI_listbase.h"
+#include "BLI_fileops.hh"
+#include "BLI_listbase.hh"
 #include "BLI_memory_cache.hh"
 #include "BLI_path_utils.hh"
-#include "BLI_string.h"
-#include "BLI_task.h"
-#include "BLI_threads.h"
-#include "BLI_timer.h"
-#include "BLI_utildefines.h"
+#include "BLI_string.hh"
+#include "BLI_task_c.hh"
+#include "BLI_threads.hh"
+#include "BLI_timer.hh"
+#include "BLI_utildefines.hh"
 
 #include "BLO_undofile.hh"
 #include "BLO_writefile.hh"
 
 #include "BKE_blender.hh"
+#include "BKE_blender_project.hh"
 #include "BKE_blendfile.hh"
 #include "BKE_callbacks.hh"
 #include "BKE_context.hh"
 #include "BKE_global.hh"
 #include "BKE_icons.hh"
 #include "BKE_image.hh"
+#include "BKE_image_gpu.hh"
 #include "BKE_keyconfig.h"
 #include "BKE_lib_remap.hh"
 #include "BKE_main.hh"
 #include "BKE_mball_tessellate.hh"
 #include "BKE_preferences.h"
 #include "BKE_preview_image.hh"
+#include "BKE_recents.hh"
+#include "BKE_report.hh"
 #include "BKE_scene.hh"
 #include "BKE_screen.hh"
 #include "BKE_sound.hh"
@@ -89,6 +94,7 @@
 #include "ED_asset.hh"
 #include "ED_gpencil_legacy.hh"
 #include "ED_grease_pencil.hh"
+#include "ED_image.hh"
 #include "ED_keyframes_edit.hh"
 #include "ED_keyframing.hh"
 #include "ED_node.hh"
@@ -144,12 +150,20 @@ void WM_init_state_start_with_console_set(bool value)
  */
 static bool gpu_is_init = false;
 
-void WM_init_gpu()
+void WM_init_gpu_backend()
+{
+  GPU_backend_type_selection_detect();
+}
+
+void WM_init_gpu_offscreen()
 {
   /* Must be called only once. */
   BLI_assert(gpu_is_init == false);
 
   if (G.background) {
+    /* Init on demand for background mode, already done for foreground mode. */
+    WM_init_gpu_backend();
+
     /* Ghost is still not initialized elsewhere in background mode. */
     wm_ghost_init_background();
   }
@@ -180,7 +194,7 @@ static void sound_jack_sync_callback(Main *bmain, int mode, double time)
     return;
   }
 
-  wmWindowManager *wm = static_cast<wmWindowManager *>(bmain->wm.first);
+  wmWindowManager *wm = bmain->wm.first();
 
   for (wmWindow &window : wm->windows) {
     Scene *scene = WM_window_get_active_scene(&window);
@@ -231,6 +245,10 @@ void WM_init(bContext *C, int argc, const char **argv)
   ED_node_init_butfuncs();
 
   BLF_init();
+
+  if (!G.background) {
+    recents::init_async();
+  }
 
   BLT_lang_init();
   /* Must call first before doing any `.blend` file reading,
@@ -292,13 +310,25 @@ void WM_init(bContext *C, int argc, const char **argv)
   ED_file_init();
 
   if (!G.background) {
+    wmWindowManager *wm = CTX_wm_manager(C);
+    if (wm != nullptr) {
+      wm_window_ghostwindows_remove_invalid(C, wm);
+    }
+    if (wm == nullptr || wm->windows.is_empty()) {
+      if (params_file_read_post != nullptr) {
+        MEM_delete_void(static_cast<void *>(params_file_read_post));
+        params_file_read_post = nullptr;
+      }
+      WM_exit(C, EXIT_FAILURE);
+    }
+
     GPU_render_begin();
 
 #ifdef WITH_INPUT_NDOF
     /* Sets 3D mouse dead-zone. */
     WM_ndof_deadzone_set(U.ndof_deadzone);
 #endif
-    WM_init_gpu();
+    WM_init_gpu_offscreen();
 
     if (!WM_platform_support_perform_checks()) {
       WM_exit(C, -1);
@@ -354,7 +384,7 @@ void WM_init(bContext *C, int argc, const char **argv)
   wm_init_scripts_extensions_once(C);
 
   WM_keyconfig_update_postpone_end();
-  WM_keyconfig_update_on_startup(static_cast<wmWindowManager *>(G_MAIN->wm.first));
+  WM_keyconfig_update_on_startup(G_MAIN->wm.first());
 
   wm_homefile_read_post(C, params_file_read_post);
 }
@@ -390,16 +420,41 @@ void WM_init_splash_on_startup(bContext *C)
   WM_init_splash(C);
 }
 
+bool wm_init_last_project_on_startup(Main *bmain)
+{
+  if (G.background || !(U.pref_flag & USER_PREF_FLAG_PROJECT_REMEMBER)) {
+    return false;
+  }
+
+  const std::string root_path = recents::Section("project").get<std::string>("last");
+  if (root_path.empty() || !BLI_is_dir(root_path.c_str())) {
+    return false;
+  }
+
+  return BKE_blender_project_init_from_root_path(bmain, root_path);
+}
+
+static void wm_exit_project_data_store(Main *bmain)
+{
+  BKE_blender_project_config_autosave(bmain);
+
+  const std::string root_path = BKE_blender_project_read_callback(
+      bmain, [](const bke::BlenderProject *project) {
+        return project ? std::string(project->get_root_path()) : std::string();
+      });
+  recents::Section("project").set("last", root_path);
+}
+
 void WM_init_splash(bContext *C)
 {
   wmWindowManager *wm = CTX_wm_manager(C);
   /* NOTE(@ideasman42): this should practically never happen. */
-  if (UNLIKELY(BLI_listbase_is_empty(&wm->windows))) {
+  if (wm->windows.is_empty()) [[unlikely]] {
     return;
   }
 
   wmWindow *prevwin = CTX_wm_window(C);
-  CTX_wm_window_set(C, static_cast<wmWindow *>(wm->windows.first));
+  CTX_wm_window_set(C, wm->windows.first());
   WM_operator_name_call(C, "WM_OT_splash", wm::OpCallContext::InvokeDefault, nullptr, nullptr);
   CTX_wm_window_set(C, prevwin);
 }
@@ -433,18 +488,30 @@ static int wm_exit_handler(bContext *C, const wmEvent *event, void *userdata)
   return WM_UI_HANDLER_BREAK;
 }
 
+static void wm_exit_schedule_delayed_for_window(const bContext *C, wmWindow &win)
+{
+  /* Use modal UI handler for now.
+   * Could add separate WM handlers or so, but probably not worth it. */
+  WM_event_add_ui_handler(
+      C, &win.runtime->modalhandlers, wm_exit_handler, nullptr, nullptr, eWM_EventHandlerFlag(0));
+  WM_event_add_mousemove(&win); /* Ensure handler actually gets called. */
+}
+
 void wm_exit_schedule_delayed(const bContext *C)
 {
   /* What we do here is a little bit hacky, but quite simple and doesn't require bigger
    * changes: Add a handler wrapping WM_exit() to cause a delayed call of it. */
 
-  wmWindow *win = CTX_wm_window(C);
-
-  /* Use modal UI handler for now.
-   * Could add separate WM handlers or so, but probably not worth it. */
-  WM_event_add_ui_handler(
-      C, &win->runtime->modalhandlers, wm_exit_handler, nullptr, nullptr, eWM_EventHandlerFlag(0));
-  WM_event_add_mousemove(win); /* Ensure handler actually gets called. */
+  if (wmWindow *win = CTX_wm_window(C)) {
+    wm_exit_schedule_delayed_for_window(C, *win);
+  }
+  else {
+    /* Unlikely but possible, in this case just ensure exit runs as it's not interactive. */
+    wmWindowManager *wm = G_MAIN->wm.first();
+    for (wmWindow &win : wm->windows) {
+      wm_exit_schedule_delayed_for_window(C, win);
+    }
+  }
 }
 
 void UV_clipboard_free();
@@ -469,6 +536,8 @@ void WM_exit_ex(bContext *C, const bool do_python_exit, const bool do_user_exit_
   /* NOTE: same code copied in `wm_files.cc`. */
   if (C && wm) {
     if (do_user_exit_actions) {
+      wm_exit_project_data_store(CTX_data_main(C));
+
       /* Save quit.blend. */
       Main *bmain = CTX_data_main(C);
       char filepath[FILE_MAX];
@@ -477,6 +546,7 @@ void WM_exit_ex(bContext *C, const bool do_python_exit, const bool do_user_exit_
       BLI_path_join(filepath, sizeof(filepath), BKE_tempdir_base(), BLENDER_QUIT_FILE);
 
       ED_editors_flush_edits(bmain);
+      ED_image_internal_autosave_flush(bmain);
 
       BlendFileWriteParams blend_file_write_params{};
       if (BLO_write_file(bmain, filepath, fileflags, &blend_file_write_params, nullptr)) {
@@ -585,10 +655,6 @@ void WM_exit_ex(bContext *C, const bool do_python_exit, const bool do_user_exit_
 
   bke::subdiv::exit();
 
-  if (gpu_is_init) {
-    BKE_image_free_unused_gpu_textures();
-  }
-
   /* Frees the entire library (#G_MAIN) and space-types. */
   BKE_blender_free();
 
@@ -618,6 +684,10 @@ void WM_exit_ex(bContext *C, const bool do_python_exit, const bool do_user_exit_
   WM_uilisttype_free();
 
   BLF_exit();
+
+  if (!G.background && do_user_exit_actions) {
+    recents::save();
+  }
 
   BLT_lang_free();
 
@@ -649,6 +719,7 @@ void WM_exit_ex(bContext *C, const bool do_python_exit, const bool do_user_exit_
     DRW_gpu_context_enable_ex(false);
     ui::exit();
     GPU_shader_cache_dir_clear_old();
+    BKE_image_free_gpu_fallback();
     GPU_exit();
     DRW_gpu_context_disable_ex(false);
     DRW_gpu_context_destroy();
@@ -666,8 +737,6 @@ void WM_exit_ex(bContext *C, const bool do_python_exit, const bool do_user_exit_
   if (C) {
     CTX_free(C);
   }
-
-  DNA_sdna_current_free();
 
   BLI_threadapi_exit();
   BLI_task_scheduler_exit();

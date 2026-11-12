@@ -11,10 +11,11 @@
 
 #include "DNA_node_types.h"
 
-#include "BLI_listbase.h"
-#include "BLI_string.h"
-#include "BLI_string_utf8.h"
-#include "BLI_utildefines.h"
+#include "BLI_listbase.hh"
+#include "BLI_math_rotation_c.hh"
+#include "BLI_string.hh"
+#include "BLI_string_utf8.hh"
+#include "BLI_utildefines.hh"
 
 #include "BLT_translation.hh"
 
@@ -182,7 +183,7 @@ void node_vector_math_label(const bNodeTree * /*ntree*/,
 
 void node_combsep_color_label(const ListBaseT<bNodeSocket> *sockets, NodeCombSepColorMode mode)
 {
-  bNodeSocket *sock1 = static_cast<bNodeSocket *>(sockets->first);
+  bNodeSocket *sock1 = sockets->first();
   bNodeSocket *sock2 = sock1->next;
   bNodeSocket *sock3 = sock2->next;
 
@@ -294,6 +295,25 @@ void node_socket_set_vector(bNodeTree *ntree,
 {
   PointerRNA ptr = RNA_pointer_create_discrete(id_cast<ID *>(ntree), RNA_NodeSocket, sock);
   RNA_float_set_array(&ptr, "default_value", value);
+}
+
+void node_socket_get_rotation(bNodeTree *ntree, bNode * /*node*/, bNodeSocket *sock, float *value)
+{
+  PointerRNA ptr = RNA_pointer_create_discrete(id_cast<ID *>(ntree), RNA_NodeSocket, sock);
+  float euler[3];
+  RNA_float_get_array(&ptr, "default_value", euler);
+  eul_to_quat(value, euler);
+}
+
+void node_socket_set_rotation(bNodeTree *ntree,
+                              bNode * /*node*/,
+                              bNodeSocket *sock,
+                              const float *value)
+{
+  PointerRNA ptr = RNA_pointer_create_discrete(id_cast<ID *>(ntree), RNA_NodeSocket, sock);
+  float euler[3];
+  quat_to_eul(euler, value);
+  RNA_float_set_array(&ptr, "default_value", euler);
 }
 
 /** \} */

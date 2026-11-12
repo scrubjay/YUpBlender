@@ -12,6 +12,7 @@
 
 #include "DNA_screen_types.h"
 
+#include "BKE_context.hh"
 #include "BKE_report.hh"
 
 #include "BLT_translation.hh"
@@ -134,7 +135,7 @@ const asset_system::AssetRepresentation *operator_asset_reference_props_get_asse
     const bContext &C, PointerRNA &ptr, ReportList *reports)
 {
   AssetWeakReference weak_ref{};
-  weak_ref.asset_library_type = RNA_enum_get(&ptr, "asset_library_type");
+  weak_ref.asset_library_type = eAssetLibraryType(RNA_enum_get(&ptr, "asset_library_type"));
   weak_ref.asset_library_identifier = RNA_string_get_alloc(
       &ptr, "asset_library_identifier", nullptr, 0, nullptr);
   weak_ref.relative_asset_identifier = RNA_string_get_alloc(
@@ -160,6 +161,38 @@ void draw_node_menu_for_catalog(const asset_system::AssetCatalogTreeItem &item,
   col.context_string_set("asset_catalog_path", item.catalog_path().c_str());
   col.context_string_set("operator_id", operator_id);
   col.menu(menu_name, IFACE_(item.get_name()), ICON_NONE);
+}
+
+void draw_asset_menu_item(const asset_system::AssetRepresentation *asset,
+                          ui::Layout &layout,
+                          FunctionRef<void(ui::Layout &, BIFIconID)> draw_item_fn)
+{
+  ui::Layout &row = layout.row(true);
+  if (asset->is_online_only()) {
+    row.enabled_set(false);
+  }
+  PointerRNA asset_ptr = RNA_pointer_create_discrete(
+      nullptr, RNA_AssetRepresentation, const_cast<asset_system::AssetRepresentation *>(asset));
+  row.context_ptr_set("asset", &asset_ptr);
+
+  const int icon_local = asset->remote_file_status() ==
+                                 asset_system::RemoteAssetFileStatus::NO_MATCH ?
+                             ICON_STATUS_WARNING :
+                             ICON_NONE;
+  const int icon = asset->is_online_only() ? ICON_INTERNET : icon_local;
+  draw_item_fn(row, icon);
+}
+
+void draw_asset_menu_item(const asset_system::AssetRepresentation *asset,
+                          StringRefNull opname,
+                          const wm::OpCallContext operator_call_context,
+                          ui::Layout &layout)
+{
+  draw_asset_menu_item(asset, layout, [&](ui::Layout &sub, BIFIconID asset_icon) {
+    PointerRNA props_ptr = sub.op(
+        opname, IFACE_(asset->get_name()), asset_icon, operator_call_context, UI_ITEM_NONE);
+    asset::operator_asset_reference_props_set(*asset, props_ptr);
+  });
 }
 
 }  // namespace blender::ed::asset

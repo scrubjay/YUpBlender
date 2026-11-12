@@ -39,6 +39,11 @@ ExternalProject_Add(external_materialx
   PREFIX ${BUILD_DIR}/materialx
   CMAKE_GENERATOR ${PLATFORM_ALT_GENERATOR}
 
+  PATCH_COMMAND
+    ${PATCH_CMD} -p 1 -d
+      ${BUILD_DIR}/materialx/src/external_materialx 
+      -i ${PATCH_DIR}/materialx_2866.diff
+
   CMAKE_ARGS
     -DCMAKE_INSTALL_PREFIX=${LIBDIR}/materialx
     ${DEFAULT_CMAKE_FLAGS}
@@ -91,7 +96,8 @@ if(WIN32)
   unset(MATERIALX_PYTHON_TARGET)
   unset(MATERIALX_PYTHON_TARGET_DOS)
 else()
-  harvest(external_materialx materialx/include materialx/include "*.h")
+  # Harvest both .h and .inl header files to satisfy the MaterialX CMake target source file list.
+  harvest(external_materialx materialx/include materialx/include "*")
   # CMake files first because harvest_rpath_lib edits them.
   harvest(external_materialx materialx/lib/cmake/MaterialX materialx/lib/cmake/MaterialX "*.cmake")
   harvest_rpath_lib(external_materialx materialx/lib materialx/lib "*${SHAREDLIBEXT}*")

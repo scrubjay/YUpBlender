@@ -17,8 +17,8 @@
 
 #include "BLT_translation.hh"
 
-#include "BLI_listbase.h"
-#include "BLI_string.h"
+#include "BLI_listbase.hh"
+#include "BLI_string.hh"
 #include "BLI_vector_set.hh"
 
 #include "BKE_context.hh"
@@ -99,6 +99,8 @@ wmOperatorType *WM_operatortype_find(const char *idname, bool quiet)
   return nullptr;
 }
 
+/** \} */
+
 /* -------------------------------------------------------------------- */
 /** \name Operator Type Append
  * \{ */
@@ -162,6 +164,10 @@ void WM_operatortype_append_ptr(void (*opfunc)(wmOperatorType *, void *), void *
 
 /** \} */
 
+/* -------------------------------------------------------------------- */
+/** \name Operator Type Removal & Property Search
+ * \{ */
+
 void WM_operatortype_remove_ptr(wmOperatorType *ot)
 {
   BLI_assert(ot == WM_operatortype_find(ot->idname, false));
@@ -180,7 +186,7 @@ void WM_operatortype_remove_ptr(wmOperatorType *ot)
     IDP_FreeProperty(ot->last_properties);
   }
 
-  if (ot->macro.first) {
+  if (ot->macro.first()) {
     wm_operatortype_free_macro(ot);
   }
 
@@ -210,7 +216,7 @@ static void operatortype_ghash_free_cb(wmOperatorType *ot)
     IDP_FreeProperty(ot->last_properties);
   }
 
-  if (ot->macro.first) {
+  if (ot->macro.first()) {
     wm_operatortype_free_macro(ot);
   }
 
@@ -331,7 +337,7 @@ static wmOperatorStatus wm_macro_end(wmOperator *op, wmOperatorStatus retval)
 static wmOperatorStatus wm_macro_exec(bContext *C, wmOperator *op)
 {
   wmOperatorStatus retval = OPERATOR_FINISHED;
-  const int op_inherited_flag = op->flag & (OP_IS_REPEAT | OP_IS_REPEAT_LAST);
+  const eOperator_Flag op_inherited_flag = op->flag & (OP_IS_REPEAT | OP_IS_REPEAT_LAST);
 
   wm_macro_start(op);
 
@@ -365,7 +371,7 @@ static wmOperatorStatus wm_macro_invoke_internal(bContext *C,
                                                  wmOperator *opm)
 {
   wmOperatorStatus retval = OPERATOR_FINISHED;
-  const int op_inherited_flag = op->flag & (OP_IS_REPEAT | OP_IS_REPEAT_LAST);
+  const eOperator_Flag op_inherited_flag = op->flag & (OP_IS_REPEAT | OP_IS_REPEAT_LAST);
 
   /* Start from operator received as argument. */
   for (; opm; opm = opm->next) {
@@ -398,7 +404,7 @@ static wmOperatorStatus wm_macro_invoke_internal(bContext *C,
 static wmOperatorStatus wm_macro_invoke(bContext *C, wmOperator *op, const wmEvent *event)
 {
   wm_macro_start(op);
-  return wm_macro_invoke_internal(C, op, event, static_cast<wmOperator *>(op->macro.first));
+  return wm_macro_invoke_internal(C, op, event, op->macro.first());
 }
 
 static wmOperatorStatus wm_macro_modal(bContext *C, wmOperator *op, const wmEvent *event)
@@ -586,7 +592,7 @@ static void wm_operatortype_free_macro(wmOperatorType *ot)
       MEM_delete(otmacro.ptr);
     }
   }
-  BLI_freelistN(&ot->macro);
+  ot->macro.free_no_destruct();
 }
 
 std::string WM_operatortype_name(wmOperatorType *ot, PointerRNA *properties)

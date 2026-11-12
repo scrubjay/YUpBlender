@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup geo
+ */
+
 #pragma once
 
 #include "BKE_curves.hh"
@@ -14,5 +18,11 @@ namespace blender::geometry {
  */
 bke::CurvesGeometry remove_points_and_split(const bke::CurvesGeometry &curves,
                                             const IndexMask &mask);
+
+/**
+ * Same as above, but will also handle splitting Grease Pencil fills.
+ */
+bke::CurvesGeometry grease_pencil_remove_points_and_split(const bke::CurvesGeometry &curves,
+                                                          const IndexMask &mask);
 
 }  // namespace blender::geometry

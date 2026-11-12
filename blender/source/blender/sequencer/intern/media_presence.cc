@@ -6,12 +6,12 @@
  * \ingroup sequencer
  */
 
-#include "BLI_fileops.h"
-#include "BLI_listbase.h"
+#include "BLI_fileops.hh"
+#include "BLI_listbase.hh"
 #include "BLI_map.hh"
 #include "BLI_mutex.hh"
 #include "BLI_path_utils.hh"
-#include "BLI_string.h"
+#include "BLI_string.hh"
 
 #include "DNA_scene_types.h"
 #include "DNA_sequence_types.h"
@@ -52,7 +52,7 @@ static bool check_media_missing(const Scene *scene, const Strip *strip)
       int paths_count = 1;
       if (strip->type == STRIP_TYPE_IMAGE) {
         /* Image strip has array of file names. */
-        paths_count = int(MEM_allocN_len(elem) / sizeof(*elem));
+        paths_count = strip->data->stripdata_num;
       }
       char filepath[FILE_MAX];
       const char *basepath = ID_BLEND_PATH_FROM_GLOBAL(&scene->id);
@@ -110,6 +110,10 @@ bool media_presence_is_missing(Scene *scene, const Strip *strip)
    * block. Since it can be used by multiple strips. */
   if (strip->type == STRIP_TYPE_SOUND) {
     const bSound *sound = strip->sound;
+    if (sound && sound->packedfile != nullptr) {
+      /* The sound file has been packed, don't look up the path. */
+      return false;
+    }
     const bool *val = presence->map_sound.lookup_ptr(sound);
     if (val != nullptr) {
       missing = *val;

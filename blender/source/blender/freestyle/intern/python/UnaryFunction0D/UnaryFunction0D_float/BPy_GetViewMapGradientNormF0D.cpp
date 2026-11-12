@@ -26,7 +26,7 @@ PyDoc_STRVAR(
     "\n"
     "   Builds a GetViewMapGradientNormF0D object.\n"
     "\n"
-    "   :arg level: The level of the pyramid from which the pixel must be\n"
+    "   :param level: The level of the pyramid from which the pixel must be\n"
     "      read.\n"
     "   :type level: int\n"
     "\n"
@@ -35,7 +35,7 @@ PyDoc_STRVAR(
     "   Returns the norm of the gradient of the global viewmap density\n"
     "   image.\n"
     "\n"
-    "   :arg it: An Interface0DIterator object.\n"
+    "   :param it: An Interface0DIterator object.\n"
     "   :type it: :class:`freestyle.types.Interface0DIterator`\n"
     "   :return: The norm of the gradient of the global viewmap density\n"
     "      image.\n"
@@ -47,7 +47,13 @@ static int GetViewMapGradientNormF0D___init__(BPy_GetViewMapGradientNormF0D *sel
   static const char *kwlist[] = {"level", nullptr};
   int i;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "i", (char **)kwlist, &i)) {
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "i" /* `level` */
+                                   ":__init__",
+                                   (char **)kwlist,
+                                   &i))
+  {
     return -1;
   }
   self->py_uf0D_float.uf0D_float = new Functions0D::GetViewMapGradientNormF0D(i);

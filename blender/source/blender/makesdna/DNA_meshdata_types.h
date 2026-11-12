@@ -8,7 +8,8 @@
 
 #pragma once
 
-#include "BLI_sys_types.h"
+#include "BLI_enum_flags.hh"
+#include "BLI_sys_types.hh"
 
 namespace blender {
 
@@ -17,13 +18,15 @@ namespace blender {
  * \{ */
 
 /** #MSelect.type */
-enum {
+enum eMSelect_Type : int {
   ME_VSEL = 0,
   ME_ESEL = 1,
   ME_FSEL = 2,
 };
 
-enum eMVertSkinFlag {
+#ifdef DNA_DEPRECATED_ALLOW
+
+enum eMVertSkinFlag : int {
   /**
    * Marks a vertex as the edge-graph root, used for calculating rotations for all connected
    * edges (recursively). Also used to choose a root when generating an armature.
@@ -36,15 +39,19 @@ enum eMVertSkinFlag {
    */
   MVERT_SKIN_LOOSE = 2,
 };
+ENUM_OPERATORS(eMVertSkinFlag)
+
+#endif
 
 /** #MFace.edcode */
-enum {
+enum eMFace_EdgeCode : char {
   ME_V1V2 = (1 << 0),
   ME_V2V3 = (1 << 1),
   ME_V3V1 = (1 << 2),
   ME_V3V4 = ME_V3V1,
   ME_V4V1 = (1 << 3),
 };
+ENUM_OPERATORS(eMFace_EdgeCode)
 
 /**
  * Optionally store the order of selected elements.
@@ -55,8 +62,7 @@ enum {
 struct MSelect {
   /** Index in the vertex, edge or polygon array. */
   int index;
-  /** #ME_VSEL, #ME_ESEL, #ME_FSEL. */
-  int type;
+  eMSelect_Type type;
 };
 
 /** \} */
@@ -181,6 +187,8 @@ struct MDeformVert {
   int flag;
 };
 
+#ifdef DNA_DEPRECATED_ALLOW
+
 struct MVertSkin {
   /**
    * Radii of the skin, define how big the generated frames are.
@@ -188,9 +196,10 @@ struct MVertSkin {
    */
   float radius[3];
 
-  /** #eMVertSkinFlag */
-  int flag;
+  eMVertSkinFlag flag;
 };
+
+#endif
 
 /** \} */
 
@@ -214,14 +223,14 @@ struct MPropCol {
 struct MDisps {
   /* Strange bug in SDNA: if disps pointer comes first, it fails to see totdisp */
   int totdisp;
-  int level;
+  int _pad;
   float (*disps)[3];
 
   /**
    * Used for hiding parts of a multires mesh.
    * Essentially the multires equivalent of the mesh ".hide_vert" boolean attribute.
    *
-   * \note This is a bitmap, keep in sync with type used in BLI_bitmap.h
+   * \note This is a bitmap, keep in sync with type used in BLI_bitmap.hh
    */
   unsigned int *hidden;
 };
@@ -273,22 +282,24 @@ struct OrigSpaceLoop {
 /** \name Custom Data (FreeStyle for Edge, Face)
  * \{ */
 
-struct FreestyleEdge {
-  char flag;
-};
-
 /** #FreestyleEdge.flag */
-enum {
+enum eFreestyleEdge_Flag : char {
   FREESTYLE_EDGE_MARK = 1,
 };
+ENUM_OPERATORS(eFreestyleEdge_Flag)
 
-struct FreestyleFace {
-  char flag;
+struct FreestyleEdge {
+  eFreestyleEdge_Flag flag;
 };
 
 /** #FreestyleFace.flag */
-enum {
+enum eFreestyleFace_Flag : char {
   FREESTYLE_FACE_MARK = 1,
+};
+ENUM_OPERATORS(eFreestyleFace_Flag)
+
+struct FreestyleFace {
+  eFreestyleFace_Flag flag;
 };
 
 /** \} */
@@ -296,6 +307,20 @@ enum {
 /* -------------------------------------------------------------------- */
 /** \name Deprecated Structs
  * \{ */
+
+/** #MEdge.flag */
+enum eMEdge_Flag : short {
+  /** Deprecated selection status. Now stored in ".select_edge" attribute. */
+  // SELECT = (1 << 0),
+  ME_SEAM = (1 << 2),
+  /** Deprecated hide status. Now stored in ".hide_edge" attribute. */
+  // ME_HIDE = (1 << 4),
+  /** Deprecated loose edge status. Now stored in #Mesh::loose_edges() runtime cache. */
+  ME_LOOSEEDGE = (1 << 7),
+  /** Deprecated sharp edge status. Now stored in "sharp_edge" attribute. */
+  ME_SHARP = (1 << 9),
+};
+ENUM_OPERATORS(eMEdge_Flag)
 
 /**
  * Mesh Edges.
@@ -311,21 +336,19 @@ struct MEdge {
    * Deprecated bevel weight storage, now located in #CD_BWEIGHT, except for file read and write.
    */
   char bweight_legacy;
-  short flag_legacy;
+  eMEdge_Flag flag_legacy;
 };
 
-/** #MEdge.flag */
-enum {
-  /** Deprecated selection status. Now stored in ".select_edge" attribute. */
-  // SELECT = (1 << 0),
-  ME_SEAM = (1 << 2),
-  /** Deprecated hide status. Now stored in ".hide_edge" attribute. */
+/** #MPoly.flag */
+enum eMPoly_Flag : char {
+  /** Deprecated smooth shading status. Now stored reversed in "sharp_face" attribute. */
+  ME_SMOOTH = (1 << 0),
+  /** Deprecated selection status. Now stored in ".select_poly" attribute. */
+  ME_FACE_SEL = (1 << 1),
+  /** Deprecated hide status. Now stored in ".hide_poly" attribute. */
   // ME_HIDE = (1 << 4),
-  /** Deprecated loose edge status. Now stored in #Mesh::loose_edges() runtime cache. */
-  ME_LOOSEEDGE = (1 << 7),
-  /** Deprecated sharp edge status. Now stored in "sharp_edge" attribute. */
-  ME_SHARP = (1 << 9),
 };
+ENUM_OPERATORS(eMPoly_Flag)
 
 /**
  * Mesh Faces.
@@ -341,18 +364,17 @@ struct MPoly {
   int totloop;
   /** Deprecated material index. Now stored in the "material_index" attribute, but kept for IO. */
   short mat_nr_legacy;
-  char flag_legacy, _pad;
+  eMPoly_Flag flag_legacy;
+  char _pad;
 };
 
-/** #MPoly.flag */
-enum {
-  /** Deprecated smooth shading status. Now stored reversed in "sharp_face" attribute. */
-  ME_SMOOTH = (1 << 0),
-  /** Deprecated selection status. Now stored in ".select_poly" attribute. */
-  ME_FACE_SEL = (1 << 1),
-  /** Deprecated hide status. Now stored in ".hide_poly" attribute. */
-  // ME_HIDE = (1 << 4),
+/** #MLoopUV.flag */
+enum eMLoopUV_Flag : int {
+  MLOOPUV_EDGESEL = (1 << 0),
+  MLOOPUV_VERTSEL = (1 << 1),
+  MLOOPUV_PINNED = (1 << 2),
 };
+ENUM_OPERATORS(eMLoopUV_Flag)
 
 /**
  * UV coordinate for a polygon face & flag for selection & other options.
@@ -360,15 +382,17 @@ enum {
  */
 struct MLoopUV {
   float uv[2];
-  int flag;
+  eMLoopUV_Flag flag;
 };
 
-/** #MLoopUV.flag */
-enum {
-  MLOOPUV_EDGESEL = (1 << 0),
-  MLOOPUV_VERTSEL = (1 << 1),
-  MLOOPUV_PINNED = (1 << 2),
+/** #MVert.flag */
+enum eMVert_Flag : char {
+  /** Deprecated selection status. Now stored in ".select_vert" attribute. */
+  // SELECT = (1 << 0),
+  /** Deprecated hide status. Now stored in ".hide_vert" attribute. */
+  ME_HIDE = (1 << 4),
 };
+ENUM_OPERATORS(eMVert_Flag)
 
 /**
  * Deprecated mesh vertex data structure. Now stored with generic attributes.
@@ -379,20 +403,12 @@ struct MVert {
    * Deprecated flag for storing hide status and selection, which are now stored in separate
    * generic attributes. Kept for file read and write.
    */
-  char flag_legacy;
+  eMVert_Flag flag_legacy;
   /**
    * Deprecated bevel weight storage, now located in #CD_BWEIGHT, except for file read and write.
    */
   char bweight_legacy;
   char _pad[2];
-};
-
-/** #MVert.flag */
-enum {
-  /** Deprecated selection status. Now stored in ".select_vert" attribute. */
-  // SELECT = (1 << 0),
-  /** Deprecated hide status. Now stored in ".hide_vert" attribute. */
-  ME_HIDE = (1 << 4),
 };
 
 /**
@@ -418,7 +434,8 @@ struct MFace {
   unsigned int v1, v2, v3, v4;
   short mat_nr;
   /** We keep edcode, for conversion to edges draw flags in old files. */
-  char edcode, flag;
+  eMFace_EdgeCode edcode;
+  char flag;
 };
 
 /** Tessellation uv face data. */

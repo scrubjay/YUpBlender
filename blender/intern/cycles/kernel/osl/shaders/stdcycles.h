@@ -26,8 +26,6 @@ closure color phong_ramp(normal N, float exponent, color colors[8]) BUILTIN;
 closure color diffuse_toon(normal N, float size, float smooth) BUILTIN;
 closure color glossy_toon(normal N, float size, float smooth) BUILTIN;
 closure color ashikhmin_velvet(normal N, float sigma) BUILTIN;
-closure color sheen(normal N, float roughness) BUILTIN;
-closure color ambient_occlusion() BUILTIN;
 
 closure color microfacet_f82_tint(
     string distribution, vector N, vector T, float ax, float ay, color f0, color f82) BUILTIN;
@@ -36,6 +34,18 @@ closure color microfacet_f82_tint(
  * otherwise could be replaced by microfacet() */
 closure color microfacet_multi_ggx_glass(normal N, float ag, float eta, color C) BUILTIN;
 closure color microfacet_multi_ggx_aniso(normal N, vector T, float ax, float ay, color C) BUILTIN;
+closure color thin_glass(normal N,
+                         vector T,
+                         color reflection,
+                         color transmission,
+                         float ior,
+                         float alpha,
+                         float thinfilm_thickness,
+                         float thinfilm_ior) BUILTIN;
+closure color
+thin_subsurface(normal N, vector T, color C, float anisotropy, float roughness) BUILTIN;
+
+closure color coat_bsdf(color C, float ior, float roughness, normal N) BUILTIN;
 
 // BSSRDF
 closure color bssrdf(string method, normal N, vector radius, color albedo) BUILTIN;
@@ -80,6 +90,12 @@ point camera_shader_raster_position()
 vector camera_shader_random_sample()
 {
   return vector(N);
+}
+
+/* Deprecated, should use `sheen_bsdf()` instead. Can remove in 6.0. */
+closure color sheen(normal N, float roughness)
+{
+  return sheen_bsdf(N, color(1.0), roughness);
 }
 
 #endif /* CCL_STDOSL_H */

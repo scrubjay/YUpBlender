@@ -15,7 +15,7 @@
 
 #include <algorithm>
 
-#include "BLI_utildefines.h"
+#include "BLI_utildefines.hh"
 
 #include "MEM_guardedalloc.h"
 
@@ -251,6 +251,14 @@ static PyObject *pygpu_buffer_to_list_recursive(BPyGPUBuffer *self)
   return list;
 }
 
+PyDoc_STRVAR(
+    /* Wrap. */
+    pygpu_buffer_dimensions_doc,
+    "The size of the buffer for each dimension.\n"
+    "\n"
+    "Setting the dimensions is supported when the total number of elements is unchanged.\n"
+    "\n"
+    ":type: list[int]\n");
 static PyObject *pygpu_buffer_dimensions_get(BPyGPUBuffer *self, void * /*arg*/)
 {
   PyObject *list = PyList_New(self->shape_len);
@@ -393,8 +401,16 @@ static PyObject *pygpu_buffer__tp_new(PyTypeObject * /*type*/, PyObject *args, P
   }
 
   PyC_StringEnum pygpu_dataformat = {bpygpu_dataformat_items, GPU_DATA_FLOAT};
-  if (!PyArg_ParseTuple(
-          args, "O&O|O: Buffer", PyC_ParseStringEnum, &pygpu_dataformat, &length_ob, &init))
+  if (!PyArg_ParseTuple(args,
+                        "O&" /* `format` */
+                        "O"  /* `dimensions` */
+                        "|"  /* Optional arguments. */
+                        "O"  /* `data` */
+                        ": Buffer",
+                        PyC_ParseStringEnum,
+                        &pygpu_dataformat,
+                        &length_ob,
+                        &init))
   {
     return nullptr;
   }
@@ -489,15 +505,35 @@ static int pygpu_buffer__sq_ass_item(BPyGPUBuffer *self, Py_ssize_t i, PyObject 
 
   switch (self->format) {
     case GPU_DATA_FLOAT:
-      return PyArg_Parse(v, "f:Expected floats", &self->buf.as_float[i]) ? 0 : -1;
+      return PyArg_Parse(v,
+                         "f" /* `value` */
+                         ":Expected floats",
+                         &self->buf.as_float[i]) ?
+                 0 :
+                 -1;
     case GPU_DATA_INT:
-      return PyArg_Parse(v, "i:Expected ints", &self->buf.as_int[i]) ? 0 : -1;
+      return PyArg_Parse(v,
+                         "i" /* `value` */
+                         ":Expected ints",
+                         &self->buf.as_int[i]) ?
+                 0 :
+                 -1;
     case GPU_DATA_UBYTE:
-      return PyArg_Parse(v, "b:Expected ints", &self->buf.as_byte[i]) ? 0 : -1;
+      return PyArg_Parse(v,
+                         "b" /* `value` */
+                         ":Expected ints",
+                         &self->buf.as_byte[i]) ?
+                 0 :
+                 -1;
     case GPU_DATA_UINT:
     case GPU_DATA_UINT_24_8_DEPRECATED:
     case GPU_DATA_10_11_11_REV:
-      return PyArg_Parse(v, "I:Expected unsigned ints", &self->buf.as_uint[i]) ? 0 : -1;
+      return PyArg_Parse(v,
+                         "I" /* `value` */
+                         ":Expected unsigned ints",
+                         &self->buf.as_uint[i]) ?
+                 0 :
+                 -1;
     default:
       return 0; /* should never happen */
   }
@@ -601,7 +637,7 @@ static PyGetSetDef pygpu_buffer_getseters[] = {
     {"dimensions",
      reinterpret_cast<getter>(pygpu_buffer_dimensions_get),
      reinterpret_cast<setter>(pygpu_buffer_dimensions_set),
-     nullptr,
+     pygpu_buffer_dimensions_doc,
      nullptr},
     {nullptr, nullptr, nullptr, nullptr, nullptr},
 };
@@ -641,7 +677,7 @@ static void pygpu_buffer_strides_calc(const eGPUDataFormat format,
 /* Here is the buffer interface function */
 static int pygpu_buffer__bf_getbuffer(BPyGPUBuffer *self, Py_buffer *view, int flags)
 {
-  if (UNLIKELY(view == nullptr)) {
+  if (view == nullptr) [[unlikely]] {
     PyErr_SetString(PyExc_ValueError, "null view in get-buffer is obsolete");
     return -1;
   }

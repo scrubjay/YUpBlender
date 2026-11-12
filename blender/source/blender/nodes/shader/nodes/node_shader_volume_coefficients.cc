@@ -2,7 +2,11 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
-#include "BLI_string.h"
+/** \file
+ * \ingroup shdnodes
+ */
+
+#include "BLI_string.hh"
 
 #include "node_shader_util.hh"
 
@@ -134,7 +138,8 @@ static int node_shader_gpu_volume_coefficients(GPUMaterial *mat,
   if (in[SOCK_ABSORPTION_COEFFICIENTS_ID].socket_not_black()) {
     GPU_material_flag_set(mat, GPU_MATFLAG_VOLUME_ABSORPTION);
   }
-  return GPU_stack_link(mat, node, "node_volume_coefficients", in, out);
+  return GPU_stack_link(
+      mat, node, "node_volume_coefficients", in, out, GPU_kernel_globals(), GPU_shading_data());
 }
 
 #undef SOCK_WEIGHT_ID
@@ -165,7 +170,7 @@ void register_node_type_sh_volume_coefficients()
   ntype.declare = file_ns::node_declare;
   ntype.gather_link_search_ops = search_link_ops_for_shader_bsdf_node;
   ntype.add_ui_poll = object_shader_nodes_poll;
-  bke::node_type_size_preset(ntype, bke::eNodeSizePreset::Large);
+  ntype.default_width = bke::NodeWidth::_240;
   ntype.initfunc = file_ns::node_shader_init_coefficients;
   ntype.gpu_fn = file_ns::node_shader_gpu_volume_coefficients;
   ntype.updatefunc = file_ns::node_shader_update_coefficients;

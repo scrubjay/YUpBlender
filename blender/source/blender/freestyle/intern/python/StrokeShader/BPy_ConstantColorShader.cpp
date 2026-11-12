@@ -27,20 +27,20 @@ PyDoc_STRVAR(
     "\n"
     "   Builds a ConstantColorShader object.\n"
     "\n"
-    "   :arg red: The red component.\n"
+    "   :param red: The red component.\n"
     "   :type red: float\n"
-    "   :arg green: The green component.\n"
+    "   :param green: The green component.\n"
     "   :type green: float\n"
-    "   :arg blue: The blue component.\n"
+    "   :param blue: The blue component.\n"
     "   :type blue: float\n"
-    "   :arg alpha: The alpha value.\n"
+    "   :param alpha: The alpha value.\n"
     "   :type alpha: float\n"
     "\n"
     ".. method:: shade(stroke)\n"
     "\n"
     "   Assigns a constant color to every vertex of the Stroke.\n"
     "\n"
-    "   :arg stroke: A Stroke object.\n"
+    "   :param stroke: A Stroke object.\n"
     "   :type stroke: :class:`freestyle.types.Stroke`\n");
 static int ConstantColorShader___init__(BPy_ConstantColorShader *self,
                                         PyObject *args,
@@ -49,7 +49,20 @@ static int ConstantColorShader___init__(BPy_ConstantColorShader *self,
   static const char *kwlist[] = {"red", "green", "blue", "alpha", nullptr};
   float f1, f2, f3, f4 = 1.0;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "fff|f", (char **)kwlist, &f1, &f2, &f3, &f4)) {
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "f" /* `red` */
+                                   "f" /* `green` */
+                                   "f" /* `blue` */
+                                   "|" /* Optional arguments. */
+                                   "f" /* `alpha` */
+                                   ":__init__",
+                                   (char **)kwlist,
+                                   &f1,
+                                   &f2,
+                                   &f3,
+                                   &f4))
+  {
     return -1;
   }
   self->py_ss.ss = new StrokeShaders::ConstantColorShader(f1, f2, f3, f4);

@@ -273,10 +273,22 @@ class Generator(base_generate.BaseGenerator):
         for coll in list(obj.data.collections_all):
             obj.data.collections.remove(coll)
 
-        # Select and duplicate metarig
+        # Select and duplicate metarig (temporarily unhide if hidden so select/duplicate succeed)
+        was_hidden = metarig.hide_get(view_layer=self.view_layer)
+        was_hide_viewport = metarig.hide_viewport
+        if was_hidden:
+            metarig.hide_set(False, view_layer=self.view_layer)
+        if was_hide_viewport:
+            metarig.hide_viewport = False
+
         select_object(context, metarig, deselect_all=True)
 
         bpy.ops.object.duplicate()
+
+        if was_hidden:
+            metarig.hide_set(True, view_layer=self.view_layer)
+        if was_hide_viewport:
+            metarig.hide_viewport = True
 
         # Rename org bones in the temporary object
         temp_obj = verify_armature_obj(context.view_layer.objects.active)
@@ -360,7 +372,7 @@ class Generator(base_generate.BaseGenerator):
             spread = float('%.3g' % spread)
             scale = spread / 0.589
             obj.data.edit_bones[root_bone].head = (0, 0, 0)
-            obj.data.edit_bones[root_bone].tail = (0, scale, 0)
+            obj.data.edit_bones[root_bone].tail = (0, 0, scale)
             obj.data.edit_bones[root_bone].roll = 0
 
         self.root_bone = root_bone
@@ -783,9 +795,9 @@ def apply_bone_colors(obj, metarig, priorities: Optional[dict[str, dict[str, flo
 
 def get_xy_spread(bones):
     x_max = 0
-    y_max = 0
+    z_max = 0
     for b in bones:
         x_max = max((x_max, abs(b.head[0]), abs(b.tail[0])))
-        y_max = max((y_max, abs(b.head[1]), abs(b.tail[1])))
+        z_max = max((z_max, abs(b.head[2]), abs(b.tail[2])))
 
-    return max((x_max, y_max))
+    return max((x_max, z_max))

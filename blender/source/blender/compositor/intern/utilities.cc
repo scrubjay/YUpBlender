@@ -4,7 +4,7 @@
 
 #include <optional>
 
-#include "BLI_assert.h"
+#include "BLI_assert.hh"
 #include "BLI_math_vector.hh"
 #include "BLI_math_vector_types.hh"
 
@@ -76,6 +76,8 @@ ResultType socket_data_type_to_result_type(const eNodeSocketDatatype data_type,
       return ResultType::Menu;
     case SOCK_STRING:
       return ResultType::String;
+    case SOCK_ROTATION:
+      return ResultType::Quaternion;
     case SOCK_OBJECT:
       return ResultType::Object;
     case SOCK_IMAGE:
@@ -88,6 +90,10 @@ ResultType socket_data_type_to_result_type(const eNodeSocketDatatype data_type,
       return ResultType::Text;
     case SOCK_MASK:
       return ResultType::Mask;
+    case SOCK_BUNDLE:
+      return ResultType::Bundle;
+    case SOCK_CLOSURE:
+      return ResultType::Closure;
     default:
       BLI_assert_unreachable();
       return ResultType::Float;
@@ -116,6 +122,11 @@ ResultType get_node_socket_result_type(const bNodeSocket *socket)
 
 ResultType get_node_interface_socket_result_type(const bNodeTreeInterfaceSocket &socket)
 {
+  /* Gracefully handle undefined interface sockets, falling back to a float. */
+  if (socket.socket_typeinfo() == &bke::NodeSocketTypeUndefined) {
+    return ResultType::Float;
+  }
+
   const eNodeSocketDatatype socket_type = socket.socket_typeinfo()->type;
   if (socket_type == SOCK_VECTOR) {
     return socket_data_type_to_result_type(
@@ -129,31 +140,15 @@ ResultType get_node_interface_socket_result_type(const bNodeTreeInterfaceSocket 
   return socket_data_type_to_result_type(socket_type);
 }
 
-bool is_output_linked_to_node_conditioned(const bNodeSocket &output,
-                                          FunctionRef<bool(const bNode &)> condition)
+bool is_output_linked_to_input_conditioned(const bNodeSocket &output,
+                                           FunctionRef<bool(const bNodeSocket &)> condition)
 {
   for (const bNodeSocket *input : output.logically_linked_sockets()) {
-    if (condition(input->owner_node())) {
+    if (condition(*input)) {
       return true;
     }
   }
   return false;
-}
-
-int number_of_inputs_linked_to_output_conditioned(const bNodeSocket &output,
-                                                  FunctionRef<bool(const bNodeSocket &)> condition)
-{
-  if (!output.is_logically_linked()) {
-    return 0;
-  }
-
-  int count = 0;
-  for (const bNodeSocket *input : output.logically_linked_sockets()) {
-    if (condition(*input)) {
-      count++;
-    }
-  }
-  return count;
 }
 
 bool is_pixel_node(const bNode &node)
@@ -161,13 +156,29 @@ bool is_pixel_node(const bNode &node)
   return node.typeinfo->build_multi_function;
 }
 
-static ImplicitInput get_implicit_input(const nodes::SocketDeclaration *socket_declaration)
+static std::optional<ImplicitInputType> get_implicit_input(
+    const NodeDefaultInputType node_default_input_type)
 {
-  /* We only support implicit textures coordinates, though this can be expanded in the future. */
-  if (socket_declaration->input_field_type == nodes::InputSocketFieldType::Implicit) {
-    return ImplicitInput::TextureCoordinates;
+  switch (node_default_input_type) {
+    case NodeDefaultInputType::NODE_DEFAULT_INPUT_VALUE:
+      return std::nullopt;
+    case NodeDefaultInputType::NODE_DEFAULT_INPUT_UNIFORM_IMAGE_COORDINATES:
+      return ImplicitInputType::UniformImageCoordinates;
+    case NodeDefaultInputType::NODE_DEFAULT_INPUT_SCENE_FRAME:
+      return ImplicitInputType::SceneFrame;
+    case NodeDefaultInputType::NODE_DEFAULT_INPUT_INDEX_FIELD:
+    case NodeDefaultInputType::NODE_DEFAULT_INPUT_ID_INDEX_FIELD:
+    case NodeDefaultInputType::NODE_DEFAULT_INPUT_NORMAL_FIELD:
+    case NodeDefaultInputType::NODE_DEFAULT_INPUT_POSITION_FIELD:
+    case NodeDefaultInputType::NODE_DEFAULT_INPUT_INSTANCE_TRANSFORM_FIELD:
+    case NodeDefaultInputType::NODE_DEFAULT_INPUT_HANDLE_LEFT_FIELD:
+    case NodeDefaultInputType::NODE_DEFAULT_INPUT_HANDLE_RIGHT_FIELD:
+    case NodeDefaultInputType::NODE_DEFAULT_INPUT_SELF_OBJECT:
+      break;
   }
-  return ImplicitInput::None;
+
+  BLI_assert_unreachable();
+  return std::nullopt;
 }
 
 static int get_domain_priority(const bNodeSocket *input,
@@ -190,10 +201,10 @@ InputDescriptor input_descriptor_from_input_socket(const bNodeSocket *socket)
    * declaration. */
   input_descriptor.domain_priority = socket->index();
 
-  /* Not every node has a declaration, in which case we assume the default values for the rest of
-   * the properties. */
+  /* Not every node has a declaration or the declaration might be empty due to a skipped update, in
+   * which case we assume the default values for the rest of the properties. */
   const nodes::NodeDeclaration *node_declaration = socket->owner_node().declaration();
-  if (!node_declaration) {
+  if (!node_declaration || node_declaration->skip_updating_sockets) {
     return input_descriptor;
   }
   const nodes::SocketDeclaration *socket_declaration = node_declaration->inputs[socket->index()];
@@ -202,7 +213,7 @@ InputDescriptor input_descriptor_from_input_socket(const bNodeSocket *socket)
                                           nodes::StructureType::Single;
   input_descriptor.realization_mode = static_cast<InputRealizationMode>(
       socket_declaration->compositor_realization_mode());
-  input_descriptor.implicit_input = get_implicit_input(socket_declaration);
+  input_descriptor.implicit_input = get_implicit_input(socket_declaration->default_input_type);
 
   return input_descriptor;
 }
@@ -214,11 +225,9 @@ InputDescriptor input_descriptor_from_interface_input(const bNodeTree &node_grou
   input_descriptor.type = get_node_interface_socket_result_type(socket);
   input_descriptor.domain_priority = node_group.interface_input_index(socket);
   input_descriptor.expects_single_value = socket.structure_type ==
-                                          NODE_INTERFACE_SOCKET_STRUCTURE_TYPE_SINGLE;
+                                          NodeSocketInterfaceStructureType::Single;
   input_descriptor.realization_mode = InputRealizationMode::None;
-  input_descriptor.implicit_input = socket.default_input == NODE_DEFAULT_INPUT_POSITION_FIELD ?
-                                        ImplicitInput::TextureCoordinates :
-                                        ImplicitInput::None;
+  input_descriptor.implicit_input = get_implicit_input(socket.default_input);
 
   return input_descriptor;
 }

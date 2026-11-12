@@ -13,6 +13,7 @@
 #include <Alembic/AbcGeom/INuPatch.h>
 #include <Alembic/AbcMaterial/IMaterial.h>
 
+#include "abc_keyframing.h"
 #include "abc_reader_archive.h"
 #include "abc_reader_camera.h"
 #include "abc_reader_curves.h"
@@ -45,13 +46,13 @@
 
 #include "ED_undo.hh"
 
-#include "BLI_compiler_compat.h"
-#include "BLI_listbase.h"
-#include "BLI_math_matrix.h"
+#include "BLI_compiler_compat.hh"
+#include "BLI_listbase.hh"
+#include "BLI_math_matrix_c.hh"
 #include "BLI_path_utils.hh"
 #include "BLI_sort.hh"
 #include "BLI_span.hh"
-#include "BLI_string.h"
+#include "BLI_string.hh"
 #include "BLI_timeit.hh"
 
 #include "BLT_translation.hh"
@@ -261,8 +262,8 @@ static void find_iobject(const IObject &object, IObject &ret, const std::string 
  *         Blender object). The pointer is the AbcObjectReader that represents
  *         the IObject parameter.
  *
- * NOTE: this function is similar to gather_object_paths above, need to keep
- * them in sync. */
+ * NOTE: this function is similar to gather_object_paths above, need to keep them in sync.
+ */
 static std::pair<bool, AbcObjectReader *> visit_object(
     const IObject &object,
     AbcObjectReader::ptr_vector &readers,
@@ -465,7 +466,7 @@ struct ImportJobData {
   /** Min time read from file import. */
   chrono_t min_time = std::numeric_limits<chrono_t>::max();
   /** Max time read from file import. */
-  chrono_t max_time = std::numeric_limits<chrono_t>::min();
+  chrono_t max_time = -std::numeric_limits<chrono_t>::max();
 
   bool *stop;
   bool *do_update;
@@ -561,9 +562,7 @@ static void import_file(ImportJobData *data, const char *filepath, float progres
 
     if (reader->valid()) {
       reader->readObjectData(data->bmain, sample_sel);
-
-      data->min_time = std::min(data->min_time, reader->minTime());
-      data->max_time = std::max(data->max_time, reader->maxTime());
+      reader->readVisibility();
     }
     else {
       std::cerr << "Object " << reader->name() << " in Alembic file " << filepath
@@ -576,6 +575,24 @@ static void import_file(ImportJobData *data, const char *filepath, float progres
       data->was_cancelled = true;
       return;
     }
+  }
+
+  const TimeInfo time_info = archive->getTimeInfo();
+  if (time_info.is_valid()) {
+    data->min_time = std::min(data->min_time, time_info.min_time);
+    data->max_time = std::max(data->max_time, time_info.max_time);
+
+    Vector<std::unique_ptr<FCurveCreationHelper>> keyframing_helpers;
+
+    for (iter = readers.begin(); iter != readers.end(); ++iter) {
+      AbcObjectReader *reader = *iter;
+
+      if (reader->valid()) {
+        reader->getKeyFramingHelpers(keyframing_helpers);
+      }
+    }
+
+    create_keyframes(data->bmain, data->scene, keyframing_helpers, time_info);
   }
 
   /* Setup parenthood. */
@@ -704,6 +721,19 @@ static void import_endjob(void *user_data)
       has_instantiated_object = true;
       /* TODO: is setting active needed? */
       BKE_view_layer_base_select_and_set_active(view_layer, base);
+
+      /* If the object is hidden, we set the base as hidden instead so that hide/unhide shortcuts
+       * work and the outliner shows the right value. We also unset the flag on the object as users
+       * are more likely to interact with viewport visibility from the outliner or shortcuts than
+       * in the object visibility panel.
+       * We don't do this if keyframes are added for the visibility, otherwise the objects won't
+       * show up in the viewport and we cannot transfer the keyframes to the base. */
+      if ((ob->visibility_flag & OB_HIDE_VIEWPORT) != 0 && !reader->has_visibility_keyframes()) {
+        base->flag |= BASE_HIDDEN;
+        ob->visibility_flag &= ~OB_HIDE_VIEWPORT;
+        /* Needed for the shortcut (ALT+H) to work. */
+        BKE_base_eval_flags(base);
+      }
 
       DEG_id_tag_update(&lc->collection->id, ID_RECALC_SYNC_TO_EVAL);
       DEG_id_tag_update_ex(data->bmain,

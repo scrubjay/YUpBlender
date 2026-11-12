@@ -37,7 +37,7 @@ class MetalDevice : public Device {
   id<MTLBuffer> launch_params_buffer = nil;
   KernelParamsMetal *launch_params = nullptr;
 
-  /* MetalRT members ----------------------------------*/
+  /* MetalRT members ---------------------------------- */
   bool use_metalrt = false;
   bool use_metalrt_extended_limits = false;
   bool motion_blur = false;
@@ -53,9 +53,27 @@ class MetalDevice : public Device {
 
   API_AVAILABLE(macos(11.0))
   id<MTLAccelerationStructure> accel_struct = nil;
-  /*---------------------------------------------------*/
 
-  uint kernel_features = 0;
+  /* Residency sets -----------------------------------*/
+  void prepare_residency();
+  void metal_mem_alloc(id<MTLResource> allocation);
+  void metal_mem_free(id<MTLResource> allocation);
+
+  /* For externally-owned resources (e.g. graphics interop buffers) which need to be resident for
+   * kernels to access them, but shouldn't be included in our stats. */
+  void add_to_residency_set(id<MTLResource> allocation);
+  void remove_from_residency_set(id<MTLResource> allocation);
+
+  bool mtlResidencySet_enabled = false;
+#  if defined(MAC_OS_VERSION_15_0)
+  API_AVAILABLE(macos(15.0), ios(18.0))
+  id<MTLResidencySet> mtlResidencySet = nil;
+  bool mtlResidencySet_dirty = false;
+  /* Guards mtlResidencySet mutations (may be reached from multiple threads). */
+  std::mutex mtlResidencySet_mutex;
+#  endif
+
+  uint64_t kernel_features = 0;
   bool using_nanovdb = false;
   int max_threads_per_threadgroup;
 
@@ -98,7 +116,7 @@ class MetalDevice : public Device {
 
   void cancel() override;
 
-  BVHLayoutMask get_bvh_layout_mask(uint /*kernel_features*/) const override;
+  BVHLayoutMask get_bvh_layout_mask(uint64_t kernel_features) const override;
 
   void set_error(const string &error) override;
 
@@ -106,7 +124,7 @@ class MetalDevice : public Device {
 
   ~MetalDevice() override;
 
-  bool support_device(const uint /*kernel_features*/);
+  bool support_device(uint64_t kernel_features);
 
   bool check_peer_access(Device *peer_device) override;
 
@@ -115,14 +133,14 @@ class MetalDevice : public Device {
   bool use_local_atomic_sort() const;
 
   string preprocess_source(MetalPipelineType pso_type,
-                           const uint kernel_features,
+                           uint64_t kernel_features,
                            string *source = nullptr);
 
   void refresh_source_and_kernels_md5(MetalPipelineType pso_type);
 
-  void make_source(MetalPipelineType pso_type, const uint kernel_features);
+  void make_source(MetalPipelineType pso_type, uint64_t kernel_features);
 
-  bool load_kernels(const uint kernel_features) override;
+  bool load_kernels(uint64_t kernel_features) override;
 
   void load_image_info();
 
@@ -184,8 +202,6 @@ class MetalDevice : public Device {
   void image_alloc_as_buffer(device_image &mem);
   void image_copy_to(device_image &mem);
   void image_free(device_image &mem);
-
-  bool has_unified_memory() const override;
 
   void flush_delayed_free_list();
 

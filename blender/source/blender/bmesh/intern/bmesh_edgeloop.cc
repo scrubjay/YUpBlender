@@ -10,12 +10,12 @@
 
 #include "MEM_guardedalloc.h"
 
-#include "BLI_listbase.h"
-#include "BLI_math_vector.h"
-#include "BLI_mempool.h"
+#include "BLI_listbase.hh"
+#include "BLI_math_vector_c.hh"
+#include "BLI_mempool.hh"
 #include "BLI_set.hh"
-#include "BLI_stack.h"
-#include "BLI_utildefines_iter.h"
+#include "BLI_stack_c.hh"
+#include "BLI_utildefines_iter.hh"
 
 #include "bmesh.hh"
 
@@ -33,6 +33,11 @@ struct BMEdgeLoopStore {
 };
 
 #define BM_EDGELOOP_IS_CLOSED (1 << 0)
+/**
+ * The loop is cyclic (the closing edge joins the last and first vertices) but, unlike a fully
+ * closed loop, it is anchored at a junction and so has a meaningful start and end.
+ */
+#define BM_EDGELOOP_IS_CLOSED_JUNCTION (1 << 1)
 
 /* Use a small value since we need normals even for very small loops. */
 #define EDGELOOP_EPS 1e-10f
@@ -61,9 +66,36 @@ static int bm_vert_other_tag(BMVert *v, BMVert *v_prev, BMEdge **r_e)
 }
 
 /**
+ * A junction is a vertex where more than two tagged edges meet. Only valid before the walk begins
+ * to consume (clear) the edge tags.
+ */
+static bool bm_vert_is_junction(BMVert *v)
+{
+  BMIter iter;
+  BMEdge *e;
+  int count = 0;
+  BM_ITER_ELEM (e, &iter, v, BM_EDGES_OF_VERT) {
+    if (BM_elem_flag_test(e, BM_ELEM_INTERNAL_TAG)) {
+      count++;
+      if (count > 2) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * \param vert_junctions: When non-null, junctions act as terminators: the loop ends at a junction
+ * (sharing it as an end-point) rather than being discarded. When null, a loop running into a
+ * junction is discarded.
  * \return success
  */
-static bool bm_loop_build(BMEdgeLoopStore *el_store, BMVert *v_prev, BMVert *v, int dir)
+static bool bm_loop_build(BMEdgeLoopStore *el_store,
+                          BMVert *v_prev,
+                          BMVert *v,
+                          int dir,
+                          const Set<BMVert *> *vert_junctions)
 {
   void (*add_fn)(ListBase *, void *) = dir == 1 ? BLI_addhead : BLI_addtail;
   BMEdge *e_next;
@@ -82,13 +114,21 @@ static bool bm_loop_build(BMEdgeLoopStore *el_store, BMVert *v_prev, BMVert *v, 
     node->data = v;
     add_fn(&el_store->verts, node);
     el_store->len++;
+
+    if (vert_junctions) {
+      /* A junction terminates the loop: it may be shared as an end-point by other loops
+       * (so its tag is left set), but is never traversed. */
+      if (vert_junctions->contains(v)) {
+        break;
+      }
+    }
     BM_elem_flag_disable(v, BM_ELEM_INTERNAL_TAG);
 
     count = bm_vert_other_tag(v, v_prev, &e_next);
     if (count == 1) {
       v_next = BM_edge_other_vert(e_next, v);
       BM_elem_flag_disable(e_next, BM_ELEM_INTERNAL_TAG);
-      if (UNLIKELY(v_next == v_first)) {
+      if (v_next == v_first) [[unlikely]] {
         el_store->flag |= BM_EDGELOOP_IS_CLOSED;
         v_next = nullptr;
       }
@@ -111,13 +151,14 @@ static bool bm_loop_build(BMEdgeLoopStore *el_store, BMVert *v_prev, BMVert *v, 
 
 int BM_mesh_edgeloops_find(BMesh *bm,
                            ListBaseT<BMEdgeLoopStore> *r_eloops,
-                           bool (*test_fn)(BMEdge *, void *user_data),
-                           void *user_data)
+                           FunctionRef<bool(BMEdge *)> test_fn,
+                           const BMEdgeLoopFind_Params *params)
 {
   BMIter iter;
   BMEdge *e;
   BMVert *v;
   int count = 0;
+  bool use_vert_junction = params ? params->use_vert_junction : false;
 
   BM_ITER_MESH (v, &iter, bm, BM_VERTS_OF_MESH) {
     BM_elem_flag_disable(v, BM_ELEM_INTERNAL_TAG);
@@ -127,7 +168,7 @@ int BM_mesh_edgeloops_find(BMesh *bm,
   BLI_Stack *edge_stack = BLI_stack_new(sizeof(BMEdge *), __func__);
   BM_ITER_MESH (e, &iter, bm, BM_EDGES_OF_MESH) {
     BLI_assert(!BM_elem_flag_test(e, BM_ELEM_INTERNAL_TAG));
-    if (test_fn(e, user_data)) {
+    if (test_fn(e)) {
       BM_elem_flag_enable(e, BM_ELEM_INTERNAL_TAG);
       BM_elem_flag_enable(e->v1, BM_ELEM_INTERNAL_TAG);
       BM_elem_flag_enable(e->v2, BM_ELEM_INTERNAL_TAG);
@@ -143,15 +184,48 @@ int BM_mesh_edgeloops_find(BMesh *bm,
   BLI_stack_pop_n_reverse(edge_stack, edges, BLI_stack_count(edge_stack));
   BLI_stack_free(edge_stack);
 
-  for (uint i = 0; i < edges_len; i += 1) {
-    e = edges[i];
+  /* Collect junctions in a single pass while the edge tags are still complete, so membership can
+   * be tested cheaply as the walk clears the tags. */
+  Set<BMVert *> vert_junction_set;
+  if (use_vert_junction) {
+    for (BMEdge *e : Span{edges, edges_len}) {
+      for (BMVert *v_end : {e->v1, e->v2}) {
+        if (!vert_junction_set.contains(v_end) && bm_vert_is_junction(v_end)) {
+          vert_junction_set.add(v_end);
+        }
+      }
+    }
+  }
+  if (vert_junction_set.is_empty()) {
+    use_vert_junction = false;
+  }
+  const Set<BMVert *> *vert_junctions = use_vert_junction ? &vert_junction_set : nullptr;
+
+  for (BMEdge *e : Span{edges, edges_len}) {
     if (BM_elem_flag_test(e, BM_ELEM_INTERNAL_TAG)) {
       BMEdgeLoopStore *el_store = MEM_new_zeroed<BMEdgeLoopStore>(__func__);
 
       /* add both directions */
-      if (bm_loop_build(el_store, e->v1, e->v2, 1) && bm_loop_build(el_store, e->v2, e->v1, -1) &&
-          el_store->len > 1)
-      {
+      const bool built = bm_loop_build(el_store, e->v1, e->v2, 1, vert_junctions) &&
+                         bm_loop_build(el_store, e->v2, e->v1, -1, vert_junctions);
+
+      if (use_vert_junction) {
+        /* Both directions ending on the same vertex means they met at a shared junction:
+         * the loop is cyclic, anchored at that junction. Drop the duplicated end and flag it
+         * (kept distinct from a fully closed loop, which has no anchor). */
+        if (built && el_store->len >= 2) {
+          LinkData *node_first = el_store->verts.first();
+          LinkData *node_last = el_store->verts.last();
+          if (node_first->data == node_last->data) {
+            BLI_remlink(&el_store->verts, node_last);
+            MEM_delete(node_last);
+            el_store->len--;
+            el_store->flag |= BM_EDGELOOP_IS_CLOSED_JUNCTION;
+          }
+        }
+      }
+
+      if (built && el_store->len > 1) {
         BLI_addtail(r_eloops, el_store);
         count++;
       }
@@ -161,8 +235,7 @@ int BM_mesh_edgeloops_find(BMesh *bm,
     }
   }
 
-  for (uint i = 0; i < edges_len; i += 1) {
-    e = edges[i];
+  for (BMEdge *e : Span{edges, edges_len}) {
     BM_elem_flag_disable(e, BM_ELEM_INTERNAL_TAG);
     BM_elem_flag_disable(e->v1, BM_ELEM_INTERNAL_TAG);
     BM_elem_flag_disable(e->v2, BM_ELEM_INTERNAL_TAG);
@@ -211,7 +284,7 @@ static bool bm_loop_path_build_step(BLI_mempool *vs_pool,
   VertStep *vs, *vs_next;
   BLI_assert(abs(dir) == 1);
 
-  for (vs = static_cast<VertStep *>(lb->first); vs; vs = vs_next) {
+  for (vs = lb->first(); vs; vs = vs_next) {
     BMIter iter;
     BMEdge *e;
     /* these values will be the same every iteration */
@@ -258,13 +331,12 @@ static bool bm_loop_path_build_step(BLI_mempool *vs_pool,
   /* `lb` is now full of freed items, overwrite. */
   *lb = lb_tmp;
 
-  return (BLI_listbase_is_empty(lb) == false);
+  return (lb->is_empty() == false);
 }
 
 bool BM_mesh_edgeloops_find_path(BMesh *bm,
                                  ListBaseT<BMEdgeLoopStore> *r_eloops,
-                                 bool (*test_fn)(BMEdge *, void *user_data),
-                                 void *user_data,
+                                 FunctionRef<bool(BMEdge *)> test_fn,
                                  BMVert *v_src,
                                  BMVert *v_dst)
 {
@@ -290,7 +362,7 @@ bool BM_mesh_edgeloops_find_path(BMesh *bm,
   if (test_fn) {
     BLI_Stack *edge_stack = BLI_stack_new(sizeof(BMEdge *), __func__);
     BM_ITER_MESH (e, &iter, bm, BM_EDGES_OF_MESH) {
-      if (test_fn(e, user_data)) {
+      if (test_fn(e)) {
         BM_elem_flag_enable(e, BM_ELEM_INTERNAL_TAG);
         BM_elem_flag_enable(e->v1, BM_ELEM_INTERNAL_TAG);
         BM_elem_flag_enable(e->v2, BM_ELEM_INTERNAL_TAG);
@@ -376,8 +448,7 @@ bool BM_mesh_edgeloops_find_path(BMesh *bm,
     }
   }
 
-  for (uint i = 0; i < edges_len; i += 1) {
-    e = edges[i];
+  for (BMEdge *e : Span{edges, edges_len}) {
     BM_elem_flag_disable(e, BM_ELEM_INTERNAL_TAG);
     BM_elem_flag_disable(e->v1, BM_ELEM_INTERNAL_TAG);
     BM_elem_flag_disable(e->v2, BM_ELEM_INTERNAL_TAG);
@@ -425,17 +496,23 @@ void BM_mesh_edgeloops_calc_order(BMesh * /*bm*/,
                                   const bool use_normals)
 {
   ListBaseT<BMEdgeLoopStore> eloops_ordered = {nullptr};
-  BMEdgeLoopStore *el_store;
   float cent[3];
   int tot = 0;
   zero_v3(cent);
   /* assumes we calculated centers already */
-  for (el_store = static_cast<BMEdgeLoopStore *>(eloops->first); el_store;
-       el_store = el_store->next, tot++)
-  {
-    add_v3_v3(cent, el_store->co);
+  for (BMEdgeLoopStore &el_store : *eloops) {
+    if (!is_finite_v3(el_store.co)) [[unlikely]] {
+      continue;
+    }
+    add_v3_v3(cent, el_store.co);
+    tot += 1;
   }
-  mul_v3_fl(cent, 1.0f / float(tot));
+  if (tot > 0) {
+    mul_v3_fl(cent, 1.0f / float(tot));
+    if (!is_finite_v3(cent)) {
+      zero_v3(cent);
+    }
+  }
 
   /* Find the furthest out loop. */
   {
@@ -443,7 +520,8 @@ void BM_mesh_edgeloops_calc_order(BMesh * /*bm*/,
     float len_best_sq = -1.0f;
     for (BMEdgeLoopStore &el_store : *eloops) {
       const float len_sq = len_squared_v3v3(cent, el_store.co);
-      if (len_sq > len_best_sq) {
+      /* Null check to account for non-finite distances. */
+      if ((len_sq > len_best_sq) || (el_store_best == nullptr)) {
         len_best_sq = len_sq;
         el_store_best = &el_store;
       }
@@ -454,10 +532,10 @@ void BM_mesh_edgeloops_calc_order(BMesh * /*bm*/,
   }
 
   /* not so efficient re-ordering */
-  while (eloops->first) {
+  while (eloops->first()) {
     BMEdgeLoopStore *el_store_best = nullptr;
-    const float *co = (static_cast<BMEdgeLoopStore *>(eloops_ordered.last))->co;
-    const float *no = (static_cast<BMEdgeLoopStore *>(eloops_ordered.last))->no;
+    const float *co = (eloops_ordered.last())->co;
+    const float *no = (eloops_ordered.last())->no;
     float len_best_sq = FLT_MAX;
 
     if (use_normals) {
@@ -478,7 +556,8 @@ void BM_mesh_edgeloops_calc_order(BMesh * /*bm*/,
         len_sq = len_squared_v3v3(co, el_store.co);
       }
 
-      if (len_sq < len_best_sq) {
+      /* Null check to account for non-finite distances. */
+      if ((len_sq < len_best_sq) || (el_store_best == nullptr)) {
         len_best_sq = len_sq;
         el_store_best = &el_store;
       }
@@ -520,13 +599,18 @@ BMEdgeLoopStore *BM_edgeloop_from_verts(BMVert **v_arr, const int v_arr_tot, boo
 
 void BM_edgeloop_free(BMEdgeLoopStore *el_store)
 {
-  BLI_freelistN(&el_store->verts);
+  el_store->verts.free_no_destruct();
   MEM_delete(el_store);
 }
 
 bool BM_edgeloop_is_closed(BMEdgeLoopStore *el_store)
 {
   return (el_store->flag & BM_EDGELOOP_IS_CLOSED) != 0;
+}
+
+bool BM_edgeloop_is_closed_junction(BMEdgeLoopStore *el_store)
+{
+  return (el_store->flag & BM_EDGELOOP_IS_CLOSED_JUNCTION) != 0;
 }
 
 ListBaseT<LinkData> *BM_edgeloop_verts_get(BMEdgeLoopStore *el_store)
@@ -556,15 +640,14 @@ void BM_edgeloop_edges_get(BMEdgeLoopStore *el_store, BMEdge **e_arr)
 {
   LinkData *node;
   int i = 0;
-  for (node = static_cast<LinkData *>(el_store->verts.first); node && node->next;
-       node = node->next)
-  {
+  for (node = el_store->verts.first(); node && node->next; node = node->next) {
     e_arr[i++] = BM_edge_exists(NODE_AS_V(node), NODE_AS_V(node->next));
     BLI_assert(e_arr[i - 1] != nullptr);
   }
 
   if (el_store->flag & BM_EDGELOOP_IS_CLOSED) {
-    e_arr[i] = BM_edge_exists(NODE_AS_V(el_store->verts.first), NODE_AS_V(el_store->verts.last));
+    e_arr[i] = BM_edge_exists(NODE_AS_V(el_store->verts.first()),
+                              NODE_AS_V(el_store->verts.last()));
     BLI_assert(e_arr[i] != nullptr);
   }
   BLI_assert(el_store->len == i + 1);
@@ -572,9 +655,9 @@ void BM_edgeloop_edges_get(BMEdgeLoopStore *el_store, BMEdge **e_arr)
 
 void BM_edgeloop_calc_center(BMesh * /*bm*/, BMEdgeLoopStore *el_store)
 {
-  LinkData *node_curr = static_cast<LinkData *>(el_store->verts.last);
-  LinkData *node_prev = (static_cast<LinkData *>(el_store->verts.last))->prev;
-  LinkData *node_first = static_cast<LinkData *>(el_store->verts.first);
+  LinkData *node_curr = el_store->verts.last();
+  LinkData *node_prev = (el_store->verts.last())->prev;
+  LinkData *node_first = el_store->verts.first();
   LinkData *node_next = node_first;
 
   const float *v_prev = NODE_AS_CO(node_prev);
@@ -613,8 +696,8 @@ void BM_edgeloop_calc_center(BMesh * /*bm*/, BMEdgeLoopStore *el_store)
 
 bool BM_edgeloop_calc_normal(BMesh * /*bm*/, BMEdgeLoopStore *el_store)
 {
-  LinkData *node_curr = static_cast<LinkData *>(el_store->verts.first);
-  const float *v_prev = NODE_AS_CO(el_store->verts.last);
+  LinkData *node_curr = el_store->verts.first();
+  const float *v_prev = NODE_AS_CO(el_store->verts.last());
   const float *v_curr = NODE_AS_CO(node_curr);
 
   zero_v3(el_store->no);
@@ -632,7 +715,7 @@ bool BM_edgeloop_calc_normal(BMesh * /*bm*/, BMEdgeLoopStore *el_store)
     }
   } while (true);
 
-  if (UNLIKELY(normalize_v3(el_store->no) < EDGELOOP_EPS)) {
+  if (normalize_v3(el_store->no) < EDGELOOP_EPS) [[unlikely]] {
     el_store->no[2] = 1.0f; /* other axis set to 0.0 */
     return false;
   }
@@ -643,8 +726,8 @@ bool BM_edgeloop_calc_normal_aligned(BMesh * /*bm*/,
                                      BMEdgeLoopStore *el_store,
                                      const float no_align[3])
 {
-  LinkData *node_curr = static_cast<LinkData *>(el_store->verts.first);
-  const float *v_prev = NODE_AS_CO(el_store->verts.last);
+  LinkData *node_curr = el_store->verts.first();
+  const float *v_prev = NODE_AS_CO(el_store->verts.last());
   const float *v_curr = NODE_AS_CO(node_curr);
 
   zero_v3(el_store->no);
@@ -666,7 +749,7 @@ bool BM_edgeloop_calc_normal_aligned(BMesh * /*bm*/,
     }
   } while (true);
 
-  if (UNLIKELY(normalize_v3(el_store->no) < EDGELOOP_EPS)) {
+  if (normalize_v3(el_store->no) < EDGELOOP_EPS) [[unlikely]] {
     el_store->no[2] = 1.0f; /* other axis set to 0.0 */
     return false;
   }
@@ -703,7 +786,7 @@ void BM_edgeloop_expand(
 
   /* first double until we are more than half as big */
   while ((el_store->len * 2) < el_store_len) {
-    LinkData *node_curr = static_cast<LinkData *>(el_store->verts.first);
+    LinkData *node_curr = el_store->verts.first();
     while (node_curr) {
       LinkData *node_curr_copy = MEM_dupalloc(node_curr);
       if (split == false) {
@@ -713,7 +796,7 @@ void BM_edgeloop_expand(
       else {
         if (node_curr->next || (el_store->flag & BM_EDGELOOP_IS_CLOSED)) {
           EDGE_SPLIT(node_curr_copy,
-                     node_curr->next ? node_curr->next : (LinkData *)el_store->verts.first);
+                     node_curr->next ? node_curr->next : (LinkData *)el_store->verts.first());
           BLI_insertlinkafter(&el_store->verts, node_curr, node_curr_copy);
           node_curr = node_curr_copy->next;
         }
@@ -730,7 +813,7 @@ void BM_edgeloop_expand(
   }
 
   if (el_store->len < el_store_len) {
-    LinkData *node_curr = static_cast<LinkData *>(el_store->verts.first);
+    LinkData *node_curr = el_store->verts.first();
 
     int iter_prev = 0;
     BLI_FOREACH_SPARSE_RANGE (el_store->len, (el_store_len - el_store->len), iter) {
@@ -748,7 +831,7 @@ void BM_edgeloop_expand(
       else {
         if (node_curr->next || (el_store->flag & BM_EDGELOOP_IS_CLOSED)) {
           EDGE_SPLIT(node_curr_copy,
-                     node_curr->next ? node_curr->next : (LinkData *)el_store->verts.first);
+                     node_curr->next ? node_curr->next : (LinkData *)el_store->verts.first());
           BLI_insertlinkafter(&el_store->verts, node_curr, node_curr_copy);
           node_curr = node_curr_copy->next;
         }

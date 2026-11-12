@@ -18,10 +18,10 @@
 #include "DNA_scene_types.h"
 
 #include "BLI_index_range.hh"
-#include "BLI_listbase.h"
+#include "BLI_listbase.hh"
 #include "BLI_span.hh"
-#include "BLI_string.h"
-#include "BLI_utildefines.h"
+#include "BLI_string.hh"
+#include "BLI_utildefines.hh"
 
 #include "BLT_translation.hh"
 
@@ -315,7 +315,7 @@ static Mesh *mesh_nurbs_displist_to_mesh(const Curve *cu, const ListBaseT<DispLi
  */
 static void mesh_copy_texture_space_from_curve_type(const Curve *cu, Mesh *mesh)
 {
-  mesh->texspace_flag = cu->texspace_flag & ~CU_TEXSPACE_FLAG_AUTO;
+  mesh->texspace_flag = eMesh_TexSpaceFlag(cu->texspace_flag & ~CU_TEXSPACE_FLAG_AUTO);
   copy_v3_v3(mesh->texspace_location, cu->texspace_location);
   copy_v3_v3(mesh->texspace_size, cu->texspace_size);
   BKE_mesh_texspace_calc(mesh);
@@ -402,15 +402,14 @@ void BKE_mesh_to_curve_nurblist(const Mesh *mesh,
   }
   MEM_delete(edge_users);
 
-  if (edges.first) {
-    while (edges.first) {
+  if (edges.first()) {
+    while (edges.first()) {
       /* each iteration find a polyline and add this as a nurbs poly spline */
 
       ListBaseT<VertLink> polyline = {nullptr, nullptr}; /* store a list of VertLink's */
       bool closed = false;
       int faces_num = 0;
-      int2 &edge_current = *static_cast<int2 *>(
-          const_cast<void *>((static_cast<EdgeLink *>(edges.last))->edge));
+      int2 &edge_current = *static_cast<int2 *>(const_cast<void *>((edges.last())->edge));
       uint startVert = edge_current[0];
       uint endVert = edge_current[1];
       bool ok = true;
@@ -419,10 +418,10 @@ void BKE_mesh_to_curve_nurblist(const Mesh *mesh,
       faces_num++;
       appendPolyLineVert(&polyline, endVert);
       faces_num++;
-      BLI_freelinkN(&edges, edges.last);
+      BLI_freelinkN(&edges, edges.last());
 
       while (ok) { /* while connected edges are found... */
-        EdgeLink *edl = static_cast<EdgeLink *>(edges.last);
+        EdgeLink *edl = edges.last();
         ok = false;
         while (edl) {
           EdgeLink *edl_prev = edl->prev;
@@ -464,7 +463,7 @@ void BKE_mesh_to_curve_nurblist(const Mesh *mesh,
 
       /* Now we have a polyline, make into a curve */
       if (startVert == endVert) {
-        BLI_freelinkN(&polyline, polyline.last);
+        BLI_freelinkN(&polyline, polyline.last());
         faces_num--;
         closed = true;
       }
@@ -481,13 +480,13 @@ void BKE_mesh_to_curve_nurblist(const Mesh *mesh,
         nu->pntsu = faces_num;
         nu->pntsv = 1;
         nu->orderu = 4;
-        nu->flagu = CU_NURB_ENDPOINT | (closed ? CU_NURB_CYCLIC : 0); /* endpoint */
+        nu->flagu = CU_NURB_ENDPOINT | (closed ? CU_NURB_CYCLIC : eNurbKnotFlag{}); /* endpoint */
         nu->resolu = 12;
 
         nu->bp = MEM_new_array_zeroed<BPoint>(faces_num, "bpoints");
 
         /* add points */
-        vl = static_cast<VertLink *>(polyline.first);
+        vl = polyline.first();
         int i;
         for (i = 0, bp = nu->bp; i < faces_num;
              i++, bp++, vl = reinterpret_cast<VertLink *>(vl->next))
@@ -496,7 +495,7 @@ void BKE_mesh_to_curve_nurblist(const Mesh *mesh,
           bp->f1 = SELECT;
           bp->radius = bp->weight = 1.0;
         }
-        BLI_freelistN(&polyline);
+        polyline.free_no_destruct();
 
         /* add nurb to curve */
         BLI_addtail(nurblist, nu);
@@ -512,17 +511,18 @@ void BKE_mesh_to_curve(Main *bmain, Depsgraph *depsgraph, Scene * /*scene*/, Obj
   if (!ob_eval) {
     return;
   }
-  const Mesh *mesh_eval = BKE_object_get_evaluated_mesh(ob_eval);
+  Mesh *mesh_eval = BKE_object_get_evaluated_mesh(ob_eval);
   if (!mesh_eval) {
     return;
   }
+  BKE_mesh_wrapper_ensure_mdata(mesh_eval);
 
   ListBaseT<Nurb> nurblist = {nullptr, nullptr};
 
   BKE_mesh_to_curve_nurblist(mesh_eval, &nurblist, 0);
   BKE_mesh_to_curve_nurblist(mesh_eval, &nurblist, 1);
 
-  if (nurblist.first) {
+  if (nurblist.first()) {
     Curve *cu = BKE_curve_add(bmain, ob->id.name + 2, OB_CURVES_LEGACY);
     cu->flag |= CU_3D;
 
@@ -544,11 +544,12 @@ void BKE_mesh_to_pointcloud(Main *bmain, Depsgraph *depsgraph, Scene * /*scene*/
   if (!ob_eval) {
     return;
   }
-  const Mesh *mesh_eval = BKE_object_get_evaluated_mesh(ob_eval);
+  Mesh *mesh_eval = BKE_object_get_evaluated_mesh(ob_eval);
   if (!mesh_eval) {
     return;
   }
 
+  BKE_mesh_wrapper_ensure_mdata(mesh_eval);
   PointCloud *pointcloud = BKE_pointcloud_add(bmain, ob->id.name + 2);
   pointcloud->totpoint = mesh_eval->verts_num;
 
@@ -701,7 +702,7 @@ static void curve_to_mesh_eval_ensure(Object &object)
     bevel_runtime = *curve.bevobj->runtime;
     bevel_object.runtime = &bevel_runtime;
 
-    BLI_listbase_clear(&bevel_object.modifiers);
+    bevel_object.modifiers.clear_no_delete();
     BKE_object_runtime_reset(&bevel_object);
     curve.bevobj = &bevel_object;
   }
@@ -714,7 +715,7 @@ static void curve_to_mesh_eval_ensure(Object &object)
     taper_runtime = *curve.taperobj->runtime;
     taper_object.runtime = &taper_runtime;
 
-    BLI_listbase_clear(&taper_object.modifiers);
+    taper_object.modifiers.clear_no_delete();
     BKE_object_runtime_reset(&taper_object);
     curve.taperobj = &taper_object;
   }

@@ -7,13 +7,14 @@
 #include "GPU_shader.hh"
 
 #include "COM_context.hh"
-#include "COM_profiler.hh"
 #include "COM_render_context.hh"
 #include "COM_static_cache_manager.hh"
 
 namespace blender::compositor {
 
-Context::Context(StaticCacheManager &cache_manager) : cache_manager_(cache_manager) {};
+Context::Context(StaticCacheManager &cache_manager,
+                 bke::ComputeContextCache &compute_context_cache)
+    : cache_manager_(cache_manager), compute_context_cache_(compute_context_cache) {};
 
 Result Context::get_pass(const Scene * /*scene*/, int /*view_layer*/, const char * /*name*/)
 {
@@ -37,13 +38,6 @@ ResultPrecision Context::get_precision() const
   return ResultPrecision::Full;
 }
 
-void Context::set_info_message(StringRef /*message*/) const {}
-
-bool Context::treat_viewer_as_group_output() const
-{
-  return false;
-}
-
 void Context::populate_meta_data_for_pass(const Scene * /*scene*/,
                                           int /*view_layer_id*/,
                                           const char * /*pass_name*/,
@@ -56,7 +50,12 @@ RenderContext *Context::render_context() const
   return nullptr;
 }
 
-Profiler *Context::profiler() const
+bool Context::is_viewport() const
+{
+  return false;
+}
+
+nodes::eval_log::NodesEvalLog *Context::nodes_evaluation_log() const
 {
   return nullptr;
 }
@@ -120,6 +119,11 @@ Result Context::create_result(ResultType type)
 StaticCacheManager &Context::cache_manager()
 {
   return cache_manager_;
+}
+
+bke::ComputeContextCache &Context::compute_context_cache() const
+{
+  return compute_context_cache_;
 }
 
 const Strip *Context::get_strip() const

@@ -17,14 +17,15 @@
 #include "DNA_object_types.h"
 
 #include "BLI_array_utils.hh"
-#include "BLI_gsqueue.h"
-#include "BLI_math_vector.h"
+#include "BLI_gsqueue.hh"
+#include "BLI_math_vector_c.hh"
 
 #include "BKE_attribute.hh"
 #include "BKE_ccg.hh"
 #include "BKE_customdata.hh"
 #include "BKE_mesh.hh"
 #include "BKE_multires.hh"
+#include "BKE_report.hh"
 
 #include "bmesh.hh"
 
@@ -501,12 +502,14 @@ static BMEdge *edge_step(BMVert *v, BMEdge *edge, BMVert **r_next_vertex)
 
 static BMFace *face_step(BMEdge *edge, BMFace *f)
 {
-  BMIter iter;
-  BMFace *face_iter;
+  BMLoop *l_a, *l_b;
+  if (BM_edge_loop_pair(edge, &l_a, &l_b)) {
+    if (f == l_a->f) {
+      return l_b->f;
+    }
 
-  BM_ITER_ELEM (face_iter, &iter, edge, BM_FACES_OF_EDGE) {
-    if (BM_face_share_edge_check(face_iter, f)) {
-      return face_iter;
+    if (f == l_b->f) {
+      return l_a->f;
     }
   }
   return f;
@@ -690,8 +693,13 @@ static void store_vertex_data(MultiresUnsubdivideGrid *grid, BMVert *v, int grid
 
 /**
  * Main function to extract data from the original bmesh and MDISPS as grids for the new base mesh.
+ *
+ * \return success, this code is expecting particular topology which we
+ * can rely when this is a direct reversal of the geometry created by a subdivision.
+ * However, we cannot guarantee the mesh wasn't modified,
+ * in this case defensive checks are needed #158032.
  */
-static void multires_unsubdivide_extract_single_grid_from_face_edge(
+static bool multires_unsubdivide_extract_single_grid_from_face_edge(
     MultiresUnsubdivideContext *context,
     BMFace *f1,
     BMEdge *e1,
@@ -729,9 +737,6 @@ static void multires_unsubdivide_extract_single_grid_from_face_edge(
     initial_edge_y = edge_temp;
   }
 
-  int grid_x = 0;
-  int grid_y = 0;
-
   BMVert *current_vertex_x = initial_vertex;
   BMEdge *edge_x = initial_edge_x;
 
@@ -742,38 +747,50 @@ static void multires_unsubdivide_extract_single_grid_from_face_edge(
   BMFace *current_face = f1;
   BMFace *grid_face = f1;
 
+  const bool has_original_grid_data = context->num_original_levels > 0;
+
+  /* NOTE(@ideasman42): early returning on first
+   * encountering null elements cause unexpected regressions.
+   * Instead of early exit, track if #store_vertex_data or #store_grid_data couldn't run,
+   * returning false if any failed. */
+  bool ok = true;
+
   /* If the data is going to be extracted from the already existing grids, there is no need to go
    * to the last vertex of the iteration as that coordinate is also included in the grids
    * corresponding to the loop of the face of the previous iteration. */
-  int grid_iteration_max_steps = grid_size;
-  if (context->num_original_levels > 0) {
-    grid_iteration_max_steps = grid_size - 1;
-  }
+  const int grid_iteration_max_steps = grid_size - (has_original_grid_data ? 1 : 0);
 
   /* Iterate over the mesh vertices in a grid pattern using the axis defined by the two initial
    * edges. */
-  while (grid_y < grid_iteration_max_steps) {
+  for (const int grid_y : IndexRange(grid_iteration_max_steps)) {
 
     grid_face = current_face;
 
-    while (grid_x < grid_iteration_max_steps) {
-      if (context->num_original_levels == 0) {
+    for (const int grid_x : IndexRange(grid_iteration_max_steps)) {
+      if (has_original_grid_data == false) {
         /* If there were no grids on the original mesh, extract the data directly from the
          * vertices. */
-        store_vertex_data(grid, current_vertex_x, grid_x, grid_y);
+        if (current_vertex_x) {
+          store_vertex_data(grid, current_vertex_x, grid_x, grid_y);
+        }
+        else {
+          ok = false;
+        }
         edge_x = edge_step(current_vertex_x, edge_x, &current_vertex_x);
       }
       else {
         /* If there were grids in the original mesh, extract the data from the grids and iterate
          * over the faces. */
-        store_grid_data(context, grid, current_vertex_x, grid_face, grid_x, grid_y);
+        if (current_vertex_x && grid_face) {
+          store_grid_data(context, grid, current_vertex_x, grid_face, grid_x, grid_y);
+        }
+        else {
+          ok = false;
+        }
         edge_x = edge_step(current_vertex_x, edge_x, &current_vertex_x);
-        grid_face = face_step(edge_x, grid_face);
+        grid_face = edge_x ? face_step(edge_x, grid_face) : nullptr;
       }
-
-      grid_x++;
     }
-    grid_x = 0;
 
     edge_y = edge_step(current_vertex_y, edge_y, &current_vertex_y);
     current_vertex_x = current_vertex_y;
@@ -782,23 +799,48 @@ static void multires_unsubdivide_extract_single_grid_from_face_edge(
      * may be two edges connected to current_vertex_x that belong to two different grids. */
     BMIter iter;
     BMEdge *ed;
-    BMFace *f;
+    edge_x = nullptr;
     BM_ITER_ELEM (ed, &iter, current_vertex_x, BM_EDGES_OF_VERT) {
       if (ed != prev_edge_y && BM_edge_in_face(ed, current_face)) {
         edge_x = ed;
         break;
       }
     }
-    BM_ITER_ELEM (f, &iter, edge_x, BM_FACES_OF_EDGE) {
-      if (f != current_face) {
-        current_face = f;
-        break;
-      }
-    }
+    /* May be null, check on next access (if this isn't the end of iteration). */
+    current_face = edge_x ? face_step(edge_x, current_face) : nullptr;
 
     prev_edge_y = edge_y;
-    grid_y++;
   }
+
+  return ok;
+}
+
+/**
+ * Step over edges until a tagged vertex is found, which is part of the base mesh.
+ *
+ * `visit_id` must be unique per walk so the `vert_visit` values don't need clearing.
+ *
+ * \return the tagged vertex, null when the walk can't reach one.
+ */
+static BMVert *unsubdivide_walk_to_tagged_vert(BMVert *v,
+                                               BMEdge *edge,
+                                               int *vert_visit,
+                                               const int visit_id)
+{
+  edge = edge_step(v, edge, &v);
+  while (!BM_elem_flag_test(v, BM_ELEM_TAG)) {
+    /* Prevent an eternal loop - typically caused by degenerate geometry.
+     * Every lookup uses a new ID, so we can detect if we met the vertex before.
+     * See #162395. */
+    const int v_index = BM_elem_index_get(v);
+    if (vert_visit[v_index] == visit_id) [[unlikely]] {
+      return nullptr;
+    }
+    vert_visit[v_index] = visit_id;
+
+    edge = edge_step(v, edge, &v);
+  }
+  return v;
 }
 
 /**
@@ -806,9 +848,13 @@ static void multires_unsubdivide_extract_single_grid_from_face_edge(
  * e1 is going to be extracted.
  *
  * These vertices should always have an corresponding existing vertex on the base mesh.
+ *
+ * \return success, false when the topology can't be walked, the corners are left unset.
  */
-static void multires_unsubdivide_get_grid_corners_on_base_mesh(BMFace *f1,
+static bool multires_unsubdivide_get_grid_corners_on_base_mesh(BMFace *f1,
                                                                BMEdge *e1,
+                                                               int *vert_visit,
+                                                               int *visit_id,
                                                                BMVert **r_corner_x,
                                                                BMVert **r_corner_y)
 {
@@ -834,19 +880,23 @@ static void multires_unsubdivide_get_grid_corners_on_base_mesh(BMFace *f1,
   BMEdge *edge_y = initial_edge_y;
 
   /* Do an edge step until it finds a tagged vertex, which is part of the base mesh. */
-  /* x axis */
-  edge_x = edge_step(current_vertex_x, edge_x, &current_vertex_x);
-  while (!BM_elem_flag_test(current_vertex_x, BM_ELEM_TAG)) {
-    edge_x = edge_step(current_vertex_x, edge_x, &current_vertex_x);
-  }
-  *r_corner_x = current_vertex_x;
 
-  /* Same for y axis */
-  edge_y = edge_step(current_vertex_y, edge_y, &current_vertex_y);
-  while (!BM_elem_flag_test(current_vertex_y, BM_ELEM_TAG)) {
-    edge_y = edge_step(current_vertex_y, edge_y, &current_vertex_y);
+  /* X axis. */
+  BMVert *corner_x = unsubdivide_walk_to_tagged_vert(
+      current_vertex_x, edge_x, vert_visit, ++(*visit_id));
+  if (corner_x == nullptr) [[unlikely]] {
+    return false;
   }
-  *r_corner_y = current_vertex_y;
+  /* Y axis. */
+  BMVert *corner_y = unsubdivide_walk_to_tagged_vert(
+      current_vertex_y, edge_y, vert_visit, ++(*visit_id));
+  if (corner_y == nullptr) [[unlikely]] {
+    return false;
+  }
+
+  *r_corner_x = corner_x;
+  *r_corner_y = corner_y;
+  return true;
 }
 
 static BMesh *get_bmesh_from_mesh(Mesh *mesh)
@@ -956,7 +1006,8 @@ static bool multires_unsubdivide_flip_grid_x_axis(const OffsetIndices<int> faces
   return false;
 }
 
-static void multires_unsubdivide_extract_grids(MultiresUnsubdivideContext *context)
+static void multires_unsubdivide_extract_grids(MultiresUnsubdivideContext *context,
+                                               MultiresUnsubdivideInfo &info)
 {
   Mesh *original_mesh = context->original_mesh;
   Mesh *base_mesh = context->base_mesh;
@@ -971,6 +1022,11 @@ static void multires_unsubdivide_extract_grids(MultiresUnsubdivideContext *conte
   /* From vertex index in original to vertex index in base and from vertex index in base to vertex
    * index in original. */
   int *orig_to_base_vmap = MEM_new_array_zeroed<int>(bm_original_mesh->totvert, "orig vmap");
+  /* Per vertex ID's for detecting a walk which loops back on itself, ID's start at 1. */
+  int *vert_visit = MEM_new_array_zeroed<int>(bm_original_mesh->totvert, "vert visit");
+  int visit_id = 0;
+  /* The walk stamps `vert_visit` by vertex index. */
+  BLI_assert((bm_original_mesh->elem_index_dirty & BM_VERT) == 0);
   int *base_to_orig_vmap = MEM_new_array_zeroed<int>(base_mesh->verts_num, "base vmap");
 
   const bke::AttributeAccessor attributes = base_mesh->attributes();
@@ -980,7 +1036,7 @@ static void multires_unsubdivide_extract_grids(MultiresUnsubdivideContext *conte
   }
 
   /* If an index in original does not exist in base (it was dissolved when creating the new base
-   * mesh, return -1. */
+   * mesh), return -1. */
   for (int i = 0; i < original_mesh->verts_num; i++) {
     orig_to_base_vmap[i] = -1;
   }
@@ -1021,7 +1077,12 @@ static void multires_unsubdivide_extract_grids(MultiresUnsubdivideContext *conte
       /* For each loop, get the two vertices that should map to the l+1 and l-1 vertices in the
        * base mesh of the face of grid that is going to be extracted. */
       BMVert *corner_x, *corner_y;
-      multires_unsubdivide_get_grid_corners_on_base_mesh(l->f, l->e, &corner_x, &corner_y);
+      if (!multires_unsubdivide_get_grid_corners_on_base_mesh(
+              l->f, l->e, vert_visit, &visit_id, &corner_x, &corner_y))
+      {
+        info.unsupported_grid_count += 1;
+        continue;
+      }
 
       /* Map the two obtained vertices to the base mesh. */
       const int corner_x_index = orig_to_base_vmap[BM_elem_index_get(corner_x)];
@@ -1052,7 +1113,7 @@ static void multires_unsubdivide_extract_grids(MultiresUnsubdivideContext *conte
 
           /* Extract the grid for that loop. */
           MultiresUnsubdivideGrid *grid = &context->base_mesh_grids[base_mesh_loop_index];
-          if (UNLIKELY(grid->grid_co != nullptr)) {
+          if (grid->grid_co != nullptr) [[unlikely]] {
             /* It's possible this grid has already been initialized which occurs when quads
              * share two edge, while not so common it happens with "Suzanne's" nose,
              * see: #126633 & run un-subdivide.
@@ -1065,8 +1126,11 @@ static void multires_unsubdivide_extract_grids(MultiresUnsubdivideContext *conte
           }
 
           grid->grid_index = base_mesh_loop_index;
-          multires_unsubdivide_extract_single_grid_from_face_edge(
-              context, l->f, l->e, !flip_grid, grid);
+          if (!multires_unsubdivide_extract_single_grid_from_face_edge(
+                  context, l->f, l->e, !flip_grid, grid))
+          {
+            info.unsupported_grid_count += 1;
+          }
 
           break;
         }
@@ -1074,6 +1138,7 @@ static void multires_unsubdivide_extract_grids(MultiresUnsubdivideContext *conte
     }
   }
 
+  MEM_delete(vert_visit);
   MEM_delete(orig_to_base_vmap);
   MEM_delete(base_to_orig_vmap);
 
@@ -1098,7 +1163,8 @@ void multires_unsubdivide_context_init(MultiresUnsubdivideContext *context,
   context->num_original_levels = mmd->totlvl;
 }
 
-bool multires_unsubdivide_to_basemesh(MultiresUnsubdivideContext *context)
+bool multires_unsubdivide_to_basemesh(MultiresUnsubdivideContext *context,
+                                      MultiresUnsubdivideInfo &info)
 {
   Mesh *original_mesh = context->original_mesh;
 
@@ -1141,7 +1207,7 @@ bool multires_unsubdivide_to_basemesh(MultiresUnsubdivideContext *context)
   /* Initialize bmesh and maps for the original mesh and extract the grids. */
 
   multires_unsubdivide_prepare_original_bmesh_for_extract(context);
-  multires_unsubdivide_extract_grids(context);
+  multires_unsubdivide_extract_grids(context, info);
 
   return true;
 }
@@ -1192,7 +1258,6 @@ static void multires_create_grids_in_unsubdivided_base_mesh(MultiresUnsubdivideC
 
     mdisps[i].disps = disps;
     mdisps[i].totdisp = totdisp;
-    mdisps[i].level = context->num_total_levels;
   }
 }
 
@@ -1200,7 +1265,8 @@ int multiresModifier_rebuild_subdiv(Depsgraph *depsgraph,
                                     Object *object,
                                     MultiresModifierData *mmd,
                                     int rebuild_limit,
-                                    bool switch_view_to_lower_level)
+                                    bool switch_view_to_lower_level,
+                                    MultiresUnsubdivideInfo &info)
 {
   Mesh *mesh = id_cast<Mesh *>(object->data);
 
@@ -1226,7 +1292,7 @@ int multiresModifier_rebuild_subdiv(Depsgraph *depsgraph,
   unsubdiv_context.max_new_levels = rebuild_limit;
 
   /* Un-subdivide and create the data for the new grids. */
-  if (multires_unsubdivide_to_basemesh(&unsubdiv_context) == 0) {
+  if (multires_unsubdivide_to_basemesh(&unsubdiv_context, info) == 0) {
     /* If there was no possible to rebuild any level, free the data and return. */
     if (mmd->totlvl != 0) {
       multires_reshape_object_grids_to_tangent_displacement(&reshape_context);
@@ -1274,6 +1340,18 @@ int multiresModifier_rebuild_subdiv(Depsgraph *depsgraph,
   multires_unsubdivide_context_free(&unsubdiv_context);
 
   return rebuild_subdvis;
+}
+
+void multiresModifier_unsubdivide_report_if_needed(const MultiresUnsubdivideInfo &info,
+                                                   ReportList *reports)
+{
+  if (info.unsupported_grid_count != 0) {
+    BKE_reportf(reports,
+                RPT_WARNING,
+                "%d grid(s) with unexpected topology found, "
+                "multi-res data will be incomplete",
+                info.unsupported_grid_count);
+  }
 }
 
 }  // namespace blender

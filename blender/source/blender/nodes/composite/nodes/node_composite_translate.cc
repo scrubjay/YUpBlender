@@ -29,8 +29,16 @@ static void node_declare(NodeDeclarationBuilder &b)
       .structure_type(StructureType::Dynamic)
       .align_with_previous();
 
-  b.add_input<decl::Float>("X"_ustr).default_value(0.0f).min(-10000.0f).max(10000.0f);
-  b.add_input<decl::Float>("Y"_ustr).default_value(0.0f).min(-10000.0f).max(10000.0f);
+  b.add_input<decl::Float>("X"_ustr)
+      .default_value(0.0f)
+      .subtype(PROP_PIXEL)
+      .min(-10000.0f)
+      .max(10000.0f);
+  b.add_input<decl::Float>("Y"_ustr)
+      .default_value(0.0f)
+      .subtype(PROP_PIXEL)
+      .min(-10000.0f)
+      .max(10000.0f);
 
   PanelDeclarationBuilder &sampling_panel = b.add_panel("Sampling"_ustr).default_closed(true);
   sampling_panel.add_input<decl::Menu>("Interpolation"_ustr)
@@ -61,7 +69,11 @@ using namespace blender::compositor;
 
 class TranslateOperation : public NodeOperation {
  public:
-  using NodeOperation::NodeOperation;
+  TranslateOperation(Context &context, const bNode &node) : NodeOperation(context, node)
+  {
+    InputDescriptor &image_descriptor = this->get_input_descriptor("Image");
+    image_descriptor.skip_type_conversion = true;
+  }
 
   void execute() override
   {
@@ -72,6 +84,7 @@ class TranslateOperation : public NodeOperation {
     const float2 translation = float2(x, y);
 
     Result &output = this->get_result("Image");
+    output.set_type(input.type());
     output.share_data(input);
     output.transform(math::from_location<float3x3>(translation));
     output.get_realization_options().interpolation = this->get_interpolation();
@@ -88,9 +101,10 @@ class TranslateOperation : public NodeOperation {
         return Interpolation::Nearest;
       case CMP_NODE_INTERPOLATION_BILINEAR:
         return Interpolation::Bilinear;
-      case CMP_NODE_INTERPOLATION_ANISOTROPIC:
       case CMP_NODE_INTERPOLATION_BICUBIC:
         return Interpolation::Bicubic;
+      case CMP_NODE_INTERPOLATION_ANISOTROPIC:
+        return Interpolation::Anisotropic;
     }
 
     return Interpolation::Nearest;

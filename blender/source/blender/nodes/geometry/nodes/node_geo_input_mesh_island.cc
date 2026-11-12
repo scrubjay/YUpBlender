@@ -14,12 +14,12 @@ namespace blender::nodes::node_geo_input_mesh_island_cc {
 static void node_declare(NodeDeclarationBuilder &b)
 {
   b.add_output<decl::Int>("Island Index"_ustr)
-      .field_source()
+      .structure_type(StructureType::Field)
       .description(
           "The index of the each vertex's island. Indices are based on the "
           "lowest vertex index contained in each island");
   b.add_output<decl::Int>("Island Count"_ustr)
-      .field_source()
+      .structure_type(StructureType::Field)
       .description("The total number of mesh islands");
 }
 
@@ -57,6 +57,12 @@ class IslandFieldInput final : public bke::MeshFieldInput {
   {
     return AttrDomain::Point;
   }
+
+  bke::NativeFieldDomain native_domain_info(const Mesh & /*mesh*/) const override
+  {
+    /* Domain interpolation will not mix values for separate islands. */
+    return bke::NativeFieldDomain::Constant();
+  }
 };
 
 class IslandCountFieldInput final : public bke::MeshFieldInput {
@@ -89,6 +95,11 @@ class IslandCountFieldInput final : public bke::MeshFieldInput {
   std::optional<AttrDomain> preferred_domain(const Mesh & /*mesh*/) const override
   {
     return AttrDomain::Point;
+  }
+
+  bke::NativeFieldDomain native_domain_info(const Mesh & /*mesh*/) const override
+  {
+    return bke::NativeFieldDomain::Constant();
   }
 };
 

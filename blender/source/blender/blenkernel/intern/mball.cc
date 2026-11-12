@@ -29,12 +29,12 @@
 #include "DNA_object_types.h"
 #include "DNA_scene_types.h"
 
-#include "BLI_listbase.h"
-#include "BLI_math_matrix.h"
-#include "BLI_math_rotation.h"
-#include "BLI_math_vector.h"
+#include "BLI_listbase.hh"
+#include "BLI_math_matrix_c.hh"
+#include "BLI_math_rotation_c.hh"
+#include "BLI_math_vector_c.hh"
 #include "BLI_string_utils.hh"
-#include "BLI_utildefines.h"
+#include "BLI_utildefines.hh"
 
 #include "BLT_translation.hh"
 
@@ -88,7 +88,7 @@ static void metaball_free_data(ID *id)
 
   MEM_SAFE_DELETE(metaball->mat);
 
-  BLI_freelistN(&metaball->elems);
+  metaball->elems.free_no_destruct();
 }
 
 static void metaball_foreach_id(ID *id, LibraryForeachIDData *data)
@@ -125,7 +125,7 @@ static void metaball_blend_read_data(BlendDataReader *reader, ID *id)
 {
   MetaBall *mb = id_cast<MetaBall *>(id);
 
-  BLO_read_pointer_array(reader, mb->totcol, reinterpret_cast<void **>(&mb->mat));
+  BLO_read_pointer_array_and_validate_size(reader, &mb->mat, &mb->totcol);
 
   BLO_read_struct_list(reader, MetaElem, &(mb->elems));
 
@@ -156,6 +156,7 @@ IDTypeInfo IDType_ID_MB = {
     .foreach_cache = nullptr,
     .foreach_path = nullptr,
     .foreach_working_space_color = nullptr,
+    .foreach_asset_weak_reference = nullptr,
     .owner_pointer_get = nullptr,
 
     .blend_write = metaball_blend_write,
@@ -201,8 +202,8 @@ MetaElem *BKE_mball_element_add(MetaBall *mb, const int type)
       ml->expx = ml->expy = ml->expz = 1.0;
 
       break;
-    case MB_ELIPSOID:
-      ml->type = MB_ELIPSOID;
+    case MB_ELLIPSOID:
+      ml->type = MB_ELLIPSOID;
       ml->expx = 1.2f;
       ml->expy = 0.8f;
       ml->expz = 1.0;
@@ -235,7 +236,7 @@ float2 BKE_mball_element_display_radius_calc_with_stiffness(const MetaElem *ml)
     /* Without this additional size, the cube can't be selected in solid mode.
      * Use the minimum size so this doesn't become too large because of one large axis.
      * See: #136396. */
-    const float offset = min_fff(ml->expx, ml->expy, ml->expz) * M_SQRT2;
+    const float offset = std::min({ml->expx, ml->expy, ml->expz}) * M_SQRT2;
     radius_stiffness[0] += offset;
     radius_stiffness[1] += offset;
   }
@@ -245,7 +246,7 @@ float BKE_mball_element_display_radius_calc(const MetaElem *ml)
 {
   float radius = ml->rad;
   if (ml->type == MB_CUBE) {
-    const float offset = min_fff(ml->expx, ml->expy, ml->expz) * M_SQRT2;
+    const float offset = std::min({ml->expx, ml->expy, ml->expz}) * M_SQRT2;
     radius += offset;
   }
   return radius;
@@ -355,9 +356,7 @@ void BKE_mball_properties_copy(Main *bmain, MetaBall *metaball_src)
    * Solving this case would drastically increase the complexity of this code though, so don't
    * think it would be worth it.
    */
-  for (Object *ob_src = static_cast<Object *>(bmain->objects.first);
-       ob_src != nullptr && ID_IS_EDITABLE(ob_src);)
-  {
+  for (Object *ob_src = bmain->objects.first(); ob_src != nullptr && ID_IS_EDITABLE(ob_src);) {
     if (ob_src->data != id_cast<const ID *>(metaball_src)) {
       ob_src = static_cast<Object *>(ob_src->id.next);
       continue;
@@ -488,7 +487,7 @@ bool BKE_mball_minmax(const MetaBall *mb, float min[3], float max[3])
     minmax_v3v3_v3(min, max, &ml.x);
   }
 
-  return (BLI_listbase_is_empty(&mb->elems) == false);
+  return (mb->elems.is_empty() == false);
 }
 
 bool BKE_mball_center_median(const MetaBall *mb, float r_cent[3])
@@ -581,7 +580,7 @@ bool BKE_mball_select_all(MetaBall *mb)
   bool changed = false;
   for (MetaElem &ml : *mb->editelems) {
     if ((ml.flag & SELECT) == 0) {
-      ml.flag |= SELECT;
+      ml.flag |= MB_SELECT;
       changed = true;
     }
   }
@@ -604,7 +603,7 @@ bool BKE_mball_deselect_all(MetaBall *mb)
   bool changed = false;
   for (MetaElem &ml : *mb->editelems) {
     if ((ml.flag & SELECT) != 0) {
-      ml.flag &= ~SELECT;
+      ml.flag &= ~MB_SELECT;
       changed = true;
     }
   }
@@ -627,7 +626,7 @@ bool BKE_mball_select_swap(MetaBall *mb)
 {
   bool changed = false;
   for (MetaElem &ml : *mb->editelems) {
-    ml.flag ^= SELECT;
+    ml.flag ^= MB_SELECT;
     changed = true;
   }
   return changed;

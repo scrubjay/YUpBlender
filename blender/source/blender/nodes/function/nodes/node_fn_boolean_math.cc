@@ -2,8 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
-#include "BLI_listbase.h"
-#include "BLI_string_utf8.h"
+#include "BLI_listbase.hh"
+#include "BLI_string_utf8.hh"
 
 #include "FN_multi_function_registry.hh"
 
@@ -19,6 +19,7 @@
 #include "NOD_rna_define.hh"
 
 #include "node_function_util.hh"
+#include "node_shader_util.hh"
 
 namespace blender::nodes::node_fn_boolean_math_cc {
 
@@ -26,20 +27,20 @@ static void node_declare(NodeDeclarationBuilder &b)
 {
   b.is_function_node();
   b.add_input<decl::Bool>("Boolean"_ustr, "Boolean"_ustr);
-  b.add_input<decl::Bool>("Boolean"_ustr, "Boolean_001"_ustr);
+
+  const bNode *node = b.node_or_null();
+  if (node != nullptr) {
+    const auto type = NodeBooleanMathOperation(node->custom1);
+    if (type != NODE_BOOLEAN_MATH_NOT) {
+      b.add_input<decl::Bool>("Boolean"_ustr, "Boolean_001"_ustr);
+    }
+  }
   b.add_output<decl::Bool>("Boolean"_ustr);
 }
 
 static void node_layout(ui::Layout &layout, bContext * /*C*/, PointerRNA *ptr)
 {
   layout.prop(ptr, "operation", UI_ITEM_NONE, "", ICON_NONE);
-}
-
-static void node_update(bNodeTree *ntree, bNode *node)
-{
-  bNodeSocket *sockB = static_cast<bNodeSocket *>(BLI_findlink(&node->inputs, 1));
-
-  bke::node_set_socket_availability(*ntree, *sockB, !ELEM(node->custom1, NODE_BOOLEAN_MATH_NOT));
 }
 
 static void node_label(const bNodeTree * /*tree*/,
@@ -57,9 +58,7 @@ static void node_label(const bNodeTree * /*tree*/,
 
 static void node_gather_link_searches(GatherLinkSearchOpParams &params)
 {
-  if (!params.node_tree().typeinfo->validate_link(eNodeSocketDatatype(params.other_socket().type),
-                                                  SOCK_BOOLEAN))
-  {
+  if (!params.node_tree().typeinfo->validate_link(params.other_socket().type, SOCK_BOOLEAN)) {
     return;
   }
 
@@ -141,6 +140,48 @@ static void node_eval_inverse_elem(value_elem::InverseElemEvalParams &params)
   }
 }
 
+static const char *gpu_shader_get_name(const NodeBooleanMathOperation operation)
+{
+  switch (operation) {
+    case NODE_BOOLEAN_MATH_AND:
+      return "boolean_math_and";
+    case NODE_BOOLEAN_MATH_OR:
+      return "boolean_math_or";
+    case NODE_BOOLEAN_MATH_NOT:
+      return "boolean_math_not";
+    case NODE_BOOLEAN_MATH_NAND:
+      return "boolean_math_nand";
+    case NODE_BOOLEAN_MATH_NOR:
+      return "boolean_math_nor";
+    case NODE_BOOLEAN_MATH_XNOR:
+      return "boolean_math_xnor";
+    case NODE_BOOLEAN_MATH_XOR:
+      return "boolean_math_xor";
+    case NODE_BOOLEAN_MATH_IMPLY:
+      return "boolean_math_imply";
+    case NODE_BOOLEAN_MATH_NIMPLY:
+      return "boolean_math_nimply";
+  }
+
+  BLI_assert_unreachable();
+  return nullptr;
+}
+
+static int node_gpu_material(GPUMaterial *mat,
+                             bNode *node,
+                             bNodeExecData * /*execdata*/,
+                             GPUNodeStack *in,
+                             GPUNodeStack *out)
+{
+  const char *name = gpu_shader_get_name(NodeBooleanMathOperation(node->custom1));
+
+  if (name == nullptr) {
+    return 0;
+  }
+
+  return GPU_stack_link(mat, node, name, in, out);
+}
+
 static void node_eval_inverse(inverse_eval::InverseEvalParams &params)
 {
   const NodeBooleanMathOperation op = NodeBooleanMathOperation(params.node.custom1);
@@ -171,15 +212,15 @@ static void node_register()
 {
   static bke::bNodeType ntype;
 
-  fn_node_type_base(&ntype, "FunctionNodeBooleanMath"_ustr, FN_NODE_BOOLEAN_MATH);
+  common_node_type_base(&ntype, "FunctionNodeBooleanMath"_ustr, FN_NODE_BOOLEAN_MATH);
   ntype.ui_name = "Boolean Math";
   ntype.ui_description = "Perform a logical operation on the given boolean inputs";
   ntype.enum_name_legacy = "BOOLEAN_MATH";
   ntype.nclass = NODE_CLASS_CONVERTER;
   ntype.declare = node_declare;
   ntype.labelfunc = node_label;
-  ntype.updatefunc = node_update;
   ntype.build_multi_function = node_build_multi_function;
+  ntype.gpu_fn = node_gpu_material;
   ntype.draw_buttons = node_layout;
   ntype.gather_link_search_ops = node_gather_link_searches;
   ntype.eval_elem = node_eval_elem;

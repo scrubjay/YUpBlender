@@ -17,6 +17,7 @@
 #pragma once
 
 #include <map>
+#include <optional>
 
 #include "AS_asset_catalog.hh"
 
@@ -27,8 +28,10 @@ namespace blender::asset_system {
  */
 class AssetCatalogTreeItem {
  public:
-  /** Container for child items. Uses a #std::map to keep items ordered by their name (i.e. their
-   * last catalog component). */
+  /**
+   * Container for child items. Uses a #std::map to keep items ordered by their name (i.e. their
+   * last catalog component).
+   */
   using ChildMap = std::map<std::string, AssetCatalogTreeItem>;
   using ItemIterFn = FunctionRef<void(const AssetCatalogTreeItem &)>;
 
@@ -43,8 +46,10 @@ class AssetCatalogTreeItem {
   /** Copy of #AssetCatalog::flags.has_unsaved_changes. */
   bool has_unsaved_changes_ = false;
 
-  /** Pointer back to the parent item. Used to reconstruct the hierarchy from an item (e.g. to
-   * build a path). */
+  /**
+   * Pointer back to the parent item. Used to reconstruct the hierarchy from an item (e.g. to
+   * build a path).
+   */
   const AssetCatalogTreeItem *parent_ = nullptr;
 
   friend class AssetCatalogTree;
@@ -59,15 +64,20 @@ class AssetCatalogTreeItem {
   StringRefNull get_simple_name() const;
   StringRefNull get_name() const;
   bool has_unsaved_changes() const;
-  /** Return the full catalog path, defined as the name of this catalog prefixed by the full
-   * catalog path of its parent and a separator. */
+  /**
+   * Return the full catalog path, defined as the name of this catalog prefixed by the full
+   * catalog path of its parent and a separator.
+   */
   AssetCatalogPath catalog_path() const;
   int count_parents() const;
   bool has_children() const;
 
-  /** Iterate over children calling \a callback for each of them, but do not recurse into their
-   * children. */
+  /**
+   * Iterate over children calling \a callback for each of them, but do not recurse into their
+   * children.
+   */
   void foreach_child(ItemIterFn callback) const;
+  void foreach_item(ItemIterFn callback) const;
 
  private:
   static void foreach_item_recursive(const ChildMap &children_, ItemIterFn callback);
@@ -81,12 +91,23 @@ class AssetCatalogTree {
   ChildMap root_items_;
 
  public:
-  /** Ensure an item representing \a path is in the tree, adding it if necessary. */
-  void insert_item(const AssetCatalog &catalog);
+  /**
+   * Ensure an item representing \a catalog is in the tree, adding it if necessary.
+   *
+   * \param skip_prefix: If set and the catalog path starts with this prefix path, the prefix path
+   *    will be stripped, and the catalog will be inserted into the tree as if it started after
+   *    this prefix. For example if the path of \a catalog is "Lorem ipsum/dolor/sit", and \a
+   *    skip_prefix is set to "Lorem ipsum/dolor", then the catalog will be inserted as if the path
+   *    was "sit". Catalogs whose path do not start with the prefix will be unaffected.
+   */
+  void insert_item(const AssetCatalog &catalog,
+                   std::optional<StringRef> skip_prefix = std::nullopt);
 
   void foreach_item(ItemIterFn callback) const;
-  /** Iterate over root items calling \a callback for each of them, but do not recurse into their
-   * children. */
+  /**
+   * Iterate over root items calling \a callback for each of them, but do not recurse into their
+   * children.
+   */
   void foreach_root_item(ItemIterFn callback) const;
 
   bool is_empty() const;

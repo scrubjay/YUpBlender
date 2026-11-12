@@ -9,8 +9,8 @@
 #include "BKE_context.hh"
 #include "BKE_main.hh"
 
-#include "BLI_listbase.h"
-#include "BLI_string.h"
+#include "BLI_listbase.hh"
+#include "BLI_string.hh"
 
 #include "WM_api.hh"
 #include "WM_types.hh"
@@ -55,11 +55,11 @@ static void filelist_readjob_startjob(void *flrjv, wmJobWorkerStatus *worker_sta
 
     flrj->tmp_filelist = MEM_dupalloc(flrj->filelist);
 
-    BLI_listbase_clear(&flrj->tmp_filelist->filelist.entries);
+    flrj->tmp_filelist->filelist.entries.clear_no_delete();
     flrj->tmp_filelist->filelist.entries_num = FILEDIR_NBR_ENTRIES_UNSET;
 
     flrj->tmp_filelist->filelist_intern.filtered = nullptr;
-    BLI_listbase_clear(&flrj->tmp_filelist->filelist_intern.entries);
+    flrj->tmp_filelist->filelist_intern.entries.clear_no_delete();
     if (filelist_readjob_is_partial_read(flrj)) {
       /* Don't unset the current UID on partial read, would give duplicates otherwise. */
     }
@@ -117,6 +117,11 @@ static void filelist_readjob_update(void *flrjv)
     filelist_clear_ex(flrj->filelist, false, true, false);
 
     flrj->filelist->flags |= (FL_NEED_SORTING | FL_NEED_FILTERING);
+
+    /* The job tagged these entries with the glob it started with. */
+    if (!STREQ(flrj->tmp_filelist->filter_glob, flrj->filelist->filter_glob)) {
+      flrj->filelist->flags |= FL_NEED_RESET_GLOB;
+    }
   }
 
   /* if no new_entries_num, this is NOP */
@@ -156,7 +161,7 @@ static void filelist_readjob_free(void *flrjv)
   if (flrj->tmp_filelist) {
     /* tmp_filelist shall never ever be filtered! */
     BLI_assert(flrj->tmp_filelist->filelist.entries_num == 0);
-    BLI_assert(BLI_listbase_is_empty(&flrj->tmp_filelist->filelist.entries));
+    BLI_assert(flrj->tmp_filelist->filelist.entries.is_empty());
 
     filelist_freelib(flrj->tmp_filelist);
     filelist_free(flrj->tmp_filelist);
@@ -214,8 +219,8 @@ static void filelist_readjob_start_ex(FileList *filelist,
   BKE_reports_init(&flrj->reports, RPT_STORE | RPT_PRINT);
   BKE_report_print_level_set(&flrj->reports, RPT_WARNING);
 
-  filelist->flags &= ~(FL_FORCE_RESET | FL_FORCE_RESET_MAIN_FILES | FL_RELOAD_ASSET_LIBRARY |
-                       FL_IS_READY);
+  filelist->flags &= ~(FL_FORCE_RESET | FL_FORCE_RESET_MAIN_FILES | FL_NEED_RESET_GLOB |
+                       FL_RELOAD_ASSET_LIBRARY | FL_IS_READY);
   filelist->flags |= FL_IS_PENDING;
 
   /* The file list type may not support threading so execute immediately. Same when only rereading
@@ -269,12 +274,12 @@ void filelist_readjob_blocking_run(FileList *filelist, int space_notifier, const
 
 void filelist_readjob_stop(FileList *filelist, wmWindowManager *wm)
 {
-  WM_jobs_kill_type(wm, filelist, filelist_jobtype_get(filelist));
+  WM_jobs_kill_all_from_owner(wm, filelist);
 }
 
 int filelist_readjob_running(FileList *filelist, wmWindowManager *wm)
 {
-  return WM_jobs_test(wm, filelist, filelist_jobtype_get(filelist));
+  return WM_jobs_has_running(wm, filelist, filelist_jobtype_get(filelist));
 }
 
 }  // namespace blender

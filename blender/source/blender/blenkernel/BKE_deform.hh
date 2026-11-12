@@ -298,7 +298,7 @@ void BKE_defvert_normalize_lock_map(MDeformVert &dvert,
  * number of vertex groups in the source data (e.g. the mesh).
  */
 void BKE_defvert_normalize_ex(MDeformVert &dvert,
-                              Span<bool> vgroup_subset,
+                              Span<bool> subset_flags,
                               Span<bool> lock_flags,
                               Span<bool> soft_lock_flags);
 
@@ -347,6 +347,10 @@ VMutableArray<float> varray_for_mutable_deform_verts(MutableSpan<MDeformVert> dv
 void remove_defgroup_index(MutableSpan<MDeformVert> dverts, int defgroup_index);
 
 void gather_deform_verts(Span<MDeformVert> src, Span<int> indices, MutableSpan<MDeformVert> dst);
+void gather_deform_verts(Span<MDeformVert> src,
+                         Span<int> indices,
+                         const IndexMask &dst_mask,
+                         MutableSpan<MDeformVert> dst);
 void gather_deform_verts(Span<MDeformVert> src,
                          const IndexMask &indices,
                          MutableSpan<MDeformVert> dst);

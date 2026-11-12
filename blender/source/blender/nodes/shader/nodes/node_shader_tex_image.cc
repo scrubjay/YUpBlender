@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup shdnodes
+ */
+
 #include "node_shader_util.hh"
 #include "node_util.hh"
 
@@ -20,7 +24,7 @@ namespace nodes::node_shader_tex_image_cc {
 static void sh_node_tex_image_declare(NodeDeclarationBuilder &b)
 {
   b.is_function_node();
-  b.add_input<decl::Vector>("Vector"_ustr).implicit_field(NODE_DEFAULT_INPUT_POSITION_FIELD);
+  b.add_input<decl::Vector>("Vector"_ustr).default_input_type(NODE_DEFAULT_INPUT_POSITION_FIELD);
   b.add_output<decl::Color>("Color"_ustr).no_muted_links();
   b.add_output<decl::Float>("Alpha"_ustr).no_muted_links();
 }
@@ -111,7 +115,7 @@ static int node_shader_gpu_tex_image(GPUMaterial *mat,
     switch (tex->projection) {
       case SHD_PROJ_FLAT: {
         GPUNodeLink *gpu_image = GPU_image(mat, ima, iuser, sampler_state);
-        GPU_stack_link(mat, node, gpu_node_name, in, out, gpu_image);
+        GPU_stack_link(mat, node, gpu_node_name, in, out, gpu_image, GPU_kernel_globals());
         break;
       }
       case SHD_PROJ_BOX: {
@@ -119,9 +123,22 @@ static int node_shader_gpu_tex_image(GPUMaterial *mat,
         GPUNodeLink *vnor, *wnor, *col1, *col2, *col3;
         GPUNodeLink *blend = GPU_uniform(&tex->projection_blend);
         GPUNodeLink *gpu_image = GPU_image(mat, ima, iuser, sampler_state);
-        GPU_link(mat, "world_normals_get", &vnor);
-        GPU_link(mat, "normal_transform_world_to_object", vnor, &wnor);
-        GPU_link(mat, gpu_node_name, in[0].link, wnor, gpu_image, &col1, &col2, &col3);
+        GPU_link(mat, "world_normals_get", GPU_shading_data(), &vnor);
+        GPU_link(mat,
+                 "normal_transform_world_to_object",
+                 vnor,
+                 GPU_kernel_globals(),
+                 GPU_shading_data(),
+                 &wnor);
+        GPU_link(mat,
+                 gpu_node_name,
+                 in[0].link,
+                 wnor,
+                 gpu_image,
+                 GPU_kernel_globals(),
+                 &col1,
+                 &col2,
+                 &col3);
         GPU_link(mat, "tex_box_blend", wnor, col1, col2, col3, blend, &out[0].link, &out[1].link);
         break;
       }
@@ -132,7 +149,7 @@ static int node_shader_gpu_tex_image(GPUMaterial *mat,
         GPUNodeLink *gpu_image = GPU_image(mat, ima, iuser, sampler_state);
         GPU_link(mat, "point_texco_remap_square", *texco, texco);
         GPU_link(mat, "point_map_to_sphere", *texco, texco);
-        GPU_stack_link(mat, node, gpu_node_name, in, out, gpu_image);
+        GPU_stack_link(mat, node, gpu_node_name, in, out, gpu_image, GPU_kernel_globals());
         break;
       }
       case SHD_PROJ_TUBE: {
@@ -142,13 +159,13 @@ static int node_shader_gpu_tex_image(GPUMaterial *mat,
         GPUNodeLink *gpu_image = GPU_image(mat, ima, iuser, sampler_state);
         GPU_link(mat, "point_texco_remap_square", *texco, texco);
         GPU_link(mat, "point_map_to_tube", *texco, texco);
-        GPU_stack_link(mat, node, gpu_node_name, in, out, gpu_image);
+        GPU_stack_link(mat, node, gpu_node_name, in, out, gpu_image, GPU_kernel_globals());
         break;
       }
     }
   }
 
-  if (out[0].hasoutput) {
+  if (out[0].hasoutput && out[0].link) {
     if (ELEM(ima->alpha_mode, IMA_ALPHA_IGNORE, IMA_ALPHA_CHANNEL_PACKED) ||
         IMB_colormanagement_space_name_is_data(ima->colorspace_settings.name))
     {
@@ -297,7 +314,7 @@ void register_node_type_sh_tex_image()
       ntype, "NodeTexImage", node_free_standard_storage, node_copy_standard_storage);
   ntype.gpu_fn = file_ns::node_shader_gpu_tex_image;
   ntype.labelfunc = node_image_label;
-  bke::node_type_size_preset(ntype, bke::eNodeSizePreset::Large);
+  ntype.default_width = bke::NodeWidth::_240;
   ntype.materialx_fn = file_ns::node_shader_materialx;
 
   bke::node_register_type(ntype);

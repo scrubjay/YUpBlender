@@ -38,33 +38,36 @@ PyDoc_STRVAR(
     "predicate is kept as the next one. If none of the potential next\n"
     "ViewEdge respects these two predicates, None is returned.\n"
     "\n"
-    ".. method:: __init__(upred, bpred, restrict_to_selection=True, "
-    "                     restrict_to_unvisited=True, begin=None, "
-    "                     orientation=True)\n"
-    "            __init__(brother)\n"
+    ".. method:: __init__(*args)\n"
+    "\n"
+    "   Accepted call signatures:\n"
+    "\n"
+    "   - ``__init__(upred, bpred, restrict_to_selection=True, restrict_to_unvisited=True, "
+    "begin=None, orientation=True)``\n"
+    "   - ``__init__(brother)``\n"
     "\n"
     "   Builds a ChainPredicateIterator from a unary predicate, a binary\n"
     "   predicate, a starting ViewEdge and its orientation or using the copy constructor.\n"
     "\n"
-    "   :arg upred: The unary predicate that the next ViewEdge must satisfy.\n"
+    "   :param upred: The unary predicate that the next ViewEdge must satisfy.\n"
     "   :type upred: :class:`freestyle.types.UnaryPredicate1D`\n"
-    "   :arg bpred: The binary predicate that the next ViewEdge must\n"
+    "   :param bpred: The binary predicate that the next ViewEdge must\n"
     "      satisfy together with the actual pointed ViewEdge.\n"
     "   :type bpred: :class:`freestyle.types.BinaryPredicate1D`\n"
-    "   :arg restrict_to_selection: Indicates whether to force the chaining\n"
+    "   :param restrict_to_selection: Indicates whether to force the chaining\n"
     "      to stay within the set of selected ViewEdges or not.\n"
     "   :type restrict_to_selection: bool\n"
-    "   :arg restrict_to_unvisited: Indicates whether a ViewEdge that has\n"
+    "   :param restrict_to_unvisited: Indicates whether a ViewEdge that has\n"
     "      already been chained must be ignored ot not.\n"
     "   :type restrict_to_unvisited: bool\n"
-    "   :arg begin: The ViewEdge from where to start the iteration.\n"
+    "   :param begin: The ViewEdge from where to start the iteration.\n"
     "   :type begin: :class:`freestyle.types.ViewEdge` | None\n"
-    "   :arg orientation: If true, we'll look for the next ViewEdge among\n"
+    "   :param orientation: If true, we'll look for the next ViewEdge among\n"
     "      the ViewEdges that surround the ending ViewVertex of begin. If\n"
     "      false, we'll search over the ViewEdges surrounding the ending\n"
     "      ViewVertex of begin.\n"
     "   :type orientation: bool\n"
-    "   :arg brother: A ChainPredicateIterator object.\n"
+    "   :param brother: A ChainPredicateIterator object.\n"
     "   :type brother: :class:`ChainPredicateIterator`\n");
 static int check_begin(PyObject *obj, void *v)
 {
@@ -90,8 +93,13 @@ static int ChainPredicateIterator_init(BPy_ChainPredicateIterator *self,
   PyObject *obj1 = nullptr, *obj2 = nullptr, *obj3 = nullptr, *obj4 = nullptr, *obj5 = nullptr,
            *obj6 = nullptr;
 
-  if (PyArg_ParseTupleAndKeywords(
-          args, kwds, "O!", (char **)kwlist_1, &ChainPredicateIterator_Type, &obj1))
+  if (PyArg_ParseTupleAndKeywords(args,
+                                  kwds,
+                                  "O!" /* `brother` */
+                                  ":__init__",
+                                  (char **)kwlist_1,
+                                  &ChainPredicateIterator_Type,
+                                  &obj1))
   {
     self->cp_it = new ChainPredicateIterator(*(((BPy_ChainPredicateIterator *)obj1)->cp_it));
     self->upred = ((BPy_ChainPredicateIterator *)obj1)->upred;
@@ -103,7 +111,14 @@ static int ChainPredicateIterator_init(BPy_ChainPredicateIterator *self,
            (void)(obj3 = obj4 = obj5 = obj6 = nullptr),
            PyArg_ParseTupleAndKeywords(args,
                                        kwds,
-                                       "O!O!|O!O!O&O!",
+                                       "O!" /* `upred` */
+                                       "O!" /* `bpred` */
+                                       "|"  /* Optional arguments. */
+                                       "O!" /* `restrict_to_selection` */
+                                       "O!" /* `restrict_to_unvisited` */
+                                       "O&" /* `begin` */
+                                       "O!" /* `orientation` */
+                                       ":__init__",
                                        (char **)kwlist_2,
                                        &UnaryPredicate1D_Type,
                                        &obj1,

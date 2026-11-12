@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup shdnodes
+ */
+
 #include "node_shader_util.hh"
 
 #include "IMB_colormanagement.hh"
@@ -58,10 +62,11 @@ static void attribute_post_process(GPUMaterial *mat,
                                    GPUNodeLink **attribute_link)
 {
   if (STREQ(attribute_name, "color")) {
-    GPU_link(mat, "node_attribute_color", *attribute_link, attribute_link);
+    GPU_link(mat, "node_attribute_color", GPU_kernel_globals(), *attribute_link, attribute_link);
   }
   else if (STREQ(attribute_name, "temperature")) {
-    GPU_link(mat, "node_attribute_temperature", *attribute_link, attribute_link);
+    GPU_link(
+        mat, "node_attribute_temperature", GPU_kernel_globals(), *attribute_link, attribute_link);
   }
 }
 
@@ -144,7 +149,9 @@ static int node_shader_gpu_volume_principled(GPUMaterial *mat,
                         color,
                         temperature,
                         spectrummap,
-                        GPU_constant(&layer));
+                        GPU_constant(&layer),
+                        GPU_kernel_globals(),
+                        GPU_shading_data());
 }
 
 #undef SOCK_COLOR_ID
@@ -174,7 +181,7 @@ void register_node_type_sh_volume_principled()
   ntype.nclass = NODE_CLASS_SHADER;
   ntype.declare = file_ns::node_declare;
   ntype.gather_link_search_ops = search_link_ops_for_shader_bsdf_node;
-  bke::node_type_size_preset(ntype, bke::eNodeSizePreset::Large);
+  ntype.default_width = bke::NodeWidth::_240;
   ntype.gpu_fn = file_ns::node_shader_gpu_volume_principled;
 
   bke::node_register_type(ntype);

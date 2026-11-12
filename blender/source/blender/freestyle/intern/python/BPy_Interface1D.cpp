@@ -161,7 +161,7 @@ PyDoc_STRVAR(
     "   iterate over points of the 1D element at a any given sampling.\n"
     "   Indeed, for each iteration, a virtual point is created.\n"
     "\n"
-    "   :arg t: A sampling with which we want to iterate over points of\n"
+    "   :param t: A sampling with which we want to iterate over points of\n"
     "      this 1D element.\n"
     "   :type t: float\n"
     "   :return: An Interface0DIterator pointing to the first point.\n"
@@ -171,7 +171,14 @@ static PyObject *Interface1D_points_begin(BPy_Interface1D *self, PyObject *args,
   static const char *kwlist[] = {"t", nullptr};
   float f = 0.0f;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "|f", (char **)kwlist, &f)) {
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "|" /* Optional arguments. */
+                                   "f" /* `t` */
+                                   ":points_begin",
+                                   (char **)kwlist,
+                                   &f))
+  {
     return nullptr;
   }
   Interface0DIterator if0D_it(self->if1D->pointsBegin(f));
@@ -188,7 +195,7 @@ PyDoc_STRVAR(
     "   iterate over points of the 1D element at a given sampling. Indeed,\n"
     "   for each iteration, a virtual point is created.\n"
     "\n"
-    "   :arg t: A sampling with which we want to iterate over points of\n"
+    "   :param t: A sampling with which we want to iterate over points of\n"
     "      this 1D element.\n"
     "   :type t: float\n"
     "   :return: An Interface0DIterator pointing after the last point.\n"
@@ -198,7 +205,14 @@ static PyObject *Interface1D_points_end(BPy_Interface1D *self, PyObject *args, P
   static const char *kwlist[] = {"t", nullptr};
   float f = 0.0f;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "|f", (char **)kwlist, &f)) {
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "|" /* Optional arguments. */
+                                   "f" /* `t` */
+                                   ":points_end",
+                                   (char **)kwlist,
+                                   &f))
+  {
     return nullptr;
   }
   Interface0DIterator if0D_it(self->if1D->pointsEnd(f));

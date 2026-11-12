@@ -6,6 +6,7 @@
 add_subdirectory(curve_fit_nd)
 add_subdirectory(fast_float)
 add_subdirectory(json)
+add_subdirectory(toml11)
 if(WITH_IO_FBX)
   add_subdirectory(ufbx)
 endif()
@@ -16,6 +17,7 @@ remove_strict_flags()
 # Not a strict flag, but noisy for code we don't maintain
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
   remove_c_and_cxx_flag(
+    "-Wextra"
     "-Wmisleading-indentation"
   )
 elseif(CMAKE_C_COMPILER_ID MATCHES "Clang")
@@ -47,15 +49,12 @@ add_subdirectory(rangetree)
 add_subdirectory(nanosvg)
 add_subdirectory(wcwidth)
 add_subdirectory(xxhash)
+add_subdirectory(md4c)
 
 if(WITH_BULLET)
   if(NOT WITH_SYSTEM_BULLET)
     add_subdirectory(bullet2)
   endif()
-endif()
-
-if(WITH_DRACO)
-  add_subdirectory(draco)
 endif()
 
 if(WITH_BINRELOC)
@@ -105,4 +104,9 @@ endif()
 
 if(WITH_VULKAN_BACKEND)
   add_subdirectory(vulkan_memory_allocator)
+  add_subdirectory(volk)
+endif()
+
+if(WITH_TRACY)
+  add_subdirectory(tracy_profiler)
 endif()

@@ -8,7 +8,7 @@
 
 #include "BPy_EqualToTimeStampUP1D.h"
 
-#include "BLI_sys_types.h"
+#include "BLI_sys_types.hh"
 
 using namespace Freestyle;
 
@@ -25,7 +25,7 @@ PyDoc_STRVAR(
     "\n"
     "   Builds a EqualToTimeStampUP1D object.\n"
     "\n"
-    "   :arg ts: A time stamp value.\n"
+    "   :param ts: A time stamp value.\n"
     "   :type ts: int\n"
     "\n"
     ".. method:: __call__(inter)\n"
@@ -33,7 +33,7 @@ PyDoc_STRVAR(
     "   Returns true if the Interface1D's time stamp is equal to a certain\n"
     "   user-defined value.\n"
     "\n"
-    "   :arg inter: An Interface1D object.\n"
+    "   :param inter: An Interface1D object.\n"
     "   :type inter: :class:`freestyle.types.Interface1D`\n"
     "   :return: True if the time stamp is equal to a user-defined value.\n"
     "   :rtype: bool\n");
@@ -44,7 +44,13 @@ static int EqualToTimeStampUP1D___init__(BPy_EqualToTimeStampUP1D *self,
   static const char *kwlist[] = {"ts", nullptr};
   uint u;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "I", (char **)kwlist, &u)) {
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "I" /* `ts` */
+                                   ":__init__",
+                                   (char **)kwlist,
+                                   &u))
+  {
     return -1;
   }
   self->py_up1D.up1D = new Predicates1D::EqualToTimeStampUP1D(u);

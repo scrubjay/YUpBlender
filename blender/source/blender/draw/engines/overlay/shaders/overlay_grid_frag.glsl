@@ -7,33 +7,54 @@
 FRAGMENT_SHADER_CREATE_INFO(overlay_grid_next)
 
 #include "draw_view_lib.glsl"
-#include "gpu_shader_math_base_lib.glsl"
-#include "gpu_shader_utildefines_lib.glsl"
+#include "gpu_shader_math_base.bsl.hh"
+#include "gpu_shader_utildefines.bsl.hh"
 #include "overlay_common_lib.glsl"
 #include "overlay_grid_common_lib.glsl"
 
+/* TODO(not_mark): De-duplicate in BSL port, `gpu_shader_math_vector_compare_lib`. */
+bool is_equal(float2 a, float2 b, float epsilon)
+{
+  return all(lessThanEqual(abs(a - b), float2(epsilon)));
+}
+
 void main()
 {
-  /* Fragment color. */
-  if (flag_test(grid_flag, SHOW_GRID)) {
-    /* Color is a mix of [grid, grid_emphasis], dependent on the level. */
-    out_color = mix(theme.colors.grid, theme.colors.grid_emphasis, vertex_out_flat.emphasis);
+  /* Test if a vertex output position overlaps with an active axis line. */
+  constexpr float axis_epsilon = 1e-4f;
+  bool3 axis_mask = bool3(
+      flag_test(grid_flag, AXIS_X) && is_equal(vertex_out.pos.yz, float2(0.0), axis_epsilon),
+      flag_test(grid_flag, AXIS_Y) && is_equal(vertex_out.pos.xz, float2(0.0), axis_epsilon),
+      flag_test(grid_flag, AXIS_Z) && is_equal(vertex_out.pos.xy, float2(0.0), axis_epsilon));
+
+  /* If an axis line overlaps, discard grid fragments on standard grid pass so axis color shines through. */
+  if (flag_test(grid_flag, SHOW_GRID) && any(axis_mask)) {
+    gpu_discard_fragment();
   }
-  else if (flag_test(grid_flag, SHOW_AXES)) {
-    /* Color is fixed by theme. */
-    if (flag_test(grid_flag, AXIS_X) && grid::is_zero(vertex_out.pos.yz, 2e-6f)) {
+
+  if (flag_test(grid_flag, SHOW_AXES)) {
+    if (abs(vertex_out.pos.x) > 0.0f) {
       out_color = theme.colors.grid_axis_x;
     }
-    else if (flag_test(grid_flag, AXIS_Y) && grid::is_zero(vertex_out.pos.xz, 2e-6f)) {
-      /* Y-up: Y axis is Green (natural theme color). */
+    else if (abs(vertex_out.pos.y) > 0.0f) {
       out_color = theme.colors.grid_axis_y;
     }
-    else if (flag_test(grid_flag, AXIS_Z) && grid::is_zero(vertex_out.pos.xy, 2e-6f)) {
-      /* Y-up: Z axis is Blue (natural theme color). */
+    else {
       out_color = theme.colors.grid_axis_z;
     }
   }
-
+  else if (axis_mask.x) {
+    out_color = theme.colors.grid_axis_x;
+  }
+  else if (axis_mask.y) {
+    out_color = theme.colors.grid_axis_y;
+  }
+  else if (axis_mask.z) {
+    out_color = theme.colors.grid_axis_z;
+  }
+  else {
+    out_color = mix(theme.colors.grid, theme.colors.grid_emphasis, vertex_out_flat.emphasis);
+  }
   /* Fragment alpha. */
   out_color.a *= vertex_out_flat.alpha;
   if (drw_view_is_perspective()) {
@@ -57,33 +78,36 @@ void main()
   }
   else {
     /* Fade at edge of grid level in orthographic, in case of rather small units. */
-    if (!flag_test(grid_flag, GRID_SIMA)) {
+    if (!flag_test(grid_flag, GRID_SIMA | GRID_ALIGNED)) {
       float length_fade = 1.0f - min(1.0f, dot(vertex_out.coord, vertex_out.coord));
       out_color.a *= pow2f(length_fade);
     }
 
     /* Add fade at steep angles for contents of the floor plane (Y-up: XZ plane). */
-    if (flag_test(grid_flag, PLANE_XZ)) {
+    if (flag_test(grid_flag, PLANE_XZ) && !flag_test(grid_flag, GRID_ALIGNED)) {
       float3 V = -drw_view_forward();
       out_color.a *= 1.0f - pow3f(1.0f - abs(V.y));
     }
   }
 
-  /* Viewport anti-aliasing output. */
-  if (out_color.a != 0.0f) {
+  /* Viewport anti-aliasing output.
+   * #159243: do not output AA information on straight lines in e.g. orthographic views,
+   * as these will periodically lie above/below a pixel, causing shimmering in motion. */
+  if (out_color.a != 0.0 && !flag_test(grid_flag, GRID_SIMA | GRID_ALIGNED)) {
     line_output = pack_line_data(gl_FragCoord.xy, edge_start, edge_pos);
+  }
+  else {
+    line_output = float4(0.0);
   }
 
   /* Alpha discard; discard by stipple pattern for low alpha, to account for overlays
    * incompatible with depth+blend, e.g. MeshEdit. */
-  {
-    constexpr float dash_width = 4.0f; /* Width of dash pattern; increase to make lines longer. */
-    constexpr float fade_start = 0.1f; /* Cutoff for dash fade; alpha above is fully drawn. */
-    constexpr float fade_rcp = 1.0f / fade_start;
-    float dist = distance(edge_start, edge_pos);
-    if (out_color.a < fade_start && fade_rcp * out_color.a < fract(dist / dash_width)) {
-      gpu_discard_fragment();
-    }
+  constexpr float dash_width = 4.0f; /* Width of dash pattern; increase to make lines longer. */
+  constexpr float fade_start = 0.1f; /* Cutoff for dash fade; alpha above is fully drawn. */
+  constexpr float fade_rcp = 1.0f / fade_start;
+  float dist = distance(edge_start, edge_pos);
+  if (out_color.a < fade_start && fade_rcp * out_color.a < fract(dist / dash_width)) {
+    gpu_discard_fragment();
   }
 
   /* Grid iteration additive alpha in perspective view; lower iterations

@@ -20,11 +20,15 @@ struct BlendHandle;
 
 namespace blender {
 
+struct Collection;
 struct ID;
 struct Library;
 struct LibraryLink_Params;
+struct Main;
 struct MainLibraryWeakReferenceMap;
 struct ReportList;
+struct Scene;
+struct ViewLayer;
 
 /* TODO: Rename file to `BKE_blendfile_import.hh`. */
 /* TODO: Replace `BlendfileLinkAppend` prefix by `bke::blendfile::import` namespace. */
@@ -140,6 +144,12 @@ struct BlendfileLinkAppendContext {
   LibraryLink_Params *params = nullptr;
 
   /**
+   * Target collection to link/append into. This is only used for instantiating collections, and is
+   * not mandatory for linking/appending objects or other data-blocks.
+   */
+  Collection *target_collection = nullptr;
+
+  /**
    * What is the current stage of the link/append process. Used mainly by the RNA wrappers for the
    * pre/post handlers currently.
    */
@@ -249,7 +259,7 @@ BlendfileLinkAppendContextItem *BKE_blendfile_link_append_context_item_add(
  * the list of items to process.
  *
  * \note #BKE_blendfile_link_append_context_library_add should never be called on the same
- *`lapp_context` after this function.
+ * `lapp_context` after this function.
  *
  * \param id_types_filter: A set of `FILTER_ID` bit-flags, the types of IDs to add to the items
  *                         list.
@@ -312,7 +322,6 @@ enum eBlendfileLinkAppendForeachItemFlag {
  *
  * \param flag: Control which type of items to process (see
  * #eBlendfileLinkAppendForeachItemFlag enum flags).
- * \param userdata: An opaque void pointer passed to the `callback_function`.
  */
 void BKE_blendfile_link_append_context_item_foreach(
     BlendfileLinkAppendContext *lapp_context,
@@ -359,6 +368,24 @@ void BKE_blendfile_append(BlendfileLinkAppendContext *lapp_context, ReportList *
  */
 void BKE_blendfile_link_append_instantiate_loose(BlendfileLinkAppendContext *lapp_context,
                                                  ReportList *reports);
+
+/**
+ * Instantiate loose data from IDs already present in \a bmain into \a target_collection.
+ *
+ * This is the bmain-based counterpart of #BKE_blendfile_link_append_instantiate_loose.
+ * It operates on IDs that have already been merged into \a bmain, and only processes
+ * IDs that do **not** have the #ID_TAG_PRE_EXISTING flag set (i.e. newly added data).
+ *
+ * The function handles collections, objects, object-data, and rigid body post-processing
+ * in the same order and with the same logic as the lapp_context-based version.
+ *
+ * \note Uses #ID_TAG_DOIT as a scratch tag internally; it is cleared before returning.
+ */
+void BKE_blendfile_link_append_instantiate_loose_from_bmain(Main *bmain,
+                                                            Scene *scene,
+                                                            ViewLayer *view_layer,
+                                                            Collection *target_collection,
+                                                            ReportList *reports);
 
 /**
  * Finalize the link/append process.

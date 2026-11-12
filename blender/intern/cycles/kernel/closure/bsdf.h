@@ -42,7 +42,7 @@ ccl_device_inline float bsdf_get_specular_roughness_squared(const ccl_private Sh
 
 ccl_device_inline float bsdf_get_roughness_pass_squared(const ccl_private ShaderClosure *sc)
 {
-  if (sc->type == CLOSURE_BSDF_OREN_NAYAR_ID) {
+  if (sc->type == CLOSURE_BSDF_OREN_NAYAR_ID || sc->type == CLOSURE_BSDF_ROUGH_TRANSLUCENT_ID) {
     ccl_private OrenNayarBsdf *bsdf = (ccl_private OrenNayarBsdf *)sc;
     return sqr(sqr(bsdf->param.roughness));
   }
@@ -60,10 +60,30 @@ ccl_device_inline float bsdf_get_roughness_pass_squared(const ccl_private Shader
 /* Widen the compact ray differential dD after a non-specular bounce so that
  * texture mip selection on subsequent hits reflects the BSDF lobe's angular
  * spread. This significantly save memory, and is needed to make image cache
- * memory usage scale with render tile size rather than overall resolution. */
-ccl_device_forceinline float bsdf_widen_dD(const float prev_dD, const float2 sampled_roughness)
+ * memory usage scale with render tile size rather than overall resolution.
+ *
+ * This must be done consistently between next event estimation and forward
+ * sampling for both to converge to the same result for MIS. This is not just
+ * a theoretical concern, but can otherwise lead to seams.
+ *
+ * To achieve that, the sampled roughness is computed as a MIS weighted
+ * average. This makes it so directions with high contribution from sharp
+ * BSDFs have a lower roughness, as they will have a high MIS weight.
+ *
+ * The amount of widening is scaled by Filter Glossy, which is the setting
+ * to control how much caustics are blurred out. For accurate caustics
+ * image texture lookups and bump ray differentials must be small enough
+ * to capture detail at secondary bounces. */
+ccl_device_forceinline float bsdf_widen_dD(const KernelGlobals kg,
+                                           const float prev_dD,
+                                           const float avg_roughness_squared)
 {
-  return max(prev_dD, min(sampled_roughness.x, sampled_roughness.y));
+  if (!(avg_roughness_squared > 0.0f)) {
+    return prev_dD;
+  }
+
+  const float scale = kernel_data.integrator.differential_widen_scale;
+  return max(prev_dD, scale * sqrtf(avg_roughness_squared));
 }
 
 /* An additional term to smooth illumination on grazing angles when using bump mapping
@@ -111,7 +131,7 @@ ccl_device_inline float bump_shadowing_term(const ccl_private ShaderData *sd,
   }
 
   /* When bump map correction is not used do skip the smoothing. */
-  if ((sd->flag & SD_USE_BUMP_MAP_CORRECTION) == 0) {
+  if ((sd->shader_flag & SD_USE_BUMP_MAP_CORRECTION) == 0) {
     return 1.0f;
   }
 
@@ -176,9 +196,12 @@ ccl_device_inline int bsdf_sample(KernelGlobals kg,
       break;
 #if defined(__SVM__) || defined(__OSL__)
     case CLOSURE_BSDF_OREN_NAYAR_ID:
-      label = bsdf_oren_nayar_sample(sc, Ng, sd->wi, rand_xy, eval, wo, pdf);
-      *sampled_roughness = one_float2();
-      *eta = 1.0f;
+      label = bsdf_oren_nayar_sample(
+          sc, Ng, sd->wi, rand_xy, eval, wo, pdf, sampled_roughness, eta);
+      break;
+    case CLOSURE_BSDF_ROUGH_TRANSLUCENT_ID:
+      label = bsdf_rough_translucent_sample(
+          sc, Ng, sd->wi, rand_xy, eval, wo, pdf, sampled_roughness, eta);
       break;
 #  ifdef __OSL__
     case CLOSURE_BSDF_BURLEY_ID:
@@ -214,6 +237,10 @@ ccl_device_inline int bsdf_sample(KernelGlobals kg,
     case CLOSURE_BSDF_MICROFACET_GGX_REFRACTION_ID:
     case CLOSURE_BSDF_MICROFACET_GGX_GLASS_ID:
       label = bsdf_microfacet_ggx_sample(
+          kg, sc, Ng, sd->wi, rand, eval, wo, pdf, sampled_roughness, eta);
+      break;
+    case CLOSURE_BSDF_THIN_GLASS_TRANSMISSION_ID:
+      label = bsdf_thin_glass_transmission_sample(
           kg, sc, Ng, sd->wi, rand, eval, wo, pdf, sampled_roughness, eta);
       break;
     case CLOSURE_BSDF_MICROFACET_BECKMANN_ID:
@@ -318,6 +345,7 @@ ccl_device_inline void bsdf_roughness_eta(const ccl_private ShaderClosure *sc,
       break;
 #ifdef __SVM__
     case CLOSURE_BSDF_OREN_NAYAR_ID:
+    case CLOSURE_BSDF_ROUGH_TRANSLUCENT_ID:
       *roughness = one_float2();
       *eta = 1.0f;
       break;
@@ -348,6 +376,7 @@ ccl_device_inline void bsdf_roughness_eta(const ccl_private ShaderClosure *sc,
     case CLOSURE_BSDF_MICROFACET_GGX_ID:
     case CLOSURE_BSDF_MICROFACET_GGX_REFRACTION_ID:
     case CLOSURE_BSDF_MICROFACET_GGX_GLASS_ID:
+    case CLOSURE_BSDF_THIN_GLASS_TRANSMISSION_ID:
     case CLOSURE_BSDF_MICROFACET_BECKMANN_ID:
     case CLOSURE_BSDF_MICROFACET_BECKMANN_REFRACTION_ID:
     case CLOSURE_BSDF_MICROFACET_BECKMANN_GLASS_ID: {
@@ -441,6 +470,7 @@ ccl_device_inline int bsdf_label(const KernelGlobals kg,
       break;
 #  endif
     case CLOSURE_BSDF_TRANSLUCENT_ID:
+    case CLOSURE_BSDF_ROUGH_TRANSLUCENT_ID:
       label = LABEL_TRANSMIT | LABEL_DIFFUSE;
       break;
     case CLOSURE_BSDF_TRANSPARENT_ID:
@@ -460,6 +490,9 @@ ccl_device_inline int bsdf_label(const KernelGlobals kg,
               ((bsdf_microfacet_eval_flag(bsdf)) ? LABEL_GLOSSY : LABEL_SINGULAR);
       break;
     }
+    case CLOSURE_BSDF_THIN_GLASS_TRANSMISSION_ID:
+      label = LABEL_TRANSMIT | LABEL_GLOSSY;
+      break;
     case CLOSURE_BSDF_ASHIKHMIN_SHIRLEY_ID:
       label = LABEL_REFLECT | LABEL_GLOSSY;
       break;
@@ -518,12 +551,11 @@ ccl_device
 #else
 ccl_device_inline
 #endif
-    Spectrum
-    bsdf_eval(KernelGlobals kg,
-              ccl_private ShaderData *sd,
-              const ccl_private ShaderClosure *sc,
-              const float3 wo,
-              ccl_private float *pdf)
+    Spectrum bsdf_eval(KernelGlobals kg,
+                       ccl_private ShaderData *sd,
+                       const ccl_private ShaderClosure *sc,
+                       const float3 wo,
+                       ccl_private float *pdf)
 {
   Spectrum eval = zero_spectrum();
   *pdf = 0.f;
@@ -540,6 +572,9 @@ ccl_device_inline
 #if defined(__SVM__) || defined(__OSL__)
     case CLOSURE_BSDF_OREN_NAYAR_ID:
       eval = bsdf_oren_nayar_eval(sc, sd->wi, wo, pdf);
+      break;
+    case CLOSURE_BSDF_ROUGH_TRANSLUCENT_ID:
+      eval = bsdf_rough_translucent_eval(sc, sd->wi, wo, pdf);
       break;
 #  ifdef __OSL__
     case CLOSURE_BSDF_BURLEY_ID:
@@ -565,6 +600,9 @@ ccl_device_inline
     case CLOSURE_BSDF_MICROFACET_GGX_REFRACTION_ID:
     case CLOSURE_BSDF_MICROFACET_GGX_GLASS_ID:
       eval = bsdf_microfacet_ggx_eval(kg, sc, sd->wi, wo, pdf);
+      break;
+    case CLOSURE_BSDF_THIN_GLASS_TRANSMISSION_ID:
+      eval = bsdf_thin_glass_transmission_eval(kg, sc, sd->wi, wo, pdf);
       break;
     case CLOSURE_BSDF_MICROFACET_BECKMANN_ID:
     case CLOSURE_BSDF_MICROFACET_BECKMANN_REFRACTION_ID:
@@ -632,6 +670,7 @@ ccl_device void bsdf_blur(ccl_private ShaderClosure *sc, const float roughness)
     case CLOSURE_BSDF_MICROFACET_GGX_ID:
     case CLOSURE_BSDF_MICROFACET_GGX_REFRACTION_ID:
     case CLOSURE_BSDF_MICROFACET_GGX_GLASS_ID:
+    case CLOSURE_BSDF_THIN_GLASS_TRANSMISSION_ID:
     case CLOSURE_BSDF_MICROFACET_BECKMANN_ID:
     case CLOSURE_BSDF_MICROFACET_BECKMANN_REFRACTION_ID:
     case CLOSURE_BSDF_MICROFACET_BECKMANN_GLASS_ID:
@@ -661,7 +700,7 @@ ccl_device_inline Spectrum bsdf_albedo(KernelGlobals kg,
                                        const bool reflection,
                                        const bool transmission)
 {
-  Spectrum albedo = sc->weight;
+  Spectrum albedo = one_spectrum();
   /* Some closures include additional components such as Fresnel terms that cause their albedo to
    * be below 1. The point of this function is to return a best-effort estimation of their albedo,
    * meaning the amount of reflected/refracted light that would be expected when illuminated by a
@@ -673,21 +712,41 @@ ccl_device_inline Spectrum bsdf_albedo(KernelGlobals kg,
    * extra overhead though. */
 #if defined(__SVM__) || defined(__OSL__)
   if (CLOSURE_IS_BSDF_MICROFACET(sc->type)) {
-    albedo *= bsdf_microfacet_estimate_albedo(
-        kg, sd, (const ccl_private MicrofacetBsdf *)sc, reflection, transmission);
+    albedo = bsdf_microfacet_estimate_albedo(
+        kg, sd->wi, (const ccl_private MicrofacetBsdf *)sc, reflection, transmission);
   }
 #  ifdef __PRINCIPLED_HAIR__
   else if (sc->type == CLOSURE_BSDF_HAIR_CHIANG_ID) {
     /* TODO(lukas): Principled Hair could also be split into a glossy and a transmission component,
      * similar to Glass BSDFs. */
-    albedo *= bsdf_hair_chiang_albedo(sd, sc);
+    albedo = bsdf_hair_chiang_albedo(sd, sc);
   }
   else if (sc->type == CLOSURE_BSDF_HAIR_HUANG_ID) {
-    albedo *= bsdf_hair_huang_albedo(sd, sc);
+    albedo = bsdf_hair_huang_albedo(sd, sc);
   }
 #  endif
 #endif
   return albedo;
+}
+
+ccl_device_inline Spectrum closure_albedo(KernelGlobals kg,
+                                          const ccl_private ShaderData *sd,
+                                          const ccl_private ShaderClosure *sc,
+                                          const bool reflection,
+                                          const bool transmission)
+{
+  return sc->weight * bsdf_albedo(kg, sd, sc, reflection, transmission);
+}
+
+/* Compute albedo used for layering this BSDF on top of another. The albedo is usually the
+ * reflection albedo. */
+ccl_device_inline Spectrum closure_layer_albedo(KernelGlobals kg,
+                                                const ccl_private ShaderData *sd,
+                                                const ccl_private ShaderClosure *sc)
+{
+  /* Use `reduce_max()` to keep compatibility, need to check OSL and OpenPBR spec if we should
+   * remove tint for some closures. */
+  return sc->weight * reduce_max(bsdf_albedo(kg, sd, sc, true, false));
 }
 
 CCL_NAMESPACE_END

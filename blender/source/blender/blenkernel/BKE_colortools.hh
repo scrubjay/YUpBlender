@@ -24,13 +24,15 @@ struct ImBuf;
 struct Scopes;
 struct rctf;
 
+enum eBezTriple_Handle : uint8_t;
+
 void BKE_curvemapping_set_defaults(CurveMapping *cumap,
                                    int tot,
                                    float minx,
                                    float miny,
                                    float maxx,
                                    float maxy,
-                                   short default_handle_type);
+                                   eBezTriple_Handle default_handle_type);
 CurveMapping *BKE_curvemapping_add(int tot, float minx, float miny, float maxx, float maxy);
 void BKE_curvemapping_free_data_single(CurveMapping *cumap, int index);
 void BKE_curvemapping_free_data(CurveMapping *cumap);
@@ -177,7 +179,8 @@ void BKE_curvemapping_compute_slopes(const CurveMapping *curve_mapping,
  * - The start point is at (0, 0).
  * - The end point is at (1, 1).
  * Note that this could return false even if the curve map is identity, this happens in the case
- * when more than 2 points exist in the curve map but all points are collinear. */
+ * when more than 2 points exist in the curve map but all points are collinear.
+ */
 bool BKE_curvemapping_is_map_identity(const CurveMapping *curve_mapping, int index);
 
 /**

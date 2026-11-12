@@ -2,12 +2,16 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup edobj
+ */
+
 #include <sstream>
 
 #include "BLI_fileops.hh"
-#include "BLI_listbase.h"
+#include "BLI_listbase.hh"
 #include "BLI_path_utils.hh"
-#include "BLI_string.h"
+#include "BLI_string.hh"
 #include "BLI_vector.hh"
 
 #include "BLT_translation.hh"
@@ -33,6 +37,7 @@
 #include "BKE_node_legacy_types.hh"
 #include "BKE_node_runtime.hh"
 #include "BKE_packedFile.hh"
+#include "BKE_path_templates.hh"
 #include "BKE_report.hh"
 #include "BKE_scene.hh"
 
@@ -56,7 +61,7 @@ namespace ed::object::bake_simulation {
 
 static bool simulate_to_frame_poll(bContext *C)
 {
-  if (!ED_operator_object_active(C)) {
+  if (!ED_operator_object_active_editable(C)) {
     return false;
   }
   return true;
@@ -191,7 +196,8 @@ static wmOperatorStatus simulate_to_frame_modal(bContext *C,
                                                 wmOperator * /*op*/,
                                                 const wmEvent * /*event*/)
 {
-  if (!WM_jobs_test(CTX_wm_manager(C), CTX_data_scene(C), WM_JOB_TYPE_CALCULATE_SIMULATION_NODES))
+  if (!WM_jobs_has_running(
+          CTX_wm_manager(C), CTX_data_scene(C), WM_JOB_TYPE_CALCULATE_SIMULATION_NODES))
   {
     return OPERATOR_FINISHED | OPERATOR_PASS_THROUGH;
   }
@@ -200,7 +206,7 @@ static wmOperatorStatus simulate_to_frame_modal(bContext *C,
 
 static bool bake_simulation_poll(bContext *C)
 {
-  if (!ED_operator_object_active(C)) {
+  if (!ED_operator_object_active_editable(C)) {
     return false;
   }
   Object *ob = context_active_object(C);
@@ -339,7 +345,7 @@ static void bake_geometry_nodes_startjob(void *customdata, wmJobWorkerStatus *wo
         BLI_file_ensure_parent_dir_exists(meta_path);
         bake::DiskBlobWriter blob_writer{request.path->blobs_dir, frame_file_name};
         fstream meta_file{meta_path, std::ios::out};
-        bake::serialize_bake(frame_cache.state, blob_writer, *request.blob_sharing, meta_file);
+        bake::serialize_bake(frame_cache.values, blob_writer, *request.blob_sharing, meta_file);
         written_size += blob_writer.written_size();
         written_size += meta_file.tellp();
       }
@@ -348,7 +354,7 @@ static void bake_geometry_nodes_startjob(void *customdata, wmJobWorkerStatus *wo
 
         bake::MemoryBlobWriter blob_writer{frame_file_name};
         std::ostringstream meta_file{std::ios::binary};
-        bake::serialize_bake(frame_cache.state, blob_writer, *request.blob_sharing, meta_file);
+        bake::serialize_bake(frame_cache.values, blob_writer, *request.blob_sharing, meta_file);
 
         packed_data.meta_files.append({frame_file_name + ".json", meta_file.str()});
         const Map<std::string, bake::MemoryBlobWriter::OutputStream> &blob_stream_by_name =
@@ -768,7 +774,8 @@ static void initialize_modifier_bake_directory_if_necessary(bContext *C,
               nmd.modifier.name);
 
   nmd.bake_directory = BLI_strdup(
-      bake::get_default_modifier_bake_directory(*bmain, object, nmd).c_str());
+      BKE_path_template_escape(bake::get_default_modifier_bake_directory(*bmain, object, nmd))
+          .c_str());
 }
 
 static void bake_simulation_validate_paths(bContext *C,
@@ -806,8 +813,6 @@ static PathUsersMap bake_simulation_get_path_users(bContext *C, const Span<Objec
 
   PathUsersMap path_users;
   for (const Object *object : objects) {
-    const char *base_path = ID_BLEND_PATH(bmain, &object->id);
-
     for (const ModifierData &md : object->modifiers) {
       if (md.type != eModifierType_Nodes) {
         continue;
@@ -831,18 +836,18 @@ static PathUsersMap bake_simulation_get_path_users(bContext *C, const Span<Objec
       }
 
       /* If all bakes have a custom directory, we're done. */
-      if (all_bakes_have_custom_dir)
-        continue;
-
-      if (StringRef(nmd->bake_directory).is_empty()) {
+      if (all_bakes_have_custom_dir) {
         continue;
       }
 
-      char absolute_bake_dir[FILE_MAX];
-      STRNCPY(absolute_bake_dir, nmd->bake_directory);
-      BLI_path_abs(absolute_bake_dir, base_path);
+      const std::optional<std::string> modifier_bake_dir = bake::get_modifier_bake_path(
+          *bmain, *object, *nmd);
+      if (!modifier_bake_dir) {
+        continue;
+      }
+
       path_users.add_or_modify(
-          absolute_bake_dir, [](int *value) { *value = 1; }, [](int *value) { ++(*value); });
+          *modifier_bake_dir, [](int *value) { *value = 1; }, [](int *value) { ++(*value); });
     }
   }
 
@@ -910,7 +915,8 @@ static wmOperatorStatus bake_simulation_modal(bContext *C,
                                               wmOperator * /*op*/,
                                               const wmEvent * /*event*/)
 {
-  if (!WM_jobs_test(CTX_wm_manager(C), CTX_data_scene(C), WM_JOB_TYPE_BAKE_GEOMETRY_NODES)) {
+  if (!WM_jobs_has_running(CTX_wm_manager(C), CTX_data_scene(C), WM_JOB_TYPE_BAKE_GEOMETRY_NODES))
+  {
     return OPERATOR_FINISHED | OPERATOR_PASS_THROUGH;
   }
   return OPERATOR_PASS_THROUGH;
@@ -1059,7 +1065,8 @@ static wmOperatorStatus bake_single_node_modal(bContext *C,
                                                wmOperator * /*op*/,
                                                const wmEvent * /*event*/)
 {
-  if (!WM_jobs_test(CTX_wm_manager(C), CTX_data_scene(C), WM_JOB_TYPE_BAKE_GEOMETRY_NODES)) {
+  if (!WM_jobs_has_running(CTX_wm_manager(C), CTX_data_scene(C), WM_JOB_TYPE_BAKE_GEOMETRY_NODES))
+  {
     return OPERATOR_FINISHED | OPERATOR_PASS_THROUGH;
   }
   return OPERATOR_PASS_THROUGH;
@@ -1213,7 +1220,7 @@ void OBJECT_OT_simulation_nodes_cache_delete(wmOperatorType *ot)
   ot->idname = __func__;
 
   ot->exec = delete_baked_simulation_exec;
-  ot->poll = ED_operator_object_active;
+  ot->poll = ED_operator_object_active_editable;
 
   RNA_def_boolean(ot->srna, "selected", false, "Selected", "Delete cache on all selected objects");
 }
@@ -1241,6 +1248,7 @@ void OBJECT_OT_geometry_node_bake_single(wmOperatorType *ot)
   ot->invoke = bake_single_node_invoke;
   ot->exec = bake_single_node_exec;
   ot->modal = bake_single_node_modal;
+  ot->poll = ED_operator_object_active_editable;
 
   single_bake_operator_props(ot);
 }
@@ -1252,6 +1260,7 @@ void OBJECT_OT_geometry_node_bake_delete_single(wmOperatorType *ot)
   ot->idname = "OBJECT_OT_geometry_node_bake_delete_single";
 
   ot->exec = delete_single_bake_exec;
+  ot->poll = ED_operator_object_active_editable;
 
   single_bake_operator_props(ot);
 }
@@ -1263,6 +1272,7 @@ void OBJECT_OT_geometry_node_bake_pack_single(wmOperatorType *ot)
   ot->idname = "OBJECT_OT_geometry_node_bake_pack_single";
 
   ot->exec = pack_single_bake_exec;
+  ot->poll = ED_operator_object_active_editable;
 
   single_bake_operator_props(ot);
 }
@@ -1275,6 +1285,7 @@ void OBJECT_OT_geometry_node_bake_unpack_single(wmOperatorType *ot)
 
   ot->exec = unpack_single_bake_exec;
   ot->invoke = unpack_single_bake_invoke;
+  ot->poll = ED_operator_object_active_editable;
 
   single_bake_operator_props(ot);
 

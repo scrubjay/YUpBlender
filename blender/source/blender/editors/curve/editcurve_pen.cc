@@ -11,10 +11,10 @@
 
 #include "MEM_guardedalloc.h"
 
-#include "BLI_listbase.h"
-#include "BLI_math_geom.h"
-#include "BLI_math_matrix.h"
-#include "BLI_math_vector.h"
+#include "BLI_listbase.hh"
+#include "BLI_math_geom_c.hh"
+#include "BLI_math_matrix_c.hh"
+#include "BLI_math_vector_c.hh"
 
 #include "BKE_context.hh"
 #include "BKE_curve.hh"
@@ -1090,7 +1090,7 @@ static bool is_last_bezt(const Nurb *nu, const BezTriple *bezt)
  */
 static void extrude_points_from_selected_vertices(const ViewContext *vc,
                                                   const wmEvent *event,
-                                                  const int extrude_handle)
+                                                  const eBezTriple_Handle extrude_handle)
 {
   Curve *cu = id_cast<Curve *>(vc->obedit->data);
   ListBaseT<Nurb> *nurbs = BKE_curve_editNurbs_get(cu);
@@ -1118,9 +1118,9 @@ static void extrude_points_from_selected_vertices(const ViewContext *vc,
     extrude_vertices_from_selected_endpoints(editnurb, nurbs, cu, disp_3d);
   }
   else {
-    Nurb *old_last_nu = static_cast<Nurb *>(editnurb->nurbs.last);
+    Nurb *old_last_nu = editnurb->nurbs.last();
     ed_editcurve_addvert(cu, editnurb, vc->v3d, location);
-    Nurb *new_last_nu = static_cast<Nurb *>(editnurb->nurbs.last);
+    Nurb *new_last_nu = editnurb->nurbs.last();
 
     if (old_last_nu != new_last_nu) {
       BKE_curve_nurb_vert_active_set(cu,
@@ -1587,7 +1587,8 @@ static wmOperatorStatus curve_pen_modal(bContext *C, wmOperator *op, const wmEve
   const bool toggle_vector = RNA_boolean_get(op->ptr, "toggle_vector");
   const bool cycle_handle_type = RNA_boolean_get(op->ptr, "cycle_handle_type");
   const int close_spline_method = RNA_enum_get(op->ptr, "close_spline_method");
-  const int extrude_handle = RNA_enum_get(op->ptr, "extrude_handle");
+  const eBezTriple_Handle extrude_handle = eBezTriple_Handle(
+      RNA_enum_get(op->ptr, "extrude_handle"));
 
   CurvePenData *cpd;
   if (op->customdata == nullptr) {
@@ -1767,7 +1768,8 @@ static wmOperatorStatus curve_pen_invoke(bContext *C, wmOperator *op, const wmEv
   const bool move_point = RNA_boolean_get(op->ptr, "move_point");
   const bool close_spline = RNA_boolean_get(op->ptr, "close_spline");
   const int close_spline_method = RNA_enum_get(op->ptr, "close_spline_method");
-  const int extrude_handle = RNA_enum_get(op->ptr, "extrude_handle");
+  const eBezTriple_Handle extrude_handle = eBezTriple_Handle(
+      RNA_enum_get(op->ptr, "extrude_handle"));
 
   if (ELEM(event->type, LEFTMOUSE) && ELEM(event->val, KM_PRESS, KM_DBL_CLICK)) {
     /* Get the details of points selected at the start of the operation.

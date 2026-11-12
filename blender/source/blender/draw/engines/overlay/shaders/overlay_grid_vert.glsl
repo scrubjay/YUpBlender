@@ -7,8 +7,8 @@
 VERTEX_SHADER_CREATE_INFO(overlay_grid_next)
 
 #include "draw_view_lib.glsl"
-#include "gpu_shader_math_base_lib.glsl"
-#include "gpu_shader_utildefines_lib.glsl"
+#include "gpu_shader_math_base.bsl.hh"
+#include "gpu_shader_utildefines.bsl.hh"
 #include "overlay_grid_common_lib.glsl"
 
 struct LineData {
@@ -21,28 +21,24 @@ struct LineData {
 LineData decode_grid_data(uint vertex_id)
 {
   LineData line;
-
   /* Every pair of consecutive verts forms a line, indicated by bit 0.
    * Every pair of consecutive lines flips x/y, indicated by bit 1. */
   uint side = vertex_id & 0x1u;
   vertex_id = vertex_id >> 1u;
   line.axis = vertex_id & 0x1u;
   vertex_id = vertex_id >> 1u;
-
   /* The index/level of a line are encoded by the remaining bits. We order
    * levels from "large" to "small", drawing the larger levels first. */
   line.level = OVERLAY_GRID_STEPS_DRAW - 1 - int(vertex_id / grid_buf.num_lines);
   vertex_id = vertex_id % grid_buf.num_lines;
-
-  /* From the index, generate N+1 points equidistantly spaced on [-N/2, N/2]. */
-  line.P.x = max(float(grid_buf.num_lines >> 1u), 1.0f);
-  line.P.y = (float(vertex_id) - float(grid_buf.num_lines >> 1u));
-
-  /* If this isn't the line start, flip the x-component to the end. Likewise,
-   * if this isn't the x-direction, flip components to define the y-direction. */
-  line.P.x = side != 0 ? line.P.x : -line.P.x;
-  line.P.xy = line.axis != 0 ? line.P.yx : line.P.xy;
-
+  /* Scale vertex index to [-1, 1]. */
+  const float lines_half = max(float(grid_buf.num_lines >> 1u), 1.0f);
+  const float line_index = (float(vertex_id) - lines_half) / lines_half;
+  /* From the index, generate N+1 points equidistantly spaced on [-1, 1]. */
+  line.P.x = line_index;
+  line.P.y = side != 0 ? 1.0f : -1.0f;
+  /* Flip X-, Y-components dependent on axis. */
+  line.P.xy = (line.axis == 0) ? line.P.xy : line.P.yx;
   return line;
 }
 
@@ -50,29 +46,16 @@ LineData decode_grid_data(uint vertex_id)
 LineData decode_axis_data(uint vertex_id)
 {
   LineData line;
-
   /* Every pair of consecutive verts forms a line, indicated by bit 0.
    * They then alternate x/y/z, indicated by the remaining bits. */
   uint side = vertex_id & 0x1u;
   line.axis = vertex_id >> 1u;
   /* For an axis line, the level is fixed, and the direction is simply the vertex index. */
   line.level = OVERLAY_GRID_STEPS_DRAW - 1;
-  /* Output a vertex as [-N/2, N/2], [0, 0]. */
-  line.P.x = max(float(grid_buf.num_lines >> 1u), 1.0f) * select(1.0f, -1.0f, side);
+  /* Output a vertex as [-1, 1], [0, 0]. */
+  line.P.x = side != 0 ? 1.0f : -1.0f;
   line.P.y = 0.0f;
-
   return line;
-}
-
-/* Test if the current line falls under an active axis line which occludes it. */
-bool is_occluded_by_axis(float3 vertex_pos_global)
-{
-  if (flag_test(grid_flag, SHOW_GRID)) {
-    return (flag_test(grid_flag, AXIS_X) && grid::is_zero(vertex_pos_global.yz, 1e-4f)) ||
-           (flag_test(grid_flag, AXIS_Y) && grid::is_zero(vertex_pos_global.xz, 1e-4f)) ||
-           (flag_test(grid_flag, AXIS_Z) && grid::is_zero(vertex_pos_global.xy, 1e-4f));
-  }
-  return false;
 }
 
 /* Test if the current line falls under another line on a higher level, which occludes it. */
@@ -83,7 +66,7 @@ bool is_occluded_by_higher_level(LineData line, uint level)
       /* To determine if a higher up line occludes the current line; we solve the following:
        * given scalars s1, s2 and integer i, is there an integer j : i*s1 = j*s2. The value in
        * `line.P` holds i*s1, so we compute j = i*s1/s2 and verify if it is an integer.  */
-      float j = abs(line.P[1 - line.axis]) / grid_buf.steps[level + 1][line.axis];
+      float j = abs(line.P[line.axis]) / grid_buf.steps[level + 1][line.axis];
       if (is_equal(floor(j), j, 1e-4f)) {
         return true;
       }
@@ -114,22 +97,28 @@ void main()
 
   /* Compute per-level size, camera offset for lines. Offset is rounded to the nearest
    * level-dependent line position for grid, while axes simply move with the camera. */
-  uint step_axis = flag_test(grid_flag, GRID_SIMA) ? 1u - line.axis : line.axis;
-  float step_size = grid_buf.steps[level][step_axis];
-
-  float2 step_offs;
-  if (flag_test(grid_flag, SHOW_GRID)) {
-    step_offs = flag_test(grid_flag, GRID_SIMA) ? grid_buf.offset :
-                                                  round(grid_buf.offset / step_size) * step_size;
+  float step_size = grid_buf.steps[level][line.axis];
+  if (step_size == 0.0f) {
+    return; /* Discard line. */
   }
-  else { /* SHOW_AXIS */
+  /* TODO(not_mark): remove all this horrible axis-swapping BS in BSL port. */
+  float2 step_offs = grid_buf.offset;
+  if (flag_test(grid_flag, SHOW_GRID)) {
+    /* Line moves with offset along its axis, but snaps to the rounded offset on the other axis. */
+    if (line.axis != 0) {
+      step_offs.y = round(step_offs.y / step_size) * step_size;
+    }
+    else {
+      step_offs.x = round(step_offs.x / step_size) * step_size;
+    }
+  }
+  else if (flag_test(grid_flag, SHOW_AXES)) {
     /* Store axis value on X-axis for now, it is swapped later. */
-    /* TODO(not_mark): remove all this horrible axis-swapping BS in BSL port. */
     step_offs = float2(drw_view_position()[line.axis], 0.0f);
   }
 
   /* Output vertex position in [-1,1], which we use to fade level boundaries. */
-  vertex_out.coord = line.P / max(float(grid_buf.num_lines >> 1), 1.0f);
+  vertex_out.coord = line.P;
   /* Output an interpolant between `grid` and `grid_emphasis` for the second grid level. */
   vertex_out_flat.emphasis = saturate(float(line.level) - fract(grid_buf.level));
   /* Output alpha that smoothly transitions the lowest grid level in/out. */
@@ -140,7 +129,9 @@ void main()
         step_size * 0.25f, step_size * pow3f(0.25f), uniform_buf.pixel_fac);
   }
 
-  /* Apply per-level size, camera offset. */
+  /* Scale grid lines to [-N, N] so they step 1m intervals. */
+  line.P *= max(float(grid_buf.num_lines >> 1), 1.0f);
+  /* Scale and offset grid lines so they follow the camera in level-appropriate steps. */
   line.P = step_offs + step_size * line.P;
 
   /* Compute clipping rectangle. */
@@ -148,18 +139,22 @@ void main()
   float2 clip_min = float2(-FLT_MAX), clip_max = float2(FLT_MAX);
   if (flag_test(grid_flag, GRID_SIMA)) {
     /* SpaceImage view has user-specified clipping rectangle */
-    clip_min = float2(-1.0f);
-    clip_max = grid_buf.clip_rect * 2.0f - 1.0f;
+    clip_min = float2(0.0f);
+    clip_max = grid_buf.clip_rect;
   }
   else if (flag_test(grid_flag, SHOW_GRID)) {
     clip_min = step_offs - grid_buf.clip_rect;
     clip_max = step_offs + grid_buf.clip_rect;
   }
   else /* SHOW_AXES */ {
-    /* Z-axis does not have a clip value to unpack. */
-    float clip_rect = (line.axis == 2) ?
-                          grid_buf.clip_rect.x :
-                          grid::unpack_xy_to_axis(grid_buf.clip_rect, grid_flag, line.axis);
+    /* In Y-up mode, axes always lie on the XZ floor plane (axis 0=X, axis 2=Z) or vertical
+     * (axis 1=Y). The axis_flag_ has no PLANE_* bits, so we cannot rely on unpack_xy_to_axis
+     * which uses those bits to map clip_rect.x/y to the right dimension. Instead, map directly:
+     *   axis 0 (X floor): uses clip_rect.x
+     *   axis 1 (Y up):    uses clip_rect.x (reasonable symmetric extent)
+     *   axis 2 (Z floor): uses clip_rect.y
+     */
+    float clip_rect = (line.axis == 2u) ? grid_buf.clip_rect.y : grid_buf.clip_rect.x;
 
     /* Clipping is applied to the x-axis, where vertex data is stored.
      * It is swapped to the correct axis below. */
@@ -176,7 +171,6 @@ void main()
   line.P = clamp(line.P, clip_min, clip_max);
 
   /* Output world-space position. */
-  /* TODO(not_mark): remove all this horrible axis-swapping BS in BSL port. */
   vertex_out.pos = float3(0.0f);
   if (flag_test(grid_flag, SHOW_GRID)) {
     /* Position is placed on the correct plane. */
@@ -193,7 +187,7 @@ void main()
       /* Set z to place the grid in front of/behind images/UDIMS, and always behind the UV mesh.
        * See `overlay_edit_uv_edges_vert.glsl` for the full z-order. */
       float z = flag_test(grid_flag, GRID_OVER_IMAGE) ? 0.45f : 0.76f;
-      vertex_out.pos = float3(line.P * 0.5f + 0.5f, z);
+      vertex_out.pos = float3(line.P, z);
     }
   }
   else { /* SHOW_AXES */
@@ -206,7 +200,7 @@ void main()
   }
 
   /* Additional culling steps to discard occluded lines. */
-  if (is_occluded_by_axis(vertex_out.pos) || is_occluded_by_higher_level(line, level)) {
+  if (is_occluded_by_higher_level(line, level)) {
     return; /* Discard line. */
   }
 

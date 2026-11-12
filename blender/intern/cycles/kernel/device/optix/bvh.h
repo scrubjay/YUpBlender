@@ -24,6 +24,11 @@ CCL_NAMESPACE_BEGIN
 
 /* Utilities. */
 
+enum CustomPrimitiveHitKind {
+  CUSTOM_PRIMITIVE_HIT_KIND_CURVE,
+  CUSTOM_PRIMITIVE_HIT_KIND_POINT,
+};
+
 template<typename T> ccl_device_forceinline T *get_payload_ptr_0()
 {
   return pointer_unpack_from_uint<T>(optixGetPayload_0(), optixGetPayload_1());
@@ -65,7 +70,7 @@ ccl_device_forceinline Intersection get_intersection()
     isect.type = kernel_data_fetch(objects, isect.object).primitive_type;
   }
 #ifdef __HAIR__
-  else if ((optixGetHitKind() & (~PRIMITIVE_MOTION)) != PRIMITIVE_POINT) {
+  else if (optixGetHitKind() != CUSTOM_PRIMITIVE_HIT_KIND_POINT) {
     /* Curve. */
     isect.u = __uint_as_float(optixGetAttribute_0());
     isect.v = __uint_as_float(optixGetAttribute_1());
@@ -77,6 +82,7 @@ ccl_device_forceinline Intersection get_intersection()
 #endif
   else {
     /* Point. */
+    kernel_assert(optixGetHitKind() == CUSTOM_PRIMITIVE_HIT_KIND_POINT);
     isect.u = 0.0f;
     isect.v = 0.0f;
     isect.type = kernel_data_fetch(objects, isect.object).primitive_type;
@@ -151,10 +157,11 @@ extern "C" __global__ void __anyhit__kernel_optix_local_hit()
   isect->v = barycentrics.y;
 
   /* Record geometric normal. */
+  const int position_offset = kernel_data_fetch(objects, object).position_offset;
   const packed_uint3 tri_vindex = kernel_data_fetch(tri_vindex, prim);
-  const float3 tri_a = kernel_data_fetch(tri_verts, tri_vindex.x);
-  const float3 tri_b = kernel_data_fetch(tri_verts, tri_vindex.y);
-  const float3 tri_c = kernel_data_fetch(tri_verts, tri_vindex.z);
+  const float3 tri_a = kernel_data_fetch(tri_verts, position_offset + tri_vindex.x);
+  const float3 tri_b = kernel_data_fetch(tri_verts, position_offset + tri_vindex.y);
+  const float3 tri_c = kernel_data_fetch(tri_verts, position_offset + tri_vindex.z);
 
   local_isect->Ng[hit_index] = normalize(cross(tri_b - tri_a, tri_c - tri_a));
 
@@ -238,7 +245,7 @@ extern "C" __global__ void __anyhit__kernel_optix_visibility_test()
     /* Triangle. */
   }
 #ifdef __HAIR__
-  else if ((optixGetHitKind() & (~PRIMITIVE_MOTION)) != PRIMITIVE_POINT) {
+  else if (optixGetHitKind() != CUSTOM_PRIMITIVE_HIT_KIND_POINT) {
     /* Curve. */
     prim = kernel_data_fetch(curve_segments, prim).prim;
   }
@@ -246,7 +253,7 @@ extern "C" __global__ void __anyhit__kernel_optix_visibility_test()
 
   ccl_private Ray *const ray = get_payload_ptr_6<Ray>();
 
-  if (visibility & PATH_RAY_SHADOW_OPAQUE) {
+  if (visibility & PATH_RAY_VISIBILITY_SHADOW_OPAQUE) {
 #ifdef __SHADOW_LINKING__
     if (intersection_skip_shadow_link(nullptr, ray->self, object)) {
       return optixIgnoreIntersection();
@@ -283,7 +290,7 @@ extern "C" __global__ void __closesthit__kernel_optix_hit()
     optixSetPayload_3(prim);
     optixSetPayload_5(kernel_data_fetch(objects, object).primitive_type);
   }
-  else if ((optixGetHitKind() & (~PRIMITIVE_MOTION)) != PRIMITIVE_POINT) {
+  else if (optixGetHitKind() != CUSTOM_PRIMITIVE_HIT_KIND_POINT) {
     const KernelCurveSegment segment = kernel_data_fetch(curve_segments, prim);
     optixSetPayload_1(optixGetAttribute_0()); /* Same as 'optixGetCurveParameter()' */
     optixSetPayload_2(optixGetAttribute_1());
@@ -291,6 +298,7 @@ extern "C" __global__ void __closesthit__kernel_optix_hit()
     optixSetPayload_5(segment.type);
   }
   else {
+    kernel_assert(optixGetHitKind() == CUSTOM_PRIMITIVE_HIT_KIND_POINT);
     optixSetPayload_1(0);
     optixSetPayload_2(0);
     optixSetPayload_3(prim);
@@ -327,9 +335,8 @@ ccl_device_inline void optix_intersection_curve(const int prim, const int type)
 
   if (curve_intersect(nullptr, &isect, ray_P, ray_D, ray_tmin, isect.t, object, prim, time, type))
   {
-    static_assert(PRIMITIVE_ALL < 128, "Values >= 128 are reserved for OptiX internal use");
     optixReportIntersection(isect.t,
-                            type & PRIMITIVE_ALL,
+                            CUSTOM_PRIMITIVE_HIT_KIND_CURVE,
                             __float_as_int(isect.u),  /* Attribute_0 */
                             __float_as_int(isect.v)); /* Attribute_1 */
   }
@@ -344,7 +351,6 @@ extern "C" __global__ void __intersection__curve_ribbon()
     optix_intersection_curve(prim, type);
   }
 }
-
 #endif
 
 #ifdef __POINTCLOUD__
@@ -374,10 +380,10 @@ extern "C" __global__ void __intersection__point()
   Intersection isect;
   isect.t = optixGetRayTmax();
 
-  if (point_intersect(nullptr, &isect, ray_P, ray_D, ray_tmin, isect.t, object, prim, time, type))
+  if (point_or_gsplat_intersect(
+          nullptr, &isect, ray_P, ray_D, ray_tmin, isect.t, object, prim, time, type))
   {
-    static_assert(PRIMITIVE_ALL < 128, "Values >= 128 are reserved for OptiX internal use");
-    optixReportIntersection(isect.t, type & PRIMITIVE_ALL);
+    optixReportIntersection(isect.t, CUSTOM_PRIMITIVE_HIT_KIND_POINT);
   }
 }
 #endif
@@ -406,7 +412,7 @@ ccl_device_intersect bool scene_intersect(KernelGlobals kg,
   if (0 == ray_mask && (visibility & ~0xFF) != 0) {
     ray_mask = 0xFF;
   }
-  else if (visibility & PATH_RAY_SHADOW_OPAQUE) {
+  else if (visibility & PATH_RAY_VISIBILITY_SHADOW_OPAQUE) {
     ray_flags |= OPTIX_RAY_FLAG_TERMINATE_ON_FIRST_HIT;
   }
 
@@ -461,7 +467,7 @@ ccl_device_intersect bool scene_intersect_shadow(KernelGlobals kg,
   if (0 == ray_mask && (visibility & ~0xFF) != 0) {
     ray_mask = 0xFF;
   }
-  else if (visibility & PATH_RAY_SHADOW_OPAQUE) {
+  else if (visibility & PATH_RAY_VISIBILITY_SHADOW_OPAQUE) {
     ray_flags |= OPTIX_RAY_FLAG_TERMINATE_ON_FIRST_HIT;
   }
 

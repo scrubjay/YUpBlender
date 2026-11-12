@@ -10,10 +10,10 @@
 
 #include "BKE_curves.hh"
 
-#include "BLI_listbase.h"
+#include "BLI_listbase.hh"
 #include "BLI_map.hh"
 #include "BLI_math_vector_types.hh"
-#include "BLI_utildefines.h"
+#include "BLI_utildefines.hh"
 
 #include "BKE_context.hh"
 #include "BKE_grease_pencil.hh"
@@ -385,7 +385,7 @@ static wmOperatorStatus insert_blank_frame_exec(bContext *C, wmOperator *op)
   GreasePencil &grease_pencil = *id_cast<GreasePencil *>(object->data);
   const int current_frame = scene->r.cfra;
   const bool all_layers = RNA_boolean_get(op->ptr, "all_layers");
-  const int duration = RNA_int_get(op->ptr, "duration");
+  const int duration = 0 /* RNA_int_get(op->ptr, "duration") */;
 
   bool changed = false;
   if (all_layers) {
@@ -485,7 +485,7 @@ static bool curves_geometry_is_equal(const bke::CurvesGeometry &curves_a,
     }
 
     if (attributes_varrays_span_data_equal(attrs_a, attrs_b)) {
-      return true;
+      continue;
     }
 
     bool attributes_are_equal = true;
@@ -586,7 +586,16 @@ static void GREASE_PENCIL_OT_insert_blank_frame(wmOperatorType *ot)
   prop = RNA_def_boolean(
       ot->srna, "all_layers", false, "All Layers", "Insert a blank frame in all editable layers");
   RNA_def_property_flag(prop, PROP_SKIP_SAVE);
-  RNA_def_int(ot->srna, "duration", 0, 0, MAXFRAME, "Duration", "", 0, 100);
+  prop = RNA_def_int(ot->srna,
+                     "duration",
+                     0,
+                     0,
+                     MAXFRAME,
+                     "Duration",
+                     "WARNING: Has no effect currently, always behaves as if its value was `0`",
+                     0,
+                     100);
+  RNA_def_property_flag(prop, PROP_HIDDEN);
 }
 
 static void GREASE_PENCIL_OT_frame_clean_duplicate(wmOperatorType *ot)
@@ -639,7 +648,7 @@ bool grease_pencil_copy_keyframes(bAnimContext *ac, KeyframeClipboard &clipboard
     for (auto [frame_number, frame] : layer->frames().items()) {
       if (frame.is_selected()) {
         const Drawing *drawing = grease_pencil->get_drawing_at(*layer, frame_number);
-        const int duration = layer->get_frame_duration_at(frame_number);
+        const int duration = 0 /* layer->get_frame_duration_at(frame_number) */;
         buf.append(
             {frame_number, Drawing(*drawing), duration, eBezTriple_KeyframeType(frame.type)});
 
@@ -713,7 +722,7 @@ bool grease_pencil_paste_keyframes(bAnimContext *ac,
                 ANIMFILTER_FOREDIT | ANIMFILTER_SEL);
   ANIM_animdata_filter(
       ac, &anim_data, eAnimFilter_Flags(filter), ac->data, eAnimCont_Types(ac->datatype));
-  if (BLI_listbase_is_empty(&anim_data)) {
+  if (anim_data.is_empty()) {
     /* If no layers are selected at all, make even unselected layers "targets" for pasting. */
     filter = (ANIMFILTER_DATA_VISIBLE | ANIMFILTER_LIST_VISIBLE | ANIMFILTER_NODUPLIS |
               ANIMFILTER_FOREDIT);

@@ -2,10 +2,16 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup nodes
+ */
+
 #include <fmt/format.h>
 
-#include "BLI_listbase.h"
-#include "BLI_string.h"
+#include "BLI_listbase.hh"
+#include "BLI_string.hh"
+
+#include "DEG_depsgraph.hh"
 
 #include "NOD_geometry_nodes_srna.hh"
 #include "NOD_socket.hh"
@@ -19,6 +25,8 @@
 #include "RNA_access.hh"
 #include "RNA_define.hh"
 #include "RNA_prototypes.hh"
+
+#include "PRF_profile.hh"
 
 namespace blender::nodes {
 
@@ -119,7 +127,7 @@ static StructRNA *create_inputs_srna(const bNodeTree &tree, GeneratedTreeSrnaDat
     }
     const StringRefNull identifier = r_generated.scope.allocator().copy_string(socket->identifier);
     PropertyRNA *prop = RNA_def_pointer_runtime(
-        srna, identifier.c_str(), socket_srna, socket->name, "");
+        srna, identifier.c_str(), socket_srna, socket->name().c_str(), "");
     RNA_def_property_override_flag(prop, PROPOVERRIDE_OVERRIDABLE_LIBRARY);
   }
 
@@ -135,6 +143,11 @@ static std::optional<std::string> rna_NodesModifierPropertyOutput_path(const Poi
   return fmt::format("modifiers[\"{}\"].properties.outputs.{}", name_esc, identifier);
 }
 
+void geometry_nodes_property_update(Main * /*bmain*/, Scene * /*scene*/, PointerRNA *ptr)
+{
+  DEG_id_tag_update(ptr->owner_id, ID_RECALC_GEOMETRY);
+}
+
 static StructRNA *create_outputs_srna(const bNodeTree &tree, GeneratedTreeSrnaData &r_generated)
 {
   StructRNA *srna = RNA_def_struct_ptr(
@@ -144,13 +157,13 @@ static StructRNA *create_outputs_srna(const bNodeTree &tree, GeneratedTreeSrnaDa
 
   for (const bNodeTreeInterfaceSocket *output : tree.interface_outputs()) {
     const bke::bNodeSocketType *socket_type = bke::node_socket_type_find(output->socket_type);
-    if (!nodes::socket_type_supports_attributes(eNodeSocketDatatype(socket_type->type))) {
+    if (!nodes::socket_type_supports_attributes(socket_type->type)) {
       continue;
     }
 
     const StringRefNull identifier = allocator.copy_string(output->identifier);
-    const StringRefNull name = allocator.copy_string(output->name);
-    const StringRefNull description = allocator.copy_string(output->description);
+    const StringRefNull name = allocator.copy_string(output->name());
+    const StringRefNull description = allocator.copy_string(output->description());
     const StringRefNull default_value = allocator.copy_string(output->default_attribute_name);
 
     StructRNA *output_srna = RNA_def_struct_ptr(
@@ -163,6 +176,7 @@ static StructRNA *create_outputs_srna(const bNodeTree &tree, GeneratedTreeSrnaDa
                                        name.c_str(),
                                        description.c_str());
     RNA_def_property_flag(prop, PROP_FORCE_GEOMETRY_EVAL);
+    RNA_def_property_update_runtime(prop, geometry_nodes_property_update);
     RNA_def_property_override_flag(prop, PROPOVERRIDE_OVERRIDABLE_LIBRARY);
     prop = RNA_def_pointer_runtime(srna, identifier.c_str(), output_srna, name.c_str(), "");
     RNA_def_property_override_flag(prop, PROPOVERRIDE_OVERRIDABLE_LIBRARY);
@@ -180,17 +194,18 @@ static StructRNA *create_panels_srna(const bNodeTree &tree, GeneratedTreeSrnaDat
 
   tree.ensure_interface_cache();
   for (const bNodeTreeInterfaceItem *item : tree.interface_items()) {
-    if (item->item_type != NODE_INTERFACE_PANEL) {
+    if (item->item_type != NodeTreeInterfaceItemType::Panel) {
       continue;
     }
     const auto &panel = *reinterpret_cast<const bNodeTreeInterfacePanel *>(item);
     const StringRefNull identifier = allocator.copy_string(
         fmt::format("open_{}", panel.identifier));
-    RNA_def_boolean(srna,
-                    identifier.c_str(),
-                    !(panel.flag & NODE_INTERFACE_PANEL_DEFAULT_CLOSED),
-                    "Is Open",
-                    "");
+    PropertyRNA *prop = RNA_def_boolean(srna,
+                                        identifier.c_str(),
+                                        !(panel.flag & NODE_INTERFACE_PANEL_DEFAULT_CLOSED),
+                                        "Is Open",
+                                        "");
+    RNA_def_property_flag(prop, PROP_NO_DEG_UPDATE);
   }
 
   return srna;
@@ -199,6 +214,7 @@ static StructRNA *create_panels_srna(const bNodeTree &tree, GeneratedTreeSrnaDat
 std::shared_ptr<GeneratedTreeSrnaData> create_geometry_nodes_rna_for_modifier(
     const bNodeTree &tree)
 {
+  PRF_scope(ProfileCategory::Core);
   auto generated = std::make_unique<GeneratedTreeSrnaData>();
   tree.ensure_interface_cache();
 

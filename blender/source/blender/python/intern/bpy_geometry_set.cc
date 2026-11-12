@@ -102,8 +102,12 @@ static BPy_GeometrySet *BPy_GeometrySet_static_from_evaluated_object(PyObject * 
 {
   static const char *kwlist[] = {"evaluated_object", nullptr};
   PyObject *py_evaluated_object;
-  if (!PyArg_ParseTupleAndKeywords(
-          args, kwds, "O", const_cast<char **>(kwlist), &py_evaluated_object))
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "O" /* `evaluated_object` */
+                                   ":from_evaluated_object",
+                                   const_cast<char **>(kwlist),
+                                   &py_evaluated_object))
   {
     return nullptr;
   }
@@ -125,10 +129,7 @@ static BPy_GeometrySet *BPy_GeometrySet_static_from_evaluated_object(PyObject * 
     PyErr_SetString(PyExc_TypeError, "Expected an evaluated object");
     return nullptr;
   }
-  const bool is_instance_collection = evaluated_object->type == OB_EMPTY &&
-                                      evaluated_object->instance_collection;
-  const bool valid_object_type = OB_TYPE_IS_GEOMETRY(evaluated_object->type) ||
-                                 is_instance_collection;
+  const bool valid_object_type = DEG_object_has_geometry_component(evaluated_object);
   if (!valid_object_type) {
     const char *ob_type_name = "<unknown>";
     RNA_enum_name_from_value(rna_enum_object_type_items, evaluated_object->type, &ob_type_name);
@@ -146,6 +147,8 @@ static BPy_GeometrySet *BPy_GeometrySet_static_from_evaluated_object(PyObject * 
     return nullptr;
   }
 
+  const bool is_instance_collection = evaluated_object->type == OB_EMPTY &&
+                                      evaluated_object->instance_collection;
   GeometrySet geometry;
   if (is_instance_collection) {
     bke::Instances *instances = new bke::Instances(1);
@@ -195,7 +198,8 @@ static PyObject *BPy_GeometrySet_get_instances_pointcloud(BPy_GeometrySet *self)
   }
   if (self->instances_pointcloud == nullptr) {
     const int instances_num = instances->instances_num();
-    PointCloud *pointcloud = BKE_pointcloud_new_nomain(instances_num);
+    PointCloud *pointcloud = BKE_pointcloud_new_nomain(PointCloudType::Points, instances_num);
+    bke::instance_position_varray(*instances).materialize(pointcloud->positions_for_write());
     bke::gather_attributes(instances->attributes(),
                            bke::AttrDomain::Instance,
                            bke::AttrDomain::Point,

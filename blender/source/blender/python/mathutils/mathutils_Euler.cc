@@ -13,13 +13,13 @@
 #include "mathutils.hh"
 
 #include "../generic/py_capi_utils.hh"
-#include "BLI_math_matrix.h"
-#include "BLI_math_rotation.h"
-#include "BLI_math_vector.h"
-#include "BLI_utildefines.h"
+#include "BLI_math_matrix_c.hh"
+#include "BLI_math_rotation_c.hh"
+#include "BLI_math_vector_c.hh"
+#include "BLI_utildefines.hh"
 
 #ifndef MATH_STANDALONE
-#  include "BLI_dynstr.h"
+#  include "BLI_dynstr.hh"
 #endif
 
 namespace blender {
@@ -107,7 +107,7 @@ static PyObject *Euler_vectorcall(PyObject *type,
                                   const size_t nargsf,
                                   PyObject *kwnames)
 {
-  if (UNLIKELY(kwnames && PyTuple_GET_SIZE(kwnames))) {
+  if (kwnames && PyTuple_GET_SIZE(kwnames)) [[unlikely]] {
     PyErr_SetString(PyExc_TypeError,
                     "mathutils.Euler(): "
                     "takes no keyword args");
@@ -152,7 +152,7 @@ static PyObject *Euler_vectorcall(PyObject *type,
 static PyObject *Euler_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 {
   /* Only called on sub-classes. */
-  if (UNLIKELY(kwds && PyDict_GET_SIZE(kwds))) {
+  if (kwds && PyDict_GET_SIZE(kwds)) [[unlikely]] {
     PyErr_SetString(PyExc_TypeError,
                     "mathutils.Euler(): "
                     "takes no keyword args");
@@ -251,7 +251,13 @@ static PyObject *Euler_rotate_axis(EulerObject *self, PyObject *args)
   float angle = 0.0f;
   int axis; /* actually a character */
 
-  if (!PyArg_ParseTuple(args, "Cf:rotate_axis", &axis, &angle)) {
+  if (!PyArg_ParseTuple(args,
+                        "C" /* `axis` */
+                        "f" /* `angle` */
+                        ":rotate_axis",
+                        &axis,
+                        &angle))
+  {
     PyErr_SetString(PyExc_TypeError,
                     "Euler.rotate_axis(): "
                     "expected an axis 'X', 'Y', 'Z' and an angle (float)");
@@ -423,10 +429,10 @@ static PyObject *Euler_str(EulerObject *self)
 static int Euler_getbuffer(PyObject *obj, Py_buffer *view, int flags)
 {
   EulerObject *self = reinterpret_cast<EulerObject *>(obj);
-  if (UNLIKELY(BaseMath_Prepare_ForBufferAccess(self, view, flags) == -1)) {
+  if (BaseMath_Prepare_ForBufferAccess(self, view, flags) == -1) [[unlikely]] {
     return -1;
   }
-  if (UNLIKELY(BaseMath_ReadCallback(self) == -1)) {
+  if (BaseMath_ReadCallback(self) == -1) [[unlikely]] {
     return -1;
   }
 
@@ -456,7 +462,7 @@ static void Euler_releasebuffer(PyObject * /*exporter*/, Py_buffer *view)
   self->flag &= ~BASE_MATH_FLAG_HAS_BUFFER_VIEW;
 
   if (view->readonly == 0) {
-    if (UNLIKELY(BaseMath_WriteCallback(self) == -1)) {
+    if (BaseMath_WriteCallback(self) == -1) [[unlikely]] {
       PyErr_Print();
     }
   }
@@ -551,10 +557,6 @@ static Py_ssize_t Euler_len(EulerObject * /*self*/)
 /** Sequence accessor (get): `x = object[i]`. */
 static PyObject *Euler_item(EulerObject *self, Py_ssize_t i)
 {
-  if (i < 0) {
-    i = EULER_SIZE - i;
-  }
-
   if (i < 0 || i >= EULER_SIZE) {
     PyErr_SetString(PyExc_IndexError,
                     "euler[attribute]: "
@@ -586,10 +588,6 @@ static int Euler_ass_item(EulerObject *self, Py_ssize_t i, PyObject *value)
     return -1;
   }
 
-  if (i < 0) {
-    i = EULER_SIZE - i;
-  }
-
   if (i < 0 || i >= EULER_SIZE) {
     PyErr_SetString(PyExc_IndexError,
                     "euler[attribute] = x: "
@@ -606,63 +604,57 @@ static int Euler_ass_item(EulerObject *self, Py_ssize_t i, PyObject *value)
   return 0;
 }
 
-/** Sequence slice accessor (get): `x = object[i:j]`. */
-static PyObject *Euler_slice(EulerObject *self, int begin, int end)
+/** Sequence slice accessor (get): `x = object[i:j]` / `object[i:j:step]`. */
+static PyObject *Euler_slice(EulerObject *self,
+                             Py_ssize_t start,
+                             Py_ssize_t step,
+                             Py_ssize_t slice_length)
 {
-  PyObject *tuple;
-  int count;
-
   if (BaseMath_ReadCallback(self) == -1) {
     return nullptr;
   }
 
-  CLAMP(begin, 0, EULER_SIZE);
-  if (end < 0) {
-    end = (EULER_SIZE + 1) + end;
+  PyObject *tuple = PyTuple_New(slice_length);
+  Py_ssize_t index = start;
+  for (Py_ssize_t i = 0; i < slice_length; i++, index += step) {
+    BLI_assert(index >= 0 && index < EULER_SIZE);
+    PyTuple_SET_ITEM(tuple, i, PyFloat_FromDouble(self->eul[index]));
   }
-  CLAMP(end, 0, EULER_SIZE);
-  begin = std::min(begin, end);
-
-  tuple = PyTuple_New(end - begin);
-  for (count = begin; count < end; count++) {
-    PyTuple_SET_ITEM(tuple, count - begin, PyFloat_FromDouble(self->eul[count]));
-  }
-
   return tuple;
 }
 
-/** Sequence slice accessor (set): `object[i:j] = x`. */
-static int Euler_ass_slice(EulerObject *self, int begin, int end, PyObject *seq)
+/**
+ * Sequence slice accessor (set): `object[i:j] = x` / `object[i:j:step] = x`.
+ * Length of `seq` must equal `slice_length`
+ * (Python list semantics: extended slice assignment cannot resize).
+ */
+static int Euler_ass_slice(
+    EulerObject *self, Py_ssize_t start, Py_ssize_t step, Py_ssize_t slice_length, PyObject *seq)
 {
-  int i, size;
   float eul[EULER_SIZE];
 
-  if (BaseMath_ReadCallback_ForWrite(self) == -1) {
-    return -1;
+  /* Subset writes merge into existing values, so sync the source first. */
+  if (mathutils_slice_is_subset(start, step, slice_length, EULER_SIZE)) {
+    if (BaseMath_ReadCallback_ForWrite(self) == -1) {
+      return -1;
+    }
+  }
+  else {
+    if (BaseMath_Prepare_ForWrite(self) == -1) {
+      return -1;
+    }
   }
 
-  CLAMP(begin, 0, EULER_SIZE);
-  if (end < 0) {
-    end = (EULER_SIZE + 1) + end;
-  }
-  CLAMP(end, 0, EULER_SIZE);
-  begin = std::min(begin, end);
-
-  if ((size = mathutils_array_parse(eul, 0, EULER_SIZE, seq, "mathutils.Euler[begin:end] = []")) ==
-      -1)
+  if (mathutils_array_parse(
+          eul, slice_length, slice_length, seq, "mathutils.Euler[slice] = seq") == -1)
   {
     return -1;
   }
 
-  if (size != (end - begin)) {
-    PyErr_SetString(PyExc_ValueError,
-                    "euler[begin:end] = []: "
-                    "size mismatch in slice assignment");
-    return -1;
-  }
-
-  for (i = 0; i < EULER_SIZE; i++) {
-    self->eul[begin + i] = eul[i];
+  Py_ssize_t index = start;
+  for (Py_ssize_t i = 0; i < slice_length; i++, index += step) {
+    BLI_assert(index >= 0 && index < EULER_SIZE);
+    self->eul[index] = eul[i];
   }
 
   (void)BaseMath_WriteCallback(self);
@@ -684,21 +676,13 @@ static PyObject *Euler_subscript(EulerObject *self, PyObject *item)
     return Euler_item(self, i);
   }
   if (PySlice_Check(item)) {
-    Py_ssize_t start, stop, step, slicelength;
+    Py_ssize_t start, stop, step, slice_length;
 
-    if (PySlice_GetIndicesEx(item, EULER_SIZE, &start, &stop, &step, &slicelength) < 0) {
+    if (PySlice_GetIndicesEx(item, EULER_SIZE, &start, &stop, &step, &slice_length) < 0) {
       return nullptr;
     }
 
-    if (slicelength <= 0) {
-      return PyTuple_New(0);
-    }
-    if (step == 1) {
-      return Euler_slice(self, start, stop);
-    }
-
-    PyErr_SetString(PyExc_IndexError, "slice steps not supported with eulers");
-    return nullptr;
+    return Euler_slice(self, start, step, slice_length);
   }
 
   PyErr_Format(
@@ -720,18 +704,13 @@ static int Euler_ass_subscript(EulerObject *self, PyObject *item, PyObject *valu
     return Euler_ass_item(self, i, value);
   }
   if (PySlice_Check(item)) {
-    Py_ssize_t start, stop, step, slicelength;
+    Py_ssize_t start, stop, step, slice_length;
 
-    if (PySlice_GetIndicesEx(item, EULER_SIZE, &start, &stop, &step, &slicelength) < 0) {
+    if (PySlice_GetIndicesEx(item, EULER_SIZE, &start, &stop, &step, &slice_length) < 0) {
       return -1;
     }
 
-    if (step == 1) {
-      return Euler_ass_slice(self, start, stop, value);
-    }
-
-    PyErr_SetString(PyExc_IndexError, "slice steps not supported with euler");
-    return -1;
+    return Euler_ass_slice(self, start, step, slice_length, value);
   }
 
   PyErr_Format(
@@ -1023,7 +1002,7 @@ PyObject *Euler_CreatePyObject(const float eul[3], const short order, PyTypeObje
   float *eul_alloc;
 
   eul_alloc = static_cast<float *>(PyMem_Malloc(EULER_SIZE * sizeof(float)));
-  if (UNLIKELY(eul_alloc == nullptr)) {
+  if (eul_alloc == nullptr) [[unlikely]] {
     PyErr_SetString(PyExc_MemoryError,
                     "Euler(): "
                     "problem allocating data");

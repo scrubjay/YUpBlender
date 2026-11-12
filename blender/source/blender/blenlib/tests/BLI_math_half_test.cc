@@ -5,7 +5,8 @@
 #include "testing/testing.h"
 
 #include "BLI_math_half.hh"
-#include "BLI_time.h"
+#include "BLI_simd.hh"
+#include "BLI_time.hh"
 
 #include <cmath>
 
@@ -151,6 +152,31 @@ TEST(math_half, half_to_float_array)
   EXPECT_EQ_ARRAY(exp, dst, 14);
 }
 
+TEST(math_half, half_to_float_array_flush_to_zero)
+{
+  /* Subnormal halves are within the normal float range, so they must convert exactly even when
+   * the CPU is set to flush-to-zero and denormals-are-zero (as it is for threads using Embree). */
+  const uint16_t src[8] = {0, 1, 32, 511, 1023, 1024, 32769, 33791};
+  const float exp[8] = {
+      0.0f,
+      5.960464478e-08f,
+      1.907348633e-06f,
+      3.045797348e-05f,
+      6.097555160e-05f,
+      6.103515625e-05f,
+      -5.960464478e-08f,
+      -6.097555160e-05f,
+  };
+  float dst[8] = {};
+
+  {
+    const ScopedFlushToZero flush_to_zero;
+    math::half_to_float_array(src, dst, 8);
+  }
+
+  EXPECT_EQ_ARRAY(exp, dst, 8);
+}
+
 TEST(math_half, float_to_half_array)
 {
   const float src[13] = {0.0f,
@@ -174,6 +200,52 @@ TEST(math_half, float_to_half_array)
 
   math::float_to_half_array(src, dst, 13);
   EXPECT_EQ_ARRAY(exp, dst, 14);
+}
+
+TEST(math_half, float_to_half_clamp_array)
+{
+  const float src[17] = {
+      0.0f,
+      5.960464478e-08f,
+      0.003183364868f,
+      1.999023438f,
+      2.0f,
+      65504.0f,
+      std::numeric_limits<float>::infinity(),
+      -0.0f,
+      -5.960464478e-08f,
+      -0.4172363281f,
+      -78.3125f,
+      -65504.0f,
+      -std::numeric_limits<float>::infinity(),
+      100000.0f,
+      -100000.0f,
+      std::numeric_limits<float>::quiet_NaN(),
+      -std::numeric_limits<float>::quiet_NaN(),
+  };
+  /* One extra entry in destination, to check that function leaves it intact. */
+  const uint16_t exp[18] = {0,
+                            1,
+                            6789,
+                            16383,
+                            16384,
+                            25552,
+                            25552,
+                            32768,
+                            32769,
+                            46765,
+                            51456,
+                            51456,
+                            51456,
+                            25552,
+                            51456,
+                            0,
+                            0,
+                            12345};
+  uint16_t dst[18] = {};
+  dst[17] = 12345;
+  math::float_to_half_clamp_array(src, dst, 17, -10.0f, 1000.0f);
+  EXPECT_EQ_ARRAY(exp, dst, 18);
 }
 
 TEST(math_half, float_to_half_make_finite_array)

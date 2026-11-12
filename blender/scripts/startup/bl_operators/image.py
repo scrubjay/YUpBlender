@@ -78,7 +78,8 @@ class EditExternally(Operator):
             self.report(
                 {'ERROR'},
                 "Image editor could not be launched, ensure that "
-                "the path in User Preferences > File is valid, and Blender has rights to launch it",
+                "the path in User Preferences > File Paths > Applications > Image Editor is valid, "
+                "and Blender has rights to launch it",
             )
 
             return {'CANCELLED'}
@@ -219,15 +220,15 @@ class IMAGE_OT_open_images(Operator):
         options={'SKIP_SAVE', 'HIDDEN'},
     )
     relative_path: BoolProperty(
-        name="Use relative path",
+        name="Relative Path",
         default=True,
     )
     use_sequence_detection: BoolProperty(
-        name="Use sequence detection",
+        name="Detect Sequence",
         default=True,
     )
     use_udim_detection: BoolProperty(
-        name="Use UDIM detection",
+        name="Detect UDIM",
         default=True,
     )
 

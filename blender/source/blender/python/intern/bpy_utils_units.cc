@@ -15,8 +15,8 @@
 #include <Python.h>
 #include <structmember.h>
 
-#include "BLI_string.h"
-#include "BLI_utildefines.h"
+#include "BLI_string.hh"
+#include "BLI_utildefines.hh"
 
 #include "bpy_utils_units.hh"
 
@@ -188,7 +188,7 @@ static PyObject *bpyunits_to_value(PyObject * /*self*/, PyObject *args, PyObject
       "s"  /* `unit_system` */
       "s"  /* `unit_category` */
       "s#" /* `str_input` */
-      "|$" /* Optional keyword only arguments. */
+      "|$" /* Optional, keyword only arguments. */
       "z"  /* `str_ref_unit` */
       ":to_value",
       _keywords,
@@ -276,7 +276,7 @@ static PyObject *bpyunits_to_string(PyObject * /*self*/, PyObject *args, PyObjec
       "s"  /* `unit_system` */
       "s"  /* `unit_category` */
       "d"  /* `value` */
-      "|$" /* Optional keyword only arguments. */
+      "|$" /* Optional, keyword only arguments. */
       "i"  /* `precision` */
       "O&" /* `split_unit` */
       "O&" /* `compatible_unit` */
@@ -317,7 +317,7 @@ static PyObject *bpyunits_to_string(PyObject * /*self*/, PyObject *args, PyObjec
     PyObject *result;
 
     BKE_unit_value_as_string_adaptive(
-        buf1, sizeof(buf1), value, precision, usys, ucat, split_unit, false);
+        buf1, sizeof(buf1), value, precision, usys, ucat, split_unit, false, true);
 
     if (compatible_unit) {
       BKE_unit_name_to_alt(buf2, sizeof(buf2), buf1, usys, ucat);

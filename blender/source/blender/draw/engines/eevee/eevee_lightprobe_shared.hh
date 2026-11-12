@@ -2,7 +2,9 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
-/**
+/** \file
+ * \ingroup eevee
+ *
  * Shared code between host and client code-bases.
  */
 
@@ -26,7 +28,7 @@ struct [[host_shared]] ReflectionProbeLowFreqLight {
 };
 
 enum [[host_shared]] LightProbeShape : uint32_t {
-  SHAPE_ELIPSOID,
+  SHAPE_ELLIPSOID,
   SHAPE_CUBOID,
 };
 
@@ -114,6 +116,11 @@ struct [[host_shared]] PlanarProbeData {
   packed_float3 normal;
   /** Layer in the planar capture textures used by this probe. */
   int layer_id;
+  /** Parallax effect for forward evaluation. */
+  float parallax_distance;
+  float _pad0;
+  float _pad1;
+  float _pad2;
 };
 
 /** Viewport Display Pass. */

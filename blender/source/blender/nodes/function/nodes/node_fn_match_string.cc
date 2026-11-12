@@ -3,11 +3,12 @@
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
 #include "BLI_string_ref.hh"
-#include "BLI_string_utf8.h"
+#include "BLI_string_utf8.hh"
 
 #include "BKE_node_runtime.hh"
 
 #include "node_function_util.hh"
+#include "node_shader_util.hh"
 
 #include "NOD_socket_search_link.hh"
 
@@ -49,11 +50,11 @@ static void node_declare(NodeDeclarationBuilder &b)
 
 static void node_build_multi_function(NodeMultiFunctionBuilder &builder)
 {
-  static auto fn = mf::build::SI3_SO<std::string, int, std::string, bool>(
-      "Starts With", [](const std::string &a, const int mode, const std::string &b) {
+  static auto fn = mf::build::SI3_SO<std::string, MenuValue, std::string, bool>(
+      "Starts With", [](const std::string &a, const MenuValue mode, const std::string &b) {
         const StringRef strref_a(a);
         const StringRef strref_b(b);
-        switch (MatchStringOperation(mode)) {
+        switch (MatchStringOperation(mode.value)) {
           case MatchStringOperation::StartsWith: {
             return strref_a.startswith(strref_b);
           }
@@ -72,9 +73,7 @@ static void node_build_multi_function(NodeMultiFunctionBuilder &builder)
 static void node_gather_link_searches(GatherLinkSearchOpParams &params)
 {
   if (params.in_out() == SOCK_IN) {
-    if (params.node_tree().typeinfo->validate_link(eNodeSocketDatatype(params.other_socket().type),
-                                                   SOCK_STRING))
-    {
+    if (params.node_tree().typeinfo->validate_link(params.other_socket().type, SOCK_STRING)) {
       for (const EnumPropertyItem *item = rna_enum_node_match_string_items;
            item->identifier != nullptr;
            item++)
@@ -84,7 +83,7 @@ static void node_gather_link_searches(GatherLinkSearchOpParams &params)
           params.add_item(IFACE_(item->name), [operation](LinkSearchOpParams &params) {
             bNode &node = params.add_node("FunctionNodeMatchString"_ustr);
             params.update_and_connect_available_socket(node, "String"_ustr);
-            bke::node_find_socket(node, SOCK_IN, "Operation")
+            bke::node_find_socket(node, SOCK_IN, "Operation"_ustr)
                 ->default_value_typed<bNodeSocketValueMenu>()
                 ->value = int(operation);
           });
@@ -118,7 +117,7 @@ static void node_register()
 {
   static bke::bNodeType ntype;
 
-  fn_cmp_node_type_base(&ntype, "FunctionNodeMatchString"_ustr);
+  common_node_type_base(&ntype, "FunctionNodeMatchString"_ustr);
   ntype.ui_name = "Match String";
   ntype.ui_description = "Check if a given string exists within another string";
   ntype.nclass = NODE_CLASS_CONVERTER;

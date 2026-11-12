@@ -23,7 +23,7 @@ static void node_declare(NodeDeclarationBuilder &b)
   b.add_input<decl::Geometry>("Mesh"_ustr)
       .supported_type(GeometryComponent::Type::Mesh)
       .description("Mesh to compute the dual of");
-  b.add_output<decl::Geometry>("Dual Mesh"_ustr).propagate_all().align_with_previous();
+  b.add_output<decl::Geometry>("Dual Mesh"_ustr).propagate_all_geometry().align_with_previous();
   b.add_input<decl::Bool>("Keep Boundaries"_ustr)
       .default_value(false)
       .description(
@@ -205,8 +205,10 @@ static void transfer_attributes(
         dst.span.take_front(src_span.size()).copy_from(src_span);
         if (keep_boundaries) {
           ensure_face_map();
-          bke::attribute_math::gather(
-              src.varray, boundary_vert_src_face, boundary_vert_mask, dst.span);
+          bke::attribute_math::gather(src.varray,
+                                      boundary_vert_src_face,
+                                      boundary_vert_mask,
+                                      dst.span.take_front(boundary_vert_src_face.size()));
         }
         break;
       }

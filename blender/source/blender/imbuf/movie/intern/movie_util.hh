@@ -12,19 +12,30 @@
 
 extern "C" {
 #  include <libavcodec/avcodec.h>
+#  include <libavutil/hwcontext.h>
 #  include <libavutil/pixfmt.h>
 }
 #  include "DNA_scene_types.h"
 
 struct AVFrame;
+struct AVStream;
+struct AVFormatContext;
 
 namespace blender {
 
 int ffmpeg_deinterlace(
     AVFrame *dst, const AVFrame *src, enum AVPixelFormat pix_fmt, int width, int height);
 
+/**
+ * Whether `stream` should be treated as a loadable video stream. Only count attached pictures
+ * (cover art / embedded thumbnails) if there are no other "real" video streams in the container as
+ * a fallback.
+ */
+bool ffmpeg_stream_counts_as_video(const AVFormatContext *format_ctx, const AVStream *stream);
+
 const char *ffmpeg_last_error();
 AVCodecID mov_av_codec_id_get(IMB_Ffmpeg_Codec_ID id);
+AVBufferRef *ffmpeg_hw_device_get(AVHWDeviceType device_type);
 
 /** Checks whether given FFMPEG codec and profile combination supports alpha channel (RGBA). */
 bool MOV_codec_supports_alpha(AVCodecID codec_id, int ffmpeg_profile);
@@ -40,7 +51,7 @@ bool MOV_codec_supports_crf(AVCodecID codec_id);
  * Which pixel bit depths are supported by a given FFMPEG video CodecID.
  * Returns bit-mask of `R_IMF_CHAN_DEPTH_` flags.
  */
-int MOV_codec_valid_bit_depths(AVCodecID codec_id);
+eImageFormatDepth MOV_codec_valid_bit_depths(AVCodecID codec_id);
 
 /**
  * Returns thread count to be used for ffmpeg.

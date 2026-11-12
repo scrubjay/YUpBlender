@@ -19,11 +19,11 @@
 
 #include "MEM_guardedalloc.h"
 
-#include "BLI_listbase.h"
+#include "BLI_listbase.hh"
 #include "BLI_map.hh"
-#include "BLI_math_vector.h"
+#include "BLI_math_vector_c.hh"
 #include "BLI_pool.hh"
-#include "BLI_utildefines.h"
+#include "BLI_utildefines.hh"
 
 #include "BKE_customdata.hh"
 
@@ -32,7 +32,7 @@
 
 #include "range_tree.h"
 
-#include "BLI_strict_flags.h" /* IWYU pragma: keep. Keep last. */
+#include "BLI_strict_flags.hh" /* IWYU pragma: keep. Keep last. */
 
 namespace blender {
 
@@ -117,7 +117,9 @@ struct BMLogFace {
   char hflag;
 };
 
-/************************* Get/set element IDs ************************/
+/* -------------------------------------------------------------------- */
+/** \name Get/Set Element IDs
+ * \{ */
 
 /* Get the vertex's unique ID from the log */
 static uint bm_log_vert_id_get(BMLog *log, BMVert *v)
@@ -157,7 +159,11 @@ static BMFace *bm_log_face_from_id(BMLog *log, const uint id)
   return reinterpret_cast<BMFace *>(log->id_to_elem.lookup(id));
 }
 
-/************************ BMLogVert / BMLogFace ***********************/
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name BMLogVert / BMLogFace
+ * \{ */
 
 /* Get a vertex's paint-mask value
  *
@@ -222,7 +228,11 @@ static BMLogFace *bm_log_face_alloc(BMLog *log, BMFace *f)
   return lf;
 }
 
-/************************ Helpers for undo/redo ***********************/
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Helpers for Undo/Redo
+ * \{ */
 
 static void bm_log_verts_unmake(BMesh *bm, BMLog *log, const Map<uint, BMLogVert *, 0> &verts)
 {
@@ -329,8 +339,6 @@ static void bm_log_face_values_swap(BMLog *log, const Map<uint, BMLogFace *, 0> 
   }
 }
 
-/**********************************************************************/
-
 /* Assign unique IDs to all vertices and faces already in the BMesh */
 static void bm_log_assign_ids(BMesh *bm, BMLog *log)
 {
@@ -379,7 +387,11 @@ static void bm_log_entry_free(BMLogEntry *entry)
   BLI_assert(entry->face_pool.is_empty());
 }
 
-/***************************** Public API *****************************/
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Public API
+ * \{ */
 
 BMLog *BM_log_create(BMesh *bm)
 {
@@ -445,21 +457,21 @@ BMLog *BM_log_from_existing_entries_create(BMesh *bm, BMLogEntry *entry)
   }
 
   /* Let BMLog manage the entry list again */
-  log->entries.first = log->entries.last = entry;
+  log->entries.first_ = log->entries.last_ = entry;
 
   {
     while (entry->prev) {
       entry = entry->prev;
-      log->entries.first = entry;
+      log->entries.first_ = entry;
     }
-    entry = static_cast<BMLogEntry *>(log->entries.last);
+    entry = log->entries.last();
     while (entry->next) {
       entry = entry->next;
-      log->entries.last = entry;
+      log->entries.last_ = entry;
     }
   }
 
-  for (entry = static_cast<BMLogEntry *>(log->entries.first); entry; entry = entry->next) {
+  for (entry = log->entries.first(); entry; entry = entry->next) {
     entry->log = log;
 
     /* Take all used IDs */
@@ -613,7 +625,7 @@ void BM_log_redo(BMesh *bm, BMLog *log)
 
   if (!entry) {
     /* Currently at the beginning of the undo stack, move to first entry */
-    entry = static_cast<BMLogEntry *>(log->entries.first);
+    entry = log->entries.first();
   }
   else if (entry->next) {
     /* Move to next undo entry */
@@ -809,7 +821,11 @@ void BM_log_original_vert_data(BMLog *log, BMVert *v, const float **r_co, const 
   *r_no = lv->normal;
 }
 
-/************************ Debugging and Testing ***********************/
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Debugging and Testing
+ * \{ */
 
 #ifndef NDEBUG
 BMLogEntry *BM_log_current_entry(BMLog *log)
@@ -833,9 +849,7 @@ void BM_log_print(const BMLog *log, const char *description)
 
   printf("%s:\n", description);
   printf("    % 2d: [ initial ]%s\n", 0, (!log->current_entry) ? current : "");
-  for (entry = static_cast<const BMLogEntry *>(log->entries.first), i = 1; entry;
-       entry = entry->next, i++)
-  {
+  for (entry = log->entries.first(), i = 1; entry; entry = entry->next, i++) {
     printf("    % 2d: [%p]%s\n", i, entry, (entry == log->current_entry) ? current : "");
   }
 }
@@ -868,5 +882,7 @@ void BM_log_print_entry(BMesh *bm, BMLogEntry *entry)
   printf("}\n");
 }
 #endif
+
+/** \} */
 
 }  // namespace blender

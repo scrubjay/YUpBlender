@@ -12,21 +12,17 @@
  */
 
 #pragma once
-#pragma create_info
 
+#include "draw_shader_shared.hh"
 #include "eevee_defines.hh"
-#include "eevee_shadow_shared.hh"
-
 #include "eevee_shadow_page_ops.bsl.hh"
+#include "eevee_shadow_shared.hh"
 #include "eevee_shadow_tilemap_lib.bsl.hh"
-#include "gpu_shader_math_matrix_transform_lib.glsl"
+#include "gpu_shader_math_matrix_transform.bsl.hh"
 
 namespace eevee::shadow {
 
 struct TagUpdate {
-  [[legacy_info]] ShaderCreateInfo draw_view;
-  [[legacy_info]] ShaderCreateInfo draw_view_culling;
-
   [[push_constant]] int tilemap_count;
 
   [[storage(5, read)]] const ObjectBounds (&bounds_buf)[];

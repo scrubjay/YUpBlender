@@ -27,7 +27,7 @@ void Operation::evaluate()
 {
   this->evaluate_input_processors();
   this->execute();
-  this->compute_preview();
+  this->log_data();
   this->release_inputs();
   this->context().evaluate_operation_post();
 }
@@ -52,6 +52,11 @@ void Operation::free_results()
   for (Result &result : results_.values()) {
     result.free();
   }
+}
+
+Context &Operation::context() const
+{
+  return context_;
 }
 
 Domain Operation::compute_domain()
@@ -96,13 +101,13 @@ void Operation::evaluate_input_processors()
    * value of all inputs, so previous input processors for all inputs needs to be added and
    * evaluated first. */
 
-  for (const StringRef &identifier : results_mapped_to_inputs_.keys()) {
+  for (const std::string &identifier : results_mapped_to_inputs_.keys()) {
     SimpleOperation *conversion = ConversionOperation::construct_if_needed(
         this->context(), this->get_input(identifier), this->get_input_descriptor(identifier));
     this->add_and_evaluate_input_processor(identifier, conversion);
   }
 
-  for (const StringRef &identifier : results_mapped_to_inputs_.keys()) {
+  for (const std::string &identifier : results_mapped_to_inputs_.keys()) {
     SimpleOperation *realize_on_domain = RealizeOnDomainOperation::construct_if_needed(
         this->context(),
         this->get_input(identifier),
@@ -112,11 +117,11 @@ void Operation::evaluate_input_processors()
   }
 }
 
-void Operation::compute_preview() {};
+void Operation::log_data() {};
 
-void Operation::populate_result(StringRef identifier, Result result)
+void Operation::populate_result(StringRef identifier, const ResultType type)
 {
-  results_.add_new(identifier, result);
+  results_.add_new(identifier, this->context().create_result(type));
 }
 
 void Operation::declare_input_descriptor(StringRef identifier, InputDescriptor descriptor)
@@ -136,11 +141,6 @@ void Operation::allocate_default_remaining_outputs()
       result.allocate_invalid();
     }
   }
-}
-
-Context &Operation::context() const
-{
-  return context_;
 }
 
 void Operation::add_and_evaluate_input_processor(StringRef identifier, SimpleOperation *processor)

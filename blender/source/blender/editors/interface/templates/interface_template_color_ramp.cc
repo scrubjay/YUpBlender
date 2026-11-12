@@ -10,8 +10,8 @@
 #include "BKE_context.hh"
 #include "BKE_library.hh"
 
-#include "BLI_listbase.h"
-#include "BLI_rect.h"
+#include "BLI_listbase.hh"
+#include "BLI_rect.hh"
 #include "BLI_string_ref.hh"
 
 #include "BLT_translation.hh"
@@ -339,7 +339,7 @@ static void colorband_buttons_layout(Layout &layout,
       split = &layout.split(0.3f, false);
 
       row = &split->row(false);
-      bt = uiDefButS(block,
+      bt = uiDefButV(block,
                      ButtonType::Num,
                      "",
                      0,
@@ -363,7 +363,7 @@ static void colorband_buttons_layout(Layout &layout,
       Layout &subsplit = split->split(0.35f, false);
 
       row = &subsplit.row(false);
-      bt = uiDefButS(block,
+      bt = uiDefButV(block,
                      ButtonType::Num,
                      "",
                      0,
@@ -416,7 +416,7 @@ void template_color_ramp(Layout *layout,
   }
 
   const PointerRNA cptr = RNA_property_pointer_get(ptr, prop);
-  if (!cptr.data || !RNA_struct_is_a(cptr.type, RNA_ColorRamp)) {
+  if (!cptr || !RNA_struct_is_a(cptr.type, RNA_ColorRamp)) {
     return;
   }
 

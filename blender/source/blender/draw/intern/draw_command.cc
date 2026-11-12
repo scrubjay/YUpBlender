@@ -109,6 +109,9 @@ void ResourceBind::execute() const
     case ResourceBind::Type::IndexAsStorageBuf:
       GPU_indexbuf_bind_as_ssbo(is_reference ? *index_buf_ref : index_buf, slot);
       break;
+    case ResourceBind::Type::TopLevelAS:
+      tlas->bind(slot);
+      break;
   }
 }
 
@@ -352,6 +355,29 @@ void StencilSet::execute() const
   GPU_stencil_write_mask_set(write_mask);
   GPU_stencil_compare_mask_set(compare_mask);
   GPU_stencil_reference_set(reference);
+}
+
+void TextureCopy::execute() const
+{
+  gpu::Texture *exec_src = src_is_ref ? *src_ref : src;
+  gpu::Texture *exec_dst = dst_is_ref ? *dst_ref : dst;
+
+  if (!GPU_texture_is_view(exec_src) && !GPU_texture_is_view(exec_dst)) {
+    GPU_texture_copy(exec_dst, exec_src);
+    return;
+  }
+
+  /* WORKAROUND: There are some issues with copies involving texture views.
+   * Needed for the EEVEE Prepass depth copy. */
+  /* TODO(@pragma37): This path should be removed in 5.3 once #158607 lands. */
+  BLI_assert(GPU_texture_has_depth_format(exec_src));
+  gpu::FrameBuffer *src_fb = GPU_framebuffer_create("TextureCopy-tmp-src");
+  gpu::FrameBuffer *dst_fb = GPU_framebuffer_create("TextureCopy-tmp-dst");
+  GPU_framebuffer_ensure_config(&src_fb, {GPU_ATTACHMENT_TEXTURE(exec_src)});
+  GPU_framebuffer_ensure_config(&dst_fb, {GPU_ATTACHMENT_TEXTURE(exec_dst)});
+  GPU_framebuffer_blit(src_fb, 0, dst_fb, 0, GPUFrameBufferBits::GPU_DEPTH_BIT);
+  GPU_framebuffer_free(src_fb);
+  GPU_framebuffer_free(dst_fb);
 }
 
 /** \} */
@@ -689,6 +715,11 @@ std::string StencilSet::serialize() const
   return ss.str();
 }
 
+std::string TextureCopy::serialize() const
+{
+  return ".texture_copy()";
+}
+
 /** \} */
 
 /* -------------------------------------------------------------------- */
@@ -720,7 +751,7 @@ void DrawCommandBuf::finalize_commands(Vector<Header, 0> &headers,
     GPU_batch_draw_parameter_get(
         cmd.batch, &batch_vert_len, &batch_vert_first, &batch_base_index, &batch_inst_len);
     /* Instancing attributes are not supported using the new pipeline since we use the base
-     * instance to set the correct resource_id. Workaround is a storage_buf + gl_InstanceID. */
+     * instance to set the correct resource_id. Workaround is a storage_buf + gpu_InstanceIndex. */
     BLI_assert(batch_inst_len == 1);
 
     if (cmd.vertex_len == uint(-1)) {
@@ -793,7 +824,7 @@ void DrawMultiBuf::generate_commands(Vector<Header, 0> & /*headers*/,
                                                          group.desc.vertex_first;
     group.base_index = batch_base_index;
     /* Instancing attributes are not supported using the new pipeline since we use the base
-     * instance to set the correct resource_id. Workaround is a storage_buf + gl_InstanceID. */
+     * instance to set the correct resource_id. Workaround is a storage_buf + gpu_InstanceIndex. */
     BLI_assert(batch_inst_len == 1);
     UNUSED_VARS_NDEBUG(batch_inst_len);
 

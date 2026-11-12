@@ -6,7 +6,6 @@
 
 #include "usd_armature_utils.hh"
 #include "usd_blend_shape_utils.hh"
-#include "usd_hash_types.hh"
 
 #include <pxr/usd/usdGeom/primvarsAPI.h>
 #include <pxr/usd/usdSkel/animation.h>
@@ -33,11 +32,12 @@
 #include "BKE_report.hh"
 
 #include "BLI_linear_allocator.hh"
-#include "BLI_listbase.h"
+#include "BLI_listbase.hh"
 #include "BLI_map.hh"
-#include "BLI_math_vector.h"
+#include "BLI_math_vector_c.hh"
 #include "BLI_set.hh"
 #include "BLI_span.hh"
+#include "BLI_string.hh"
 #include "BLI_vector.hh"
 
 #include "ED_armature.hh"
@@ -90,7 +90,8 @@ void import_skeleton_curves(Main *bmain,
                             Object *arm_obj,
                             const pxr::UsdSkelSkeletonQuery &skel_query,
                             const Map<pxr::TfToken, std::string> &joint_to_bone_map,
-                            ReportList *reports)
+                            ReportList *reports,
+                            Span<pxr::GfMatrix4d> bone_basis_rotations = {})
 {
   using namespace blender::io::usd;
 
@@ -244,8 +245,13 @@ void import_skeleton_curves(Main *bmain,
     }
 
     for (int i = 0; i < joint_local_xforms.size(); ++i) {
-      const pxr::GfMatrix4d bone_xform = joint_local_xforms.AsConst()[i] *
-                                         joint_local_bind_xforms[i].GetInverse();
+      pxr::GfMatrix4d bone_xform = joint_local_xforms.AsConst()[i] *
+                                   joint_local_bind_xforms[i].GetInverse();
+
+      if (!bone_basis_rotations.is_empty() && i < bone_basis_rotations.size()) {
+        const pxr::GfMatrix4d &r = bone_basis_rotations[i];
+        bone_xform = r * bone_xform * r.GetInverse();
+      }
 
       pxr::GfVec3f t;
       pxr::GfQuatf qrot;
@@ -526,7 +532,7 @@ void import_blendshapes(Main *bmain,
        * key block point. */
       int a = 0;
       for (const int point : point_indices.AsConst()) {
-        if (point < 0 || point > kb->totelem) {
+        if (point < 0 || point >= kb->totelem) {
           CLOG_WARN(&LOG,
                     "Out of bounds point index %d for blendshape %s",
                     point,
@@ -639,7 +645,8 @@ void import_blendshapes(Main *bmain,
     }
 
     /* Create the curve for this shape key. */
-    const std::string rna_path = "key_blocks[\"" + blendshape_name.GetString() + "\"].value";
+    const std::string rna_path = "key_blocks[\"" + BLI_str_escape(blendshape_name.GetString()) +
+                                 "\"].value";
     FCurve *fcu = create_fcurve(channelbag, {rna_path, 0}, times.size());
     curves.append(fcu);
   }
@@ -688,7 +695,8 @@ static void set_rest_pose(Main *bmain,
                           const pxr::VtTokenArray &joint_order,
                           const Map<pxr::TfToken, std::string> &joint_to_bone_map,
                           const pxr::UsdSkelTopology &skel_topology,
-                          const pxr::UsdSkelSkeletonQuery &skel_query)
+                          const pxr::UsdSkelSkeletonQuery &skel_query,
+                          Span<pxr::GfMatrix4d> bone_basis_rotations = {})
 {
   if (!skel_query.HasRestPose()) {
     return;
@@ -698,8 +706,8 @@ static void set_rest_pose(Main *bmain,
   if (skel_query.ComputeJointLocalTransforms(&rest_xforms, pxr::UsdTimeCode::Default(), true)) {
     BKE_pose_ensure(bmain, arm_obj, arm, false);
 
-    int64_t i = 0;
-    for (const pxr::TfToken &joint : joint_order) {
+    for (int i = 0; i < joint_order.size(); ++i) {
+      const pxr::TfToken &joint = joint_order[i];
       const std::string *name = joint_to_bone_map.lookup_ptr(joint);
       if (name == nullptr) {
         /* This joint doesn't correspond to any bone we created. Skip. */
@@ -707,6 +715,9 @@ static void set_rest_pose(Main *bmain,
       }
 
       bPoseChannel *pchan = BKE_pose_channel_find_name(arm_obj->pose, name->c_str());
+      if (!pchan) {
+        continue;
+      }
 
       pxr::GfMatrix4d xf = rest_xforms.AsConst()[i];
       pxr::GfMatrix4d bind_xf = bind_xforms[i];
@@ -718,10 +729,13 @@ static void set_rest_pose(Main *bmain,
 
       xf = xf * bind_xf.GetInverse();
 
+      if (!bone_basis_rotations.is_empty() && i < bone_basis_rotations.size()) {
+        const pxr::GfMatrix4d &r = bone_basis_rotations[i];
+        xf = r * xf * r.GetInverse();
+      }
+
       pxr::GfMatrix4f mat(xf);
       BKE_pchan_apply_mat4(pchan, (float (*)[4])mat.data(), false);
-
-      i++;
     }
   }
 }
@@ -839,9 +853,126 @@ void import_skeleton(Main *bmain,
     return;
   }
 
+  /* Set bone parenting. In addition, scale bones to account
+   * for separation between parents and children, so that the
+   * bone size is in proportion with the overall skeleton hierarchy.
+   * USD skeletons are composed of joints which we imperfectly
+   * represent as bones. */
+
+  /* This will record the child bone indices per parent bone,
+   * to simplify accessing children when computing lengths and orientations. */
+  Vector<Vector<int>> child_bones(num_joints);
+
+  for (size_t i = 0; i < num_joints; ++i) {
+    const int parent_idx = skel_topology.GetParent(i);
+    if (parent_idx < 0) {
+      continue;
+    }
+    if (parent_idx >= edit_bones.size()) {
+      CLOG_WARN(&LOG,
+                "Out of bounds parent index for bone %s on skeleton %s",
+                pxr::SdfPath(joint_order[i]).GetAsString().c_str(),
+                skel.GetPath().GetAsString().c_str());
+      continue;
+    }
+
+    child_bones[parent_idx].append(i);
+    if (edit_bones[i] && edit_bones[parent_idx]) {
+      edit_bones[i]->parent = edit_bones[parent_idx];
+    }
+  }
+
+  /* Check if this USD skeleton was authored by Blender with custom bone lengths. */
+  const pxr::UsdGeomPrimvarsAPI pv_api = pxr::UsdGeomPrimvarsAPI(skel.GetPrim());
+  const pxr::UsdGeomPrimvar pv_lengths = pv_api.GetPrimvar(BlenderBoneLengths);
+  const bool is_blender_authored = pv_lengths.HasValue();
+
+  /* Compute basis rotation per joint to align Blender bone's longitudinal +Y axis
+   * with the joint chain (parent to child). Blender exported skeletons already use
+   * Blender's native bone convention, so they use identity. */
+  Vector<pxr::GfMatrix4d> bone_basis_rotations(num_joints, pxr::GfMatrix4d(1.0));
+
+  if (!is_blender_authored) {
+    /* Candidate orthonormal rotations mapping Blender bone longitudinal axis (+Y)
+     * to various primary joint axes (+X, -X, +Z, -Z, +Y, -Y). All have determinant +1.0. */
+    const pxr::GfMatrix4d candidate_rotations[6] = {
+        /* +X: (0, 1, 0) -> (1, 0, 0) */
+        pxr::GfMatrix4d(0.0, -1.0, 0.0, 0.0,
+                        1.0,  0.0, 0.0, 0.0,
+                        0.0,  0.0, 1.0, 0.0,
+                        0.0,  0.0, 0.0, 1.0),
+        /* -X: (0, 1, 0) -> (-1, 0, 0) */
+        pxr::GfMatrix4d(0.0,  1.0, 0.0, 0.0,
+                       -1.0,  0.0, 0.0, 0.0,
+                        0.0,  0.0, 1.0, 0.0,
+                        0.0,  0.0, 0.0, 1.0),
+        /* +Z: (0, 1, 0) -> (0, 0, 1) */
+        pxr::GfMatrix4d(1.0,  0.0, 0.0, 0.0,
+                        0.0,  0.0, 1.0, 0.0,
+                        0.0, -1.0, 0.0, 0.0,
+                        0.0,  0.0, 0.0, 1.0),
+        /* -Z: (0, 1, 0) -> (0, 0, -1) */
+        pxr::GfMatrix4d(1.0,  0.0, 0.0, 0.0,
+                        0.0,  0.0, -1.0, 0.0,
+                        0.0,  1.0,  0.0, 0.0,
+                        0.0,  0.0,  0.0, 1.0),
+        /* +Y: (0, 1, 0) -> (0, 1, 0) (Identity) */
+        pxr::GfMatrix4d(1.0),
+        /* -Y: (0, 1, 0) -> (0, -1, 0) */
+        pxr::GfMatrix4d(1.0,  0.0,  0.0, 0.0,
+                        0.0, -1.0,  0.0, 0.0,
+                        0.0,  0.0, -1.0, 0.0,
+                        0.0,  0.0,  0.0, 1.0),
+    };
+
+    /* First pass: For joints with children, pick the candidate rotation that best aligns
+     * Blender's +Y axis with the direction from parent to average child position. */
+    for (size_t i = 0; i < num_joints; ++i) {
+      if (child_bones[i].is_empty()) {
+        continue;
+      }
+
+      const pxr::GfVec3d parent_head = bind_xforms[i].ExtractTranslation();
+      pxr::GfVec3d avg_child_head(0.0);
+      for (int child_idx : child_bones[i]) {
+        avg_child_head += bind_xforms[child_idx].ExtractTranslation();
+      }
+      avg_child_head /= static_cast<double>(child_bones[i].size());
+
+      pxr::GfVec3d bone_dir = avg_child_head - parent_head;
+      if (bone_dir.GetLengthSq() > 1e-10) {
+        bone_dir.Normalize();
+        pxr::GfMatrix4d best_r = candidate_rotations[0];
+        double best_dot = -2.0;
+        for (const pxr::GfMatrix4d &r : candidate_rotations) {
+          pxr::GfVec3d y_dir = (r * bind_xforms[i]).TransformDir(pxr::GfVec3d(0.0, 1.0, 0.0));
+          y_dir.Normalize();
+          const double dot = pxr::GfDot(y_dir, bone_dir);
+          if (dot > best_dot) {
+            best_dot = dot;
+            best_r = r;
+          }
+        }
+        if (best_dot > 0.1) {
+          bone_basis_rotations[i] = best_r;
+        }
+      }
+    }
+
+    /* Second pass: Terminal (leaf) bones inherit basis rotation from their parent. */
+    for (size_t i = 0; i < num_joints; ++i) {
+      if (child_bones[i].is_empty()) {
+        const int parent_idx = skel_topology.GetParent(i);
+        if (parent_idx >= 0 && parent_idx < num_joints) {
+          bone_basis_rotations[i] = bone_basis_rotations[parent_idx];
+        }
+      }
+    }
+  }
+
   /* Check if any bone matrices have negative determinants,
    * indicating negative scales, possibly due to mirroring
-   * operations.  Such matrices can't be properly converted
+   * operations. Such matrices can't be properly converted
    * to Blender's axis/roll bone representation (see
    * https://projects.blender.org/blender/blender/issues/82930).
    * If we detect such matrices, we will flag an error and won't
@@ -859,7 +990,8 @@ void import_skeleton(Main *bmain,
       continue;
     }
 
-    pxr::GfMatrix4f mat(bind_xforms.AsConst()[i]);
+    const pxr::GfMatrix4d bind_mat = bone_basis_rotations[i] * bind_xforms.AsConst()[i];
+    pxr::GfMatrix4f mat(bind_mat);
 
     float mat4[4][4];
     mat.Get(mat4);
@@ -890,38 +1022,7 @@ void import_skeleton(Main *bmain,
         skel.GetPath().GetAsString().c_str());
   }
 
-  /* Set bone parenting.  In addition, scale bones to account
-   * for separation between parents and children, so that the
-   * bone size is in proportion with the overall skeleton hierarchy.
-   * USD skeletons are composed of joints which we imperfectly
-   * represent as bones. */
-
-  /* This will record the child bone indices per parent bone,
-   * to simplify accessing children when computing lengths. */
-  Vector<Vector<int>> child_bones(num_joints);
-
-  for (size_t i = 0; i < num_joints; ++i) {
-    const int parent_idx = skel_topology.GetParent(i);
-    if (parent_idx < 0) {
-      continue;
-    }
-    if (parent_idx >= edit_bones.size()) {
-      CLOG_WARN(&LOG,
-                "Out of bounds parent index for bone %s on skeleton %s",
-                pxr::SdfPath(joint_order[i]).GetAsString().c_str(),
-                skel.GetPath().GetAsString().c_str());
-      continue;
-    }
-
-    child_bones[parent_idx].append(i);
-    if (edit_bones[i] && edit_bones[parent_idx]) {
-      edit_bones[i]->parent = edit_bones[parent_idx];
-    }
-  }
-
   /* Use our custom bone length data if possible, otherwise fall back to estimated lengths. */
-  const pxr::UsdGeomPrimvarsAPI pv_api = pxr::UsdGeomPrimvarsAPI(skel.GetPrim());
-  const pxr::UsdGeomPrimvar pv_lengths = pv_api.GetPrimvar(BlenderBoneLengths);
   if (pv_lengths.HasValue()) {
     pxr::VtArray<float> blender_bone_lengths;
     pv_lengths.ComputeFlattened(&blender_bone_lengths);
@@ -1005,11 +1106,19 @@ void import_skeleton(Main *bmain,
   ED_armature_from_edit(bmain, arm);
   ED_armature_edit_free(arm);
 
-  set_rest_pose(
-      bmain, arm_obj, arm, bind_xforms, joint_order, joint_to_bone_map, skel_topology, skel_query);
+  set_rest_pose(bmain,
+                arm_obj,
+                arm,
+                bind_xforms,
+                joint_order,
+                joint_to_bone_map,
+                skel_topology,
+                skel_query,
+                bone_basis_rotations);
 
   if (import_anim && valid_skeleton) {
-    import_skeleton_curves(bmain, arm_obj, skel_query, joint_to_bone_map, reports);
+    import_skeleton_curves(
+        bmain, arm_obj, skel_query, joint_to_bone_map, reports, bone_basis_rotations);
   }
 }
 
@@ -1112,7 +1221,7 @@ void import_mesh_skel_bindings(Object *mesh_obj, const pxr::UsdPrim &prim, Repor
 
   /* Sanity check: make sure we have the expected number of values for the interpolation type. */
   if (interp == pxr::UsdGeomTokens->vertex &&
-      joint_weights.size() != mesh->verts_num * joint_weights_elem_size)
+      joint_weights.size() != int64_t(mesh->verts_num) * joint_weights_elem_size)
   {
     BKE_reportf(reports,
                 RPT_WARNING,
@@ -1176,15 +1285,15 @@ void import_mesh_skel_bindings(Object *mesh_obj, const pxr::UsdPrim &prim, Repor
   }
 
   /* Set the deform group verts and weights. */
-  for (int i = 0; i < mesh->verts_num; ++i) {
+  for (int64_t i = 0; i < mesh->verts_num; ++i) {
     /* Offset into the weights array, which is
      * always 0 for constant interpolation. */
-    int offset = 0;
+    int64_t offset = 0;
     if (interp == pxr::UsdGeomTokens->vertex) {
       offset = i * joint_weights_elem_size;
     }
     for (int j = 0; j < joint_weights_elem_size; ++j) {
-      const int k = offset + j;
+      const int64_t k = offset + j;
       const float w = joint_weights.AsConst()[k];
       if (w < .00001) {
         /* No deform group if zero weight. */

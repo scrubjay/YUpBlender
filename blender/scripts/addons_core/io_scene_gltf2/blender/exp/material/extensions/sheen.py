@@ -7,16 +7,16 @@ from .....io.com.gltf2_io_extensions import Extension
 from ...material import texture_info as gltf2_blender_gather_texture_info
 from ..search_node_tree import \
     has_image_node_from_socket, \
-    get_socket, \
     get_factor_from_socket
 
 
 def export_sheen(bmat, export_settings):
+    export_settings['current_texture_transform'] = {}
     sheen_extension = {}
 
-    sheenTint_socket = get_socket(bmat.get_used_material().node_tree, "Sheen Tint")
-    sheenRoughness_socket = get_socket(bmat.get_used_material().node_tree, "Sheen Roughness")
-    sheen_socket = get_socket(bmat.get_used_material().node_tree, "Sheen Weight")
+    sheenTint_socket = bmat.get_socket("Sheen Tint")
+    sheenRoughness_socket = bmat.get_socket("Sheen Roughness")
+    sheen_socket = bmat.get_socket("Sheen Weight")
 
     if sheenTint_socket.socket is None or sheenRoughness_socket.socket is None or sheen_socket.socket is None:
         return None, {}, {}
@@ -41,7 +41,7 @@ def export_sheen(bmat, export_settings):
 
         # Storing path for KHR_animation_pointer
         path_ = {}
-        path_['length'] = 1
+        path_['length'] = 3
         path_['path'] = "/materials/XXX/extensions/KHR_materials_sheen/sheenColorFactor"
         export_settings['current_paths']["node_tree." + sheenTint_socket.socket.path_from_id() +
                                          ".default_value"] = path_
@@ -57,7 +57,7 @@ def export_sheen(bmat, export_settings):
         # Storing path for KHR_animation_pointer
         if path is not None:
             path_ = {}
-            path_['length'] = 1
+            path_['length'] = 3
             path_['path'] = "/materials/XXX/extensions/KHR_materials_sheen/sheenColorFactor"
             export_settings['current_paths'][path] = path_
 
@@ -76,7 +76,13 @@ def export_sheen(bmat, export_settings):
                     path_['path'] = export_settings['current_texture_transform'][k]['path'].replace(
                         "YYY", "extensions/KHR_materials_sheen/sheenColorTexture/extensions")
                     path_['vector_type'] = export_settings['current_texture_transform'][k]['vector_type']
-                    export_settings['current_paths'][k] = path_
+                    if k in export_settings['current_paths']:
+                        if 'additional' not in export_settings['current_paths'][k]:
+                            export_settings['current_paths'][k]['additional'] = []
+                        if path_['path'] != export_settings['current_paths'][k]['path']:
+                            export_settings['current_paths'][k]['additional'].append(path_['path'])
+                    else:
+                        export_settings['current_paths'][k] = path_
 
             export_settings['current_texture_transform'] = {}
 
@@ -110,7 +116,7 @@ def export_sheen(bmat, export_settings):
         # Texture
         if has_image_node_from_socket(sheenRoughness_socket, export_settings):
             original_sheenRoughness_texture, uvmap_info, udim_info, _ = gltf2_blender_gather_texture_info.gather_texture_info(
-                sheenRoughness_socket, (sheenRoughness_socket,), export_settings, )
+                sheenRoughness_socket, (sheenRoughness_socket,), export_settings, kind='DATA')
             sheen_extension['sheenRoughnessTexture'] = original_sheenRoughness_texture
             uvmap_infos.update({'sheenRoughnessTexture': uvmap_info})
             udim_infos.update({'sheenRoughnessTexture': udim_info} if len(udim_info) > 0 else {})
@@ -122,7 +128,13 @@ def export_sheen(bmat, export_settings):
                     path_['path'] = export_settings['current_texture_transform'][k]['path'].replace(
                         "YYY", "extensions/KHR_materials_sheen/sheenRoughnessTexture/extensions")
                     path_['vector_type'] = export_settings['current_texture_transform'][k]['vector_type']
-                    export_settings['current_paths'][k] = path_
+                    if k in export_settings['current_paths']:
+                        if 'additional' not in export_settings['current_paths'][k]:
+                            export_settings['current_paths'][k]['additional'] = []
+                        if path_['path'] != export_settings['current_paths'][k]['path']:
+                            export_settings['current_paths'][k]['additional'].append(path_['path'])
+                    else:
+                        export_settings['current_paths'][k] = path_
 
             export_settings['current_texture_transform'] = {}
 

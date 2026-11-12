@@ -6,14 +6,14 @@
 
 #include "MEM_guardedalloc.h"
 
-#include "BLI_array_store.h"
-#include "BLI_array_utils.h"
-#include "BLI_listbase.h"
-#include "BLI_rand.h"
+#include "BLI_array_store.hh"
+#include "BLI_array_utils_c.hh"
+#include "BLI_listbase.hh"
+#include "BLI_rand_c.hh"
 #include "BLI_resource_strings.h"
-#include "BLI_string.h"
-#include "BLI_sys_types.h"
-#include "BLI_utildefines.h"
+#include "BLI_string.hh"
+#include "BLI_sys_types.hh"
+#include "BLI_utildefines.hh"
 
 namespace blender {
 
@@ -23,8 +23,8 @@ namespace blender {
 /* Print time. */
 // #define DEBUG_TIME
 #ifdef DEBUG_TIME
-#  include "BLI_time.h"
-#  include "BLI_time_utildefines.h"
+#  include "BLI_time.hh"
+#  include "BLI_time_utildefines.hh"
 #endif
 
 /* -------------------------------------------------------------------- */
@@ -70,12 +70,12 @@ static TestChunk *testchunk_list_add_copydata(ListBaseT<TestChunk> *lb, const vo
 
 static void testchunk_list_free(ListBaseT<TestChunk> *lb)
 {
-  for (TestChunk *tc = static_cast<TestChunk *>(lb->first), *tb_next; tc; tc = tb_next) {
+  for (TestChunk *tc = lb->first(), *tb_next; tc; tc = tb_next) {
     tb_next = tc->next;
     MEM_delete_void(const_cast<void *>(tc->data));
     MEM_delete(tc);
   }
-  BLI_listbase_clear(lb);
+  lb->clear_no_delete();
 }
 
 #if 0
@@ -250,9 +250,7 @@ static void testbuffer_list_data_randomize(ListBaseT<TestBuffer> *lb, uint rando
 
 static void testbuffer_list_store_populate(BArrayStore *bs, ListBaseT<TestBuffer> *lb)
 {
-  for (TestBuffer *tb = static_cast<TestBuffer *>(lb->first), *tb_prev = nullptr; tb;
-       tb_prev = tb, tb = tb->next)
-  {
+  for (TestBuffer *tb = lb->first(), *tb_prev = nullptr; tb; tb_prev = tb, tb = tb->next) {
     tb->state = BLI_array_store_state_add(
         bs, tb->data, tb->data_len, (tb_prev ? tb_prev->state : nullptr));
   }
@@ -268,12 +266,12 @@ static void testbuffer_list_store_clear(BArrayStore *bs, ListBaseT<TestBuffer> *
 
 static void testbuffer_list_free(ListBaseT<TestBuffer> *lb)
 {
-  for (TestBuffer *tb = static_cast<TestBuffer *>(lb->first), *tb_next; tb; tb = tb_next) {
+  for (TestBuffer *tb = lb->first(), *tb_next; tb; tb = tb_next) {
     tb_next = tb->next;
     MEM_delete_void(const_cast<void *>(tb->data));
     MEM_delete(tb);
   }
-  BLI_listbase_clear(lb);
+  lb->clear_no_delete();
 }
 
 static void testbuffer_run_tests_single(BArrayStore *bs, ListBaseT<TestBuffer> *lb)
@@ -450,7 +448,7 @@ static void plain_text_helper(const char *words,
 {
 
   ListBaseT<TestBuffer> lb;
-  BLI_listbase_clear(&lb);
+  lb.clear_no_delete();
 
   for (int i = 0, i_prev = 0; i < words_len; i++) {
     if (ELEM(words[i], word_delim, '\0')) {
@@ -600,11 +598,11 @@ static void testbuffer_list_state_random_data(ListBaseT<TestBuffer> *lb,
   size_t data_len = rand_range_i(rng, data_min_len, data_max_len + stride, stride);
   char *data = MEM_new_array_uninitialized<char>(data_len, __func__);
 
-  if (lb->last == nullptr) {
+  if (lb->last_ == nullptr) {
     BLI_rng_get_char_n(rng, data, data_len);
   }
   else {
-    TestBuffer *tb_last = static_cast<TestBuffer *>(lb->last);
+    TestBuffer *tb_last = static_cast<TestBuffer *>(lb->last_);
     if (tb_last->data_len >= data_len) {
       memcpy(data, tb_last->data, data_len);
     }
@@ -679,7 +677,7 @@ static void random_data_mutate_helper(const int items_size_min,
 {
 
   ListBaseT<TestBuffer> lb;
-  BLI_listbase_clear(&lb);
+  lb.clear_no_delete();
 
   const size_t data_min_len = items_size_min * stride;
   const size_t data_max_len = items_size_max * stride;
@@ -749,12 +747,12 @@ static void random_chunk_mutate_helper(const int chunks_per_buffer,
   /* generate random chunks */
 
   ListBaseT<TestChunk> random_chunks;
-  BLI_listbase_clear(&random_chunks);
+  random_chunks.clear_no_delete();
   random_chunk_generate(&random_chunks, chunks_per_buffer, stride, chunk_count, random_seed);
   TestChunk **chunks_array = MEM_new_array_uninitialized<TestChunk *>(size_t(chunks_per_buffer),
                                                                       __func__);
   {
-    TestChunk *tc = static_cast<TestChunk *>(random_chunks.first);
+    TestChunk *tc = random_chunks.first();
     for (int i = 0; i < chunks_per_buffer; i++, tc = tc->next) {
       chunks_array[i] = tc;
     }
@@ -762,7 +760,7 @@ static void random_chunk_mutate_helper(const int chunks_per_buffer,
 
   /* add and re-order each time */
   ListBaseT<TestBuffer> lb;
-  BLI_listbase_clear(&lb);
+  lb.clear_no_delete();
 
   {
     RNG *rng = BLI_rng_new(random_seed);
@@ -1115,7 +1113,7 @@ static void *file_read_binary_as_mem(const char *filepath, size_t pad_bytes, siz
 TEST(array_store, PlainTextFiles)
 {
   ListBaseT<TestBuffer> lb;
-  BLI_listbase_clear(&lb);
+  lb.clear_no_delete();
   BArrayStore *bs = BLI_array_store_create(1, 128);
 
   for (int i = 0; i < 629; i++) {
@@ -1152,8 +1150,9 @@ TEST(array_store, PlainTextFiles)
   testbuffer_list_free(&lb);
   BLI_array_store_destroy(bs);
 }
-#endif
 
 /** \} */
+
+#endif
 
 }  // namespace blender

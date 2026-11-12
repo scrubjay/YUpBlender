@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup nodes
+ */
+
 #include <fmt/format.h>
 
 #include "NOD_geometry_nodes_closure_eval.hh"
@@ -21,7 +25,7 @@
 
 #include "FN_lazy_function_execute.hh"
 
-#include "BLI_string_utf8_symbols.h"
+#include "BLI_string_utf8_symbols.hh"
 
 namespace blender::nodes {
 
@@ -273,7 +277,7 @@ class LazyFunctionForClosureZone : public LazyFunction {
                                         std::move(captured_values))};
 
     params.set_output(zone_info_.indices.outputs.main[0],
-                      bke::SocketValueVariant::From(std::move(closure)));
+                      bke::SocketValueVariant::from(std::move(closure)));
   }
 };
 
@@ -317,9 +321,7 @@ class LazyFunctionForEvaluateClosureNode : public LazyFunction {
           outputs_.append_and_get_index_as(bsocket.name, CPPType::get<bke::SocketValueVariant>()));
       indices_.inputs.output_usages.append(
           inputs_.append_and_get_index_as("Usage", CPPType::get<bool>(), lf::ValueUsage::Maybe));
-      if (bke::node_tree_reference_lifetimes::can_contain_referenced_data(
-              eNodeSocketDatatype(bsocket.type)))
-      {
+      if (bke::node_tree_reference_lifetimes::can_contain_referenced_data(bsocket.type)) {
         const int input_i = inputs_.append_and_get_index_as(
             "Reference Set",
             CPPType::get<bke::GeometryNodesReferenceSet>(),
@@ -449,9 +451,7 @@ class LazyFunctionForEvaluateClosureNode : public LazyFunction {
       const bke::bNodeSocketType *item_type = bke::node_socket_type_find_static(item.socket_type);
       if (const std::optional<int> i = signature.find_input_index(item.name)) {
         const ClosureSignature::Item &closure_item = signature.inputs[*i];
-        if (!btree_.typeinfo->validate_link(eNodeSocketDatatype(item.socket_type),
-                                            eNodeSocketDatatype(closure_item.type->type)))
-        {
+        if (!btree_.typeinfo->validate_link(item.socket_type, closure_item.type->type)) {
           tree_logger->node_warnings.append(
               *tree_logger->allocator,
               {bnode_.identifier,
@@ -494,9 +494,7 @@ class LazyFunctionForEvaluateClosureNode : public LazyFunction {
       const bke::bNodeSocketType *item_type = bke::node_socket_type_find_static(item.socket_type);
       if (const std::optional<int> i = signature.find_output_index(item.name)) {
         const ClosureSignature::Item &closure_item = signature.outputs[*i];
-        if (!btree_.typeinfo->validate_link(eNodeSocketDatatype(closure_item.type->type),
-                                            eNodeSocketDatatype(item.socket_type)))
-        {
+        if (!btree_.typeinfo->validate_link(closure_item.type->type, item.socket_type)) {
           tree_logger->node_warnings.append(
               *tree_logger->allocator,
               {bnode_.identifier,
@@ -823,9 +821,9 @@ void evaluate_closure_eagerly(const Closure &closure, ClosureEagerEvalParams &pa
   for (const int main_input_i : indices.inputs.main.index_range()) {
     const int lf_input_i = indices.inputs.main[main_input_i];
     if (!lf_input_values[lf_input_i]) {
-      bke::SocketValueVariant &value = scope.construct<bke::SocketValueVariant>(
+      auto value = allocator.construct<bke::SocketValueVariant>(
           closure.default_input_value(main_input_i));
-      lf_input_values[lf_input_i] = &value;
+      lf_input_values[lf_input_i] = value.release();
     }
     lf_output_values[indices.outputs.input_usages[main_input_i]] = allocator.allocate<bool>();
   }
@@ -840,8 +838,8 @@ void evaluate_closure_eagerly(const Closure &closure, ClosureEagerEvalParams &pa
   /** Set output data reference sets. */
   for (auto &&[main_output_i, lf_input_i] : indices.inputs.output_data_reference_sets.items()) {
     /* TODO: Propagate all attributes or let the caller decide. */
-    auto *value = &scope.construct<bke::GeometryNodesReferenceSet>();
-    lf_input_values[lf_input_i] = {value};
+    auto value = allocator.construct<bke::GeometryNodesReferenceSet>();
+    lf_input_values[lf_input_i] = {value.release()};
   }
   /** Set main outputs. */
   for (const int main_output_i : indices.outputs.main.index_range()) {

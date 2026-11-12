@@ -252,7 +252,7 @@ static void sync_smoke_volume(blender::Scene &b_scene,
     mesh_texture_space(b_mesh, loc, size);
 
     Attribute *attr = volume->attributes.add(ATTR_STD_GENERATED_TRANSFORM);
-    Transform *tfm = attr->data_transform_for_write();
+    Transform *tfm = attr->data_for_write<Transform>();
     *tfm = transform_translate(-loc) * transform_scale(size);
   }
 }
@@ -339,50 +339,39 @@ static void sync_volume_object(blender::Main &b_data,
   for (const int grid_index : blender::IndexRange(BKE_volume_num_grids(&b_volume))) {
     const blender::bke::VolumeGridData &b_grid = *BKE_volume_grid_get(&b_volume, grid_index);
     const ustring name = ustring(b_grid.name());
-    AttributeStandard std = ATTR_STD_NONE;
+    AttributeStandard std = Attribute::name_volume_standard(name);
 
-    if (name == Attribute::standard_name(ATTR_STD_VOLUME_DENSITY)) {
-      std = ATTR_STD_VOLUME_DENSITY;
-    }
-    else if (name == Attribute::standard_name(ATTR_STD_VOLUME_COLOR)) {
-      std = ATTR_STD_VOLUME_COLOR;
-    }
-    else if (name == Attribute::standard_name(ATTR_STD_VOLUME_FLAME)) {
-      std = ATTR_STD_VOLUME_FLAME;
-    }
-    else if (name == Attribute::standard_name(ATTR_STD_VOLUME_HEAT)) {
-      std = ATTR_STD_VOLUME_HEAT;
-    }
-    else if (name == Attribute::standard_name(ATTR_STD_VOLUME_TEMPERATURE)) {
-      std = ATTR_STD_VOLUME_TEMPERATURE;
-    }
-    else if (name == Attribute::standard_name(ATTR_STD_VOLUME_VELOCITY) ||
-             name == b_volume.velocity_grid)
-    {
-      std = ATTR_STD_VOLUME_VELOCITY;
-    }
-    else if (name == Attribute::standard_name(ATTR_STD_VOLUME_VELOCITY_X) ||
-             name == b_volume.runtime->velocity_x_grid)
-    {
-      std = ATTR_STD_VOLUME_VELOCITY_X;
-    }
-    else if (name == Attribute::standard_name(ATTR_STD_VOLUME_VELOCITY_Y) ||
-             name == b_volume.runtime->velocity_y_grid)
-    {
-      std = ATTR_STD_VOLUME_VELOCITY_Y;
-    }
-    else if (name == Attribute::standard_name(ATTR_STD_VOLUME_VELOCITY_Z) ||
-             name == b_volume.runtime->velocity_z_grid)
-    {
-      std = ATTR_STD_VOLUME_VELOCITY_Z;
+    if (std == ATTR_STD_NONE) {
+      /* Velocity grid with custom name. */
+      if (name == b_volume.velocity_grid) {
+        std = ATTR_STD_VOLUME_VELOCITY;
+      }
+      else if (name == b_volume.runtime->velocity_x_grid) {
+        std = ATTR_STD_VOLUME_VELOCITY_X;
+      }
+      else if (name == b_volume.runtime->velocity_y_grid) {
+        std = ATTR_STD_VOLUME_VELOCITY_Y;
+      }
+      else if (name == b_volume.runtime->velocity_z_grid) {
+        std = ATTR_STD_VOLUME_VELOCITY_Z;
+      }
     }
 
-    if ((std != ATTR_STD_NONE && volume->need_attribute(scene, std)) ||
-        volume->need_attribute(scene, name))
-    {
-      Attribute *attr = (std != ATTR_STD_NONE) ?
-                            volume->attributes.add(std) :
-                            volume->attributes.add(name, TypeFloat, ATTR_ELEMENT_VOXEL);
+    const bool need_std = (std != ATTR_STD_NONE && volume->need_attribute(scene, std));
+    const bool need_named = volume->need_attribute(scene, name);
+
+    if (need_std || need_named) {
+      Attribute *attr;
+      if (need_std) {
+        /* Make grid available both with std and name. */
+        attr = volume->attributes.add(std, name);
+      }
+      else {
+        /* Make grid available by name with appropriate number of channels. */
+        const int channels = blender::bke::volume_grid::get_channels_num(b_grid.grid_type());
+        const TypeDesc type = (channels == 3) ? TypeVector : TypeFloat;
+        attr = volume->attributes.add(name, type, ATTR_ELEMENT_VOXEL);
+      }
 
       unique_ptr<ImageLoader> loader = make_unique<BlenderVolumeLoader>(
           b_data,
@@ -403,13 +392,15 @@ static void sync_volume_object(blender::Main &b_data,
   if (volume->need_attribute(scene, ATTR_STD_GENERATED_TRANSFORM)) {
     std::optional<const blender::Bounds<blender::float3>> bounds = BKE_volume_min_max(&b_volume);
 
-    const blender::float3 size = bounds->size();
-    const float3 loc = make_float3(bounds->min[0], bounds->min[1], bounds->min[2]);
-    const float3 inv_size = safe_divide(one_float3(), make_float3(size[0], size[1], size[2]));
+    if (bounds.has_value()) {
+      const blender::float3 size = bounds->size();
+      const float3 loc = make_float3(bounds->min[0], bounds->min[1], bounds->min[2]);
+      const float3 inv_size = safe_divide(one_float3(), make_float3(size[0], size[1], size[2]));
 
-    Attribute *attr = volume->attributes.add(ATTR_STD_GENERATED_TRANSFORM);
-    Transform *tfm = attr->data_transform_for_write();
-    *tfm = transform_scale(inv_size) * transform_translate(-loc);
+      Attribute *attr = volume->attributes.add(ATTR_STD_GENERATED_TRANSFORM);
+      Transform *tfm = attr->data_for_write<Transform>();
+      *tfm = transform_scale(inv_size) * transform_translate(-loc);
+    }
   }
 }
 
@@ -418,7 +409,7 @@ void BlenderSync::sync_volume(BObjectInfo &b_ob_info, Volume *volume)
   volume->clear(true);
 
   if (view_layer.use_volumes) {
-    if (GS(b_ob_info.object_data->name) == blender::ID_VO) {
+    if (b_ob_info.object_data->id_type() == blender::ID_VO) {
       /* Volume object. Create only attributes, bounding mesh will then
        * be automatically generated later. */
       sync_volume_object(*b_data, *b_scene, b_ob_info, scene, volume);

@@ -16,11 +16,12 @@
 #include "blender/sync.h"
 #include "blender/util.h"
 
+#include "util/log.h"
 #include "util/set.h"
 #include "util/string.h"
 #include "util/task.h"
 
-#include "BLI_listbase.h"
+#include "BLI_listbase.hh"
 
 #include "BKE_duplilist.hh"
 #include "BKE_node.hh"
@@ -28,6 +29,7 @@
 
 #include "NOD_shader.h"
 #include "NOD_shader_nodes_inline.hh"
+#include "NOD_shader_raycast.hh"
 
 #include "DEG_depsgraph_query.hh"
 
@@ -164,6 +166,14 @@ int blender_attribute_name_split_type(ustring name, string *r_real_name)
 
 /* Graph */
 
+static ustring get_node_input_string(const blender::bNode &b_node, const string &name)
+{
+  const blender::bNodeSocket *b_sock = b_node.input_by_identifier(blender::UString(name));
+  BLI_assert(b_sock->type == blender::SOCK_STRING);
+  const auto &default_value = *b_sock->default_value_typed<blender::bNodeSocketValueString>();
+  return ustring(default_value.value);
+}
+
 static float3 get_node_output_rgba(blender::bNode &b_node, const string &name)
 {
   blender::bNodeSocket *b_sock = b_node.output_by_identifier(blender::UString(name));
@@ -188,9 +198,9 @@ static float3 get_node_output_vector(blender::bNode &b_node, const string &name)
   return make_float3(default_value.value[0], default_value.value[1], default_value.value[2]);
 }
 
-static SocketType::Type convert_socket_type(blender::bNodeSocket &b_socket)
+static SocketType::Type convert_socket_type(const blender::bNodeSocket &b_socket)
 {
-  switch (blender::eNodeSocketDatatype(b_socket.type)) {
+  switch (b_socket.type) {
     case blender::SOCK_FLOAT:
       return SocketType::FLOAT;
     case blender::SOCK_BOOLEAN:
@@ -291,6 +301,58 @@ static bool is_image_animated(blender::eImageSource b_image_source,
          (b_image_user.flag & blender::IMA_ANIM_ALWAYS) != 0;
 }
 
+static std::optional<RaycastNode::AttributeOutputType> raycast_get_attribute_output_type(
+    const blender::eCustomDataType data_type)
+{
+  switch (data_type) {
+    case blender::CD_PROP_FLOAT:
+      return RaycastNode::ATTR_OUTPUT_FLOAT;
+    case blender::CD_PROP_FLOAT3:
+    case blender::CD_PROP_COLOR:
+      return RaycastNode::ATTR_OUTPUT_FLOAT3;
+    default:
+      break;
+  }
+  LOG_DFATAL << "Unhandled data type " << int(data_type);
+  return std::nullopt;
+}
+
+static void raycast_add_output_attribute_sockets(RaycastNode *raycast,
+                                                 const blender::bNode &b_node)
+{
+  auto *storage = static_cast<blender::NodeShaderRaycast *>(b_node.storage);
+  for (const blender::NodeRaycastSampleAttributeItem &item :
+       blender::Span(storage->sample_attribute_items, storage->sample_attribute_items_num))
+  {
+    using blender::nodes::RaycastSampleAttributeItemsAccessor;
+
+    const std::optional<RaycastNode::AttributeOutputType> attribute_output_type =
+        raycast_get_attribute_output_type(blender::eCustomDataType(item.data_type));
+    if (!attribute_output_type) {
+      continue;
+    }
+
+    const string input_identifier(
+        RaycastSampleAttributeItemsAccessor::input_socket_identifier_for_item(item));
+    const ustring output_identifier(
+        RaycastSampleAttributeItemsAccessor::output_socket_identifier_for_item(item));
+
+    const ustring attribute_name = get_node_input_string(b_node, input_identifier);
+
+    raycast->add_output_attribute_socket(
+        attribute_name, *attribute_output_type, output_identifier);
+
+    /* For color attributes additionally add the corresponding Alpha socket.
+     * This is because colors are RGB, access to Alpha needs special handling. */
+    if (item.data_type == blender::CD_PROP_COLOR) {
+      const ustring alpha_output_identifier(
+          RaycastSampleAttributeItemsAccessor::output_socket_identifier_for_item_alpha(item));
+      raycast->add_output_attribute_socket(
+          attribute_name, RaycastNode::ATTR_OUTPUT_FLOAT_ALPHA, alpha_output_identifier);
+    }
+  }
+}
+
 static ShaderNode *add_node(Scene *scene,
                             blender::RenderEngine &b_engine,
                             blender::Main &b_data,
@@ -306,7 +368,7 @@ static ShaderNode *add_node(Scene *scene,
   if (b_node.is_type("ShaderNodeRGBCurve"_ustr)) {
     const auto &mapping = *static_cast<blender::CurveMapping *>(b_node.storage);
     RGBCurvesNode *curves = graph->create_node<RGBCurvesNode>();
-    array<float3> curve_mapping_curves;
+    array<packed_float3> curve_mapping_curves;
     float min_x;
     float max_x;
     curvemapping_color_to_array(mapping, curve_mapping_curves, RAMP_TABLE_SIZE, true);
@@ -320,7 +382,7 @@ static ShaderNode *add_node(Scene *scene,
   if (b_node.is_type("ShaderNodeVectorCurve"_ustr)) {
     const auto &mapping = *static_cast<blender::CurveMapping *>(b_node.storage);
     VectorCurvesNode *curves = graph->create_node<VectorCurvesNode>();
-    array<float3> curve_mapping_curves;
+    array<packed_float3> curve_mapping_curves;
     float min_x;
     float max_x;
     curvemapping_color_to_array(mapping, curve_mapping_curves, RAMP_TABLE_SIZE, false);
@@ -348,7 +410,7 @@ static ShaderNode *add_node(Scene *scene,
   else if (b_node.is_type("ShaderNodeValToRGB"_ustr)) {
     RGBRampNode *ramp = graph->create_node<RGBRampNode>();
     const auto &b_color_ramp = *static_cast<blender::ColorBand *>(b_node.storage);
-    array<float3> ramp_values;
+    array<packed_float3> ramp_values;
     array<float> ramp_alpha;
     colorramp_to_array(b_color_ramp, ramp_values, ramp_alpha, RAMP_TABLE_SIZE);
     ramp->set_ramp(ramp_values);
@@ -444,6 +506,9 @@ static ShaderNode *add_node(Scene *scene,
   else if (b_node.is_type("ShaderNodeSeparateXYZ"_ustr)) {
     node = graph->create_node<SeparateXYZNode>();
   }
+  else if (b_node.is_type("FunctionNodeGetVectorComponent"_ustr)) {
+    node = graph->create_node<GetVectorComponentNode>();
+  }
   else if (b_node.is_type("ShaderNodeCombineXYZ"_ustr)) {
     node = graph->create_node<CombineXYZNode>();
   }
@@ -478,6 +543,16 @@ static ShaderNode *add_node(Scene *scene,
     math_node->set_math_type((NodeMathType)b_node.custom1);
     math_node->set_use_clamp(b_node.custom2);
     node = math_node;
+  }
+  else if (b_node.is_type("FunctionNodeBooleanMath"_ustr)) {
+    BooleanMathNode *boolean_math_node = graph->create_node<BooleanMathNode>();
+    boolean_math_node->set_math_type((NodeBooleanMathType)b_node.custom1);
+    node = boolean_math_node;
+  }
+  else if (b_node.is_type("FunctionNodeIntegerMath"_ustr)) {
+    IntegerMathNode *integer_math_node = graph->create_node<IntegerMathNode>();
+    integer_math_node->set_math_type((NodeIntegerMathType)b_node.custom1);
+    node = integer_math_node;
   }
   else if (b_node.is_type("ShaderNodeVectorMath"_ustr)) {
     VectorMathNode *vector_math_node = graph->create_node<VectorMathNode>();
@@ -1124,7 +1199,11 @@ static ShaderNode *add_node(Scene *scene,
   else if (b_node.is_type("ShaderNodeRaycast"_ustr)) {
     RaycastNode *raycast = graph->create_node<RaycastNode>();
     raycast->set_only_local(b_node.custom1);
+    raycast_add_output_attribute_sockets(raycast, b_node);
     node = raycast;
+  }
+  else if (b_node.is_type("GeometryNodeInputSceneTime"_ustr)) {
+    node = graph->create_node<SceneTimeNode>();
   }
 
   if (node) {
@@ -1260,6 +1339,7 @@ static void add_nodes(Scene *scene,
                       blender::RenderEngine &b_engine,
                       blender::Main &b_data,
                       blender::Scene &b_scene,
+                      blender::Depsgraph &b_depsgraph,
                       ShaderGraph *graph,
                       blender::bNodeTree &b_ntree,
                       const ProxyMap &proxy_input_map,
@@ -1269,6 +1349,7 @@ static void add_nodes_inlined(Scene *scene,
                               blender::RenderEngine &b_engine,
                               blender::Main &b_data,
                               blender::Scene &b_scene,
+                              blender::Depsgraph &b_depsgraph,
                               ShaderGraph *graph,
                               blender::bNodeTree &b_ntree,
                               const ProxyMap &proxy_input_map,
@@ -1286,8 +1367,8 @@ static void add_nodes_inlined(Scene *scene,
   for (blender::bNode *b_node : b_ntree.all_nodes()) {
     if (b_node->is_muted() || b_node->is_reroute()) {
       /* replace muted node with internal links */
-      for (blender::bNodeLink &b_link : b_node->runtime->internal_links) {
-        blender::bNodeSocket *to_socket = b_link.tosock;
+      for (blender::bNodeInternalLink &b_link : b_node->runtime->internal_links) {
+        blender::bNodeSocket *to_socket = b_link.out;
         const SocketType::Type to_socket_type = convert_socket_type(*to_socket);
         if (to_socket_type == SocketType::UNDEFINED) {
           continue;
@@ -1297,8 +1378,8 @@ static void add_nodes_inlined(Scene *scene,
 
         /* Muted nodes can result in multiple Cycles input sockets mapping to the same Blender
          * input socket, so this needs to be a multimap. */
-        input_map.emplace(b_link.fromsock, proxy->inputs[0]);
-        output_map[b_link.tosock] = proxy->outputs[0];
+        input_map.emplace(b_link.in, proxy->inputs[0]);
+        output_map[b_link.out] = proxy->outputs[0];
       }
     }
     else if (b_node->is_group()) {
@@ -1345,6 +1426,7 @@ static void add_nodes_inlined(Scene *scene,
                   b_engine,
                   b_data,
                   b_scene,
+                  b_depsgraph,
                   graph,
                   *b_group_ntree,
                   group_proxy_input_map,
@@ -1456,10 +1538,28 @@ static void add_nodes_inlined(Scene *scene,
   }
 }
 
+static void store_shader_node_errors(
+    blender::Depsgraph &b_depsgraph,
+    const blender::Span<blender::nodes::InlineShaderNodeTreeParams::ErrorMessage> errors)
+{
+  if (!DEG_is_active(&b_depsgraph)) {
+    return;
+  }
+  for (const blender::nodes::InlineShaderNodeTreeParams::ErrorMessage &error : errors) {
+    const blender::bNodeTree &tree = error.node->owner_tree();
+    if (const blender::bNodeTree *tree_orig = DEG_get_original(&tree)) {
+      std::lock_guard lock(tree_orig->runtime->shader_node_errors_mutex);
+      tree_orig->runtime->shader_node_errors.lookup_or_add_default(error.node->identifier)
+          .add({error.type, error.message});
+    }
+  }
+}
+
 static void add_nodes(Scene *scene,
                       blender::RenderEngine &b_engine,
                       blender::Main &b_data,
                       blender::Scene &b_scene,
+                      blender::Depsgraph &b_depsgraph,
                       ShaderGraph *graph,
                       blender::bNodeTree &b_ntree,
                       const ProxyMap &proxy_input_map,
@@ -1472,8 +1572,17 @@ static void add_nodes(Scene *scene,
   inline_params.target_engine_ = blender::SHD_OUTPUT_CYCLES;
   blender::nodes::inline_shader_node_tree(b_ntree, *localtree, inline_params);
 
-  add_nodes_inlined(
-      scene, b_engine, b_data, b_scene, graph, *localtree, proxy_input_map, proxy_output_map);
+  store_shader_node_errors(b_depsgraph, inline_params.r_error_messages);
+
+  add_nodes_inlined(scene,
+                    b_engine,
+                    b_data,
+                    b_scene,
+                    b_depsgraph,
+                    graph,
+                    *localtree,
+                    proxy_input_map,
+                    proxy_output_map);
 
   BKE_id_free(nullptr, &localtree->id);
 }
@@ -1482,11 +1591,20 @@ static void add_nodes(Scene *scene,
                       blender::RenderEngine &b_engine,
                       blender::Main &b_data,
                       blender::Scene &b_scene,
+                      blender::Depsgraph &b_depsgraph,
                       ShaderGraph *graph,
                       blender::bNodeTree &b_ntree)
 {
   static const ProxyMap empty_proxy_map;
-  add_nodes(scene, b_engine, b_data, b_scene, graph, b_ntree, empty_proxy_map, empty_proxy_map);
+  add_nodes(scene,
+            b_engine,
+            b_data,
+            b_scene,
+            b_depsgraph,
+            graph,
+            b_ntree,
+            empty_proxy_map,
+            empty_proxy_map);
 }
 
 /* Look up and constant fold all references to View Layer attributes. */
@@ -1571,7 +1689,9 @@ bool BlenderSync::scene_attr_needs_recalc(Shader *shader, blender::Depsgraph &b_
 
 /* Sync Materials */
 
-void BlenderSync::sync_materials(blender::Depsgraph &b_depsgraph, bool update_all)
+void BlenderSync::sync_materials(blender::Depsgraph &b_depsgraph,
+                                 bool update_all,
+                                 bool update_time)
 {
   shader_map.set_default(scene->default_surface);
 
@@ -1608,7 +1728,7 @@ void BlenderSync::sync_materials(blender::Depsgraph &b_depsgraph, bool update_al
               blender::ID *,
               b_id)
   {
-    if (GS(b_id->name) != blender::ID_MA) {
+    if (b_id->id_type() != blender::ID_MA) {
       continue;
     }
 
@@ -1617,7 +1737,8 @@ void BlenderSync::sync_materials(blender::Depsgraph &b_depsgraph, bool update_al
 
     /* test if we need to sync */
     if (shader_map.add_or_update(&shader, &b_mat.id) || update_all ||
-        scene_attr_needs_recalc(shader, b_depsgraph) || aovs_changed_between_view_layers)
+        scene_attr_needs_recalc(shader, b_depsgraph) || aovs_changed_between_view_layers ||
+        (shader->has_time_dependency && update_time))
     {
       unique_ptr<ShaderGraph> graph = make_unique<ShaderGraph>();
 
@@ -1626,7 +1747,7 @@ void BlenderSync::sync_materials(blender::Depsgraph &b_depsgraph, bool update_al
 
       /* create nodes */
       if (b_mat.nodetree) {
-        add_nodes(scene, *b_engine, *b_data, *b_scene, graph.get(), *b_mat.nodetree);
+        add_nodes(scene, *b_engine, *b_data, *b_scene, b_depsgraph, graph.get(), *b_mat.nodetree);
       }
       else {
         DiffuseBsdfNode *diffuse = graph->create_node<DiffuseBsdfNode>();
@@ -1692,7 +1813,8 @@ void BlenderSync::sync_materials(blender::Depsgraph &b_depsgraph, bool update_al
 void BlenderSync::sync_world(blender::Depsgraph &b_depsgraph,
                              blender::bScreen *b_screen,
                              blender::View3D *b_v3d,
-                             bool update_all)
+                             bool update_all,
+                             bool update_time)
 {
   Background *background = scene->background;
   Integrator *integrator = scene->integrator;
@@ -1707,13 +1829,13 @@ void BlenderSync::sync_world(blender::Depsgraph &b_depsgraph,
 
   if (world_recalc || update_all || b_world != world_map ||
       viewport_parameters.shader_modified(new_viewport_parameters) ||
-      scene_attr_needs_recalc(shader, b_depsgraph))
+      scene_attr_needs_recalc(shader, b_depsgraph) || (shader->has_time_dependency && update_time))
   {
     unique_ptr<ShaderGraph> graph = make_unique<ShaderGraph>();
 
     /* create nodes */
     if (new_viewport_parameters.use_scene_world && b_world && b_world->nodetree) {
-      add_nodes(scene, *b_engine, *b_data, *b_scene, graph.get(), *b_world->nodetree);
+      add_nodes(scene, *b_engine, *b_data, *b_scene, b_depsgraph, graph.get(), *b_world->nodetree);
 
       /* volume */
       blender::PointerRNA world_rna_ptr = RNA_id_pointer_create(&b_world->id);
@@ -1784,13 +1906,18 @@ void BlenderSync::sync_world(blender::Depsgraph &b_depsgraph,
     if (b_world) {
       blender::PointerRNA world_rna_ptr = RNA_id_pointer_create(&b_world->id);
       blender::PointerRNA cvisibility = RNA_pointer_get(&world_rna_ptr, "cycles_visibility");
-      uint visibility = 0;
+      PathRayVisibility visibility = PATH_RAY_VISIBILITY_NONE;
 
-      visibility |= get_boolean(cvisibility, "camera") ? PATH_RAY_CAMERA : PathRayFlag(0);
-      visibility |= get_boolean(cvisibility, "diffuse") ? PATH_RAY_DIFFUSE : PathRayFlag(0);
-      visibility |= get_boolean(cvisibility, "glossy") ? PATH_RAY_GLOSSY : PathRayFlag(0);
-      visibility |= get_boolean(cvisibility, "transmission") ? PATH_RAY_TRANSMIT : PathRayFlag(0);
-      visibility |= get_boolean(cvisibility, "scatter") ? PATH_RAY_VOLUME_SCATTER : PathRayFlag(0);
+      visibility |= get_boolean(cvisibility, "camera") ? PATH_RAY_VISIBILITY_CAMERA :
+                                                         PATH_RAY_VISIBILITY_NONE;
+      visibility |= get_boolean(cvisibility, "diffuse") ? PATH_RAY_VISIBILITY_DIFFUSE :
+                                                          PATH_RAY_VISIBILITY_NONE;
+      visibility |= get_boolean(cvisibility, "glossy") ? PATH_RAY_VISIBILITY_GLOSSY :
+                                                         PATH_RAY_VISIBILITY_NONE;
+      visibility |= get_boolean(cvisibility, "transmission") ? PATH_RAY_VISIBILITY_TRANSMIT :
+                                                               PATH_RAY_VISIBILITY_NONE;
+      visibility |= get_boolean(cvisibility, "scatter") ? PATH_RAY_VISIBILITY_VOLUME_SCATTER :
+                                                          PATH_RAY_VISIBILITY_NONE;
 
       background->set_visibility(visibility);
     }
@@ -1850,7 +1977,7 @@ void BlenderSync::sync_world(blender::Depsgraph &b_depsgraph,
 
 /* Sync Lights */
 
-void BlenderSync::sync_lights(blender::Depsgraph &b_depsgraph, bool update_all)
+void BlenderSync::sync_lights(blender::Depsgraph &b_depsgraph, bool update_all, bool update_time)
 {
   shader_map.set_default(scene->default_light);
 
@@ -1863,7 +1990,7 @@ void BlenderSync::sync_lights(blender::Depsgraph &b_depsgraph, bool update_all)
               blender::ID *,
               b_id)
   {
-    if (GS(b_id->name) != blender::ID_LA) {
+    if (b_id->id_type() != blender::ID_LA) {
       continue;
     }
 
@@ -1872,7 +1999,8 @@ void BlenderSync::sync_lights(blender::Depsgraph &b_depsgraph, bool update_all)
 
     /* test if we need to sync */
     if (shader_map.add_or_update(&shader, &b_light.id) || update_all ||
-        scene_attr_needs_recalc(shader, b_depsgraph))
+        scene_attr_needs_recalc(shader, b_depsgraph) ||
+        (shader->has_time_dependency && update_time))
     {
       unique_ptr<ShaderGraph> graph = make_unique<ShaderGraph>();
 
@@ -1880,7 +2008,8 @@ void BlenderSync::sync_lights(blender::Depsgraph &b_depsgraph, bool update_all)
       if (b_light.nodetree) {
         shader->name = BKE_id_name(b_light.id);
 
-        add_nodes(scene, *b_engine, *b_data, *b_scene, graph.get(), *b_light.nodetree);
+        add_nodes(
+            scene, *b_engine, *b_data, *b_scene, b_depsgraph, graph.get(), *b_light.nodetree);
       }
       else {
         EmissionNode *emission = graph->create_node<EmissionNode>();
@@ -1903,13 +2032,14 @@ void BlenderSync::sync_lights(blender::Depsgraph &b_depsgraph, bool update_all)
 void BlenderSync::sync_shaders(blender::Depsgraph &b_depsgraph,
                                blender::bScreen *b_screen,
                                blender::View3D *b_v3d,
-                               bool update_all)
+                               bool update_all,
+                               bool update_time)
 {
   shader_map.pre_sync();
 
-  sync_world(b_depsgraph, b_screen, b_v3d, update_all);
-  sync_lights(b_depsgraph, update_all);
-  sync_materials(b_depsgraph, update_all);
+  sync_world(b_depsgraph, b_screen, b_v3d, update_all, update_time);
+  sync_lights(b_depsgraph, update_all, update_time);
+  sync_materials(b_depsgraph, update_all, update_time);
 }
 
 CCL_NAMESPACE_END

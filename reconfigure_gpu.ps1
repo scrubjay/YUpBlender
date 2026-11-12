@@ -1,12 +1,18 @@
 # =============================================================================
 # reconfigure_gpu.ps1
 # Reconfigures the Blender CMake build with CUDA + OptiX GPU support.
-# Targets: NVIDIA GeForce RTX 3090 (Ampere sm_86)
+# Targets:
+#   sm_86  - NVIDIA GeForce RTX 3090 / 3080 (Ampere)
+#   sm_89  - NVIDIA GeForce RTX 4090 / 4080 (Ada Lovelace)  <-- WORK MACHINE
+#
+# NOTE: sm_89 is required for the RTX 4090. Without it, Blender falls back
+# to runtime JIT compilation which fails with "driver too new" when the
+# installed GeForce driver is newer than the bundled CUDA runtime.
 #
 # PREREQUISITES:
 #   1. NVIDIA OptiX SDK 8.x installed
 #      Download: https://developer.nvidia.com/designworks/optix/downloads/legacy
-#   2. CUDA Toolkit 11.x or 12.x installed
+#   2. CUDA Toolkit 12.x installed (12.0+ required for sm_89 / Ada Lovelace)
 #      Download: https://developer.nvidia.com/cuda-downloads
 #   3. Original Blender build already configured (CMakeCache.txt exists)
 # =============================================================================
@@ -90,7 +96,7 @@ if ($CudaRoot) {
 } else {
     Write-Host "  CUDA root  : (not found - will rely on PATH)" -ForegroundColor Yellow
 }
-Write-Host "  GPU arch   : sm_86  (RTX 3090 / Ampere)" -ForegroundColor Green
+Write-Host "  GPU arch   : sm_86 (RTX 3090/Ampere)  +  sm_89 (RTX 4090/Ada Lovelace)" -ForegroundColor Green
 Write-Host ""
 
 # =============================================================================
@@ -121,9 +127,19 @@ $CmakeArgs = @(
     # Point CMake to the OptiX SDK
     "-DOPTIX_ROOT_DIR=$OptiXRoot",
 
-    # Only compile for RTX 3090 (sm_86) to save time.
-    # Add sm_89 for RTX 4090, sm_120 for RTX 5090 if needed.
-    "-DCYCLES_CUDA_BINARIES_ARCH=sm_86"
+    # Compile kernels for both machines:
+    #   sm_86 = RTX 3090 / Ampere  (home)
+    #   sm_89 = RTX 4090 / Ada Lovelace  (work)
+    # Without a pre-compiled kernel for the running GPU, Blender attempts JIT
+    # compilation at runtime. This fails with "driver too new" when the
+    # installed GeForce driver is newer than the bundled CUDA toolkit.
+    # Adding sm_120 here would also cover RTX 5090 (Blackwell) if needed.
+    "-DCYCLES_CUDA_BINARIES_ARCH=sm_86;sm_89",
+
+    # Disable optional 5.3 libs not present in local lib/windows_x64
+    "-DWITH_KTX=OFF",
+    "-DWITH_JOLT=OFF",
+    "-DWITH_OPENTIMELINEIO=OFF"
 
 )
 
@@ -184,7 +200,7 @@ Write-Host "============================================================" -Foreg
 Write-Host "  CMake reconfiguration complete!" -ForegroundColor Green
 Write-Host "============================================================" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "  NOTE: Building CUDA kernels takes a long time (20-60 min)." -ForegroundColor Yellow
+Write-Host "  NOTE: Building CUDA kernels for sm_86 + sm_89 takes 30-90 min." -ForegroundColor Yellow
 Write-Host "        Go get a coffee." -ForegroundColor Yellow
 Write-Host ""
 

@@ -6,8 +6,8 @@
  * \ingroup spview3d
  */
 
-#include "BLI_math_vector.h"
-#include "BLI_utildefines.h"
+#include "BLI_math_vector_c.hh"
+#include "BLI_utildefines.hh"
 
 #include "BKE_context.hh"
 #include "BKE_screen.hh"
@@ -81,7 +81,7 @@ struct NavigateWidgetGroup {
     struct {
       char is_persp;
       bool is_camera;
-      char viewlock;
+      eRegionView3D_ViewLock viewlock;
       char cameralock;
     } rv3d;
   } state;
@@ -243,13 +243,14 @@ static void WIDGETGROUP_navigate_setup(const bContext *C, wmGizmoGroup *gzgroup)
   {
     wmGizmo *gz = navgroup->gz_array[GZ_INDEX_ROTATE];
     gz->scale_basis = GIZMO_SIZE / 2.0f;
+    /* Y-up mapping: -X=LEFT, +X=RIGHT, -Y=BOTTOM, +Y=TOP, -Z=BACK, +Z=FRONT. */
     const char mapping[6] = {
         RV3D_VIEW_LEFT,
         RV3D_VIEW_RIGHT,
-        RV3D_VIEW_FRONT,
-        RV3D_VIEW_BACK,
         RV3D_VIEW_BOTTOM,
         RV3D_VIEW_TOP,
+        RV3D_VIEW_BACK,
+        RV3D_VIEW_FRONT,
     };
 
     for (int part_index = 0; part_index < 6; part_index += 1) {
@@ -400,8 +401,6 @@ void VIEW3D_GGT_navigate(wmGizmoGroupType *gzgt)
   gzgt->setup = WIDGETGROUP_navigate_setup;
   gzgt->draw_prepare = WIDGETGROUP_navigate_draw_prepare;
   gzgt->draw_background = ED_gizmo_button2d_group_background;
-  gzgt->background_color = {0.0f, 0.0f, 0.0f, 0.3f};
-  gzgt->outline_color = {0.0f, 0.0f, 0.0f, 0.4f};
 }
 
 /** \} */

@@ -24,7 +24,7 @@ PyDoc_STRVAR(
     "\n"
     "   Builds a QuantitativeInvisibilityUP1D object.\n"
     "\n"
-    "   :arg qi: The Quantitative Invisibility you want the Interface1D to\n"
+    "   :param qi: The Quantitative Invisibility you want the Interface1D to\n"
     "      have.\n"
     "   :type qi: int\n"
     "\n"
@@ -35,7 +35,7 @@ PyDoc_STRVAR(
     "   :class:`freestyle.functions.QuantitativeInvisibilityF1D` functor,\n"
     "   equals a certain user-defined value.\n"
     "\n"
-    "   :arg inter: An Interface1D object.\n"
+    "   :param inter: An Interface1D object.\n"
     "   :type inter: :class:`freestyle.types.Interface1D`\n"
     "   :return: True if Quantitative Invisibility equals a user-defined\n"
     "      value.\n"
@@ -47,7 +47,14 @@ static int QuantitativeInvisibilityUP1D___init__(BPy_QuantitativeInvisibilityUP1
   static const char *kwlist[] = {"qi", nullptr};
   int i = 0;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "|i", (char **)kwlist, &i)) {
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "|" /* Optional arguments. */
+                                   "i" /* `qi` */
+                                   ":__init__",
+                                   (char **)kwlist,
+                                   &i))
+  {
     return -1;
   }
   self->py_up1D.up1D = new Predicates1D::QuantitativeInvisibilityUP1D(i);

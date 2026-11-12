@@ -176,7 +176,7 @@ def main():
                 if l.startswith("/*"):
                     l = l.replace("/*", "'''own <")
                 else:
-                    # NOTE: `inline <...>` aren't used anymore, all doc-string comments require their own line.
+                    # NOTE: `inline <...>` aren't used anymore, all docstring comments require their own line.
                     l = l.replace("/*", "'''inline <")
                 l = l.replace("*/", ">''',")
 
@@ -282,6 +282,9 @@ def main():
                 if comment.startswith("NOTE"):
                     comment = ""
 
+                # Use double back-ticks for literals (C++ comments only use a single, RST expected two).
+                comment = comment.replace("`", "``")
+
                 default_value = None
                 if tp == BMO_OP_SLOT_FLT:
                     tp_str = "float"
@@ -302,9 +305,9 @@ def main():
                     default_value = 'False'
                 elif tp == BMO_OP_SLOT_MAT:
                     tp_str = ":class:`mathutils.Matrix`"
-                    default_value = 'mathutils.Matrix.Identity(4)'
+                    default_value = '((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1))'
                 elif tp == BMO_OP_SLOT_VEC:
-                    default_value = 'mathutils.Vector()'
+                    default_value = '(0.0, 0.0, 0.0)'
                     if is_ret:
                         tp_str = ":class:`mathutils.Vector`"
                     else:

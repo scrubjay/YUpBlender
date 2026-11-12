@@ -7,10 +7,10 @@
  * \ingroup bli
  */
 
-#include "BLI_compiler_attrs.h"
-#include "BLI_compiler_compat.h"
-#include "BLI_utildefines.h"
-#include "BLI_utildefines_variadic.h"
+#include "BLI_compiler_attrs.hh"
+#include "BLI_compiler_compat.hh"
+#include "BLI_utildefines.hh"
+#include "BLI_utildefines_variadic.hh"
 
 namespace blender {
 
@@ -282,6 +282,11 @@ const char *BLI_path_slash_skip(const char *path) ATTR_NONNULL(1) ATTR_WARN_UNUS
  * Changes to the path separators to the native ones for this OS.
  */
 void BLI_path_slash_native(char *path) ATTR_NONNULL(1);
+/**
+ * Changes the native path separators to forward slashes, that work on all platforms.
+ * Does nothing when the forward slash is native.
+ */
+void BLI_path_slash_forward_from_native(char *path) ATTR_NONNULL(1);
 
 /** \} */
 
@@ -356,7 +361,7 @@ size_t BLI_path_append_dir(char *__restrict dst, size_t dst_maxncpy, const char 
  * \{ */
 
 /**
- * See #BLI_path_join doc-string.
+ * See #BLI_path_join docstring.
  */
 size_t BLI_path_join_array(char *__restrict dst,
                            const size_t dst_maxncpy,
@@ -367,7 +372,7 @@ size_t BLI_path_join_array(char *__restrict dst,
  * Join multiple strings into a path, ensuring only a single path separator between each,
  * and trailing slash is kept.
  *
- * \param path: The first patch which has special treatment,
+ * The first path which has special treatment,
  * allowing `//` prefix which is kept intact unlike double-slashes which are stripped
  * from the bounds of all other paths passed in.
  * Passing in the following paths all result in the same output (`//a/b/c`):
@@ -558,6 +563,24 @@ int BLI_path_cmp_normalized(const char *p1, const char *p2)
 /** Return true only if #containee_path is contained in #container_path. */
 bool BLI_path_contains(const char *container_path, const char *containee_path)
     ATTR_NONNULL(1, 2) ATTR_WARN_UNUSED_RESULT;
+/**
+ * Return #path made relative to the directory #base_dir.
+ *
+ * Both input paths must be absolute. The relative path is normalized and gets native
+ * separators.
+ *
+ * This is similar to Python's pathlib relative_to, and unlike #BLI_path_rel it does not use
+ * Blender's `//` blend file relative prefix and takes a base directory rather than a file path.
+ *
+ * \param walk_up: Allow adding `../` when #path is not contained in #base_dir.
+ * \param r_path_relative: May be null to only check if a path can be made relative.
+ * \return True when #path could be made relative to #base_dir.
+ */
+bool BLI_path_relative_to(const char *path,
+                          const char *base_dir,
+                          bool walk_up,
+                          char *r_path_relative,
+                          size_t r_path_relative_maxncpy) ATTR_NONNULL(1, 2);
 
 /** \} */
 
@@ -629,7 +652,9 @@ bool BLI_path_frame(char *path, size_t path_maxncpy, int frame, int digits) ATTR
 bool BLI_path_frame_range(char *path, size_t path_maxncpy, int sta, int end, int digits)
     ATTR_NONNULL(1);
 /**
- * Get the frame from a filename formatted by blender's frame scheme
+ * Get the frame from a filename formatted by blender's frame scheme.
+ * \return true if a frame in the valid range was found.
+ * \note Only frames that can be represented in the integer range are considered.
  */
 bool BLI_path_frame_get(const char *path, int *r_frame, int *r_digits_len) ATTR_NONNULL(1, 2, 3);
 /**
@@ -637,6 +662,7 @@ bool BLI_path_frame_get(const char *path, int *r_frame, int *r_digits_len) ATTR_
  * character and extract the extension.
  * So:      `/some/path_123.jpeg`
  * Becomes: `/some/path_###` with `r_ext` set to `.jpeg`.
+ * \note Only frames that can be represented in the integer range are considered.
  */
 void BLI_path_frame_strip(char *path, char *r_ext, size_t ext_maxncpy) ATTR_NONNULL(1, 2);
 /**

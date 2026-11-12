@@ -6,8 +6,8 @@
  * \ingroup modifiers
  */
 
-#include "BLI_listbase.h"
-#include "BLI_string_utf8.h"
+#include "BLI_listbase.hh"
+#include "BLI_string_utf8.hh"
 
 #include "MEM_guardedalloc.h"
 
@@ -89,7 +89,7 @@ void shaderfx_panel_end(ui::Layout &layout, PointerRNA *ptr)
   ShaderFxData *fx = static_cast<ShaderFxData *>(ptr->data);
   if (fx->error) {
     ui::Layout &row = layout.row(false);
-    row.label(RPT_(fx->error), ICON_ERROR);
+    row.label(RPT_(fx->error), ICON_STATUS_ERROR);
   }
 }
 
@@ -146,7 +146,7 @@ static void gpencil_shaderfx_ops_extra_draw(bContext *C, ui::Layout *layout, voi
                    ICON_TRIA_DOWN,
                    wm::OpCallContext::InvokeDefault,
                    UI_ITEM_NONE);
-  RNA_int_set(&op_ptr, "index", BLI_listbase_count(&ob->shader_fx) - 1);
+  RNA_int_set(&op_ptr, "index", ob->shader_fx.count() - 1);
   if (!fx->next) {
     col->enabled_set(false);
   }

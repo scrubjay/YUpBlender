@@ -257,6 +257,9 @@ class CLIP_PT_proportional_edit(Panel):
         col = layout.column()
         col.active = tool_settings.use_proportional_edit_mask
 
+        col.prop(tool_settings, "use_proportional_connected")
+        col.separator()
+
         col.prop(tool_settings, "proportional_edit_falloff", expand=True)
         col.prop(tool_settings, "proportional_size")
 
@@ -1107,7 +1110,7 @@ class CLIP_PT_proxy(CLIP_PT_clip_view_panel, Panel):
     bl_space_type = 'CLIP_EDITOR'
     bl_region_type = 'UI'
     bl_category = "Footage"
-    bl_label = "Proxy/Timecode"
+    bl_label = "Proxy"
     bl_options = {'DEFAULT_CLOSED'}
 
     def draw_header(self, context):
@@ -1149,16 +1152,7 @@ class CLIP_PT_proxy(CLIP_PT_clip_view_panel, Panel):
         if clip.use_proxy_custom_directory:
             col.prop(clip.proxy, "directory")
 
-        col.operator(
-            "clip.rebuild_proxy",
-            text="Build Proxy / Timecode" if clip.source == 'MOVIE'
-            else "Build Proxy"
-        )
-
-        if clip.source == 'MOVIE':
-            col2 = col.column()
-            col2.prop(clip.proxy, "timecode", text="Timecode Index")
-
+        col.operator("clip.rebuild_proxy", text="Build Proxy")
         col.separator()
 
         col.prop(sc.clip_user, "proxy_render_size", text="Proxy Size")
@@ -1243,7 +1237,7 @@ class CLIP_PT_footage(Panel):
         sc = context.space_data
 
         if not sc.clip:
-            layout.label(text="No active movie clip", icon='INFO')
+            layout.label(text="No active movie clip", icon='STATUS_INFO')
         else:
             col = layout.column()
             col.template_movieclip(sc, "clip", compact=True)

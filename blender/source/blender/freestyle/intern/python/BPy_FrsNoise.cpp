@@ -11,7 +11,7 @@
 
 #include "../system/RandGen.h"
 
-#include "BLI_sys_types.h"
+#include "BLI_sys_types.hh"
 
 #include <sstream>
 
@@ -47,14 +47,21 @@ PyDoc_STRVAR(
     "   as a seed for random number generation if it is equal to or greater than zero;\n"
     "   otherwise, time is used as a seed.\n"
     "\n"
-    "   :arg seed: Seed for random number generation.\n"
+    "   :param seed: Seed for random number generation.\n"
     "   :type seed: int\n");
 static int FrsNoise_init(BPy_FrsNoise *self, PyObject *args, PyObject *kwds)
 {
   static const char *kwlist[] = {"seed", nullptr};
   long seed = -1;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "|l", (char **)kwlist, &seed)) {
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "|" /* Optional arguments. */
+                                   "l" /* `seed` */
+                                   ":__init__",
+                                   (char **)kwlist,
+                                   &seed))
+  {
     return -1;
   }
   self->n = new Noise(seed);
@@ -81,13 +88,13 @@ PyDoc_STRVAR(
     "\n"
     "   Returns a noise value for a 1D element.\n"
     "\n"
-    "   :arg v: One-dimensional sample point.\n"
+    "   :param v: One-dimensional sample point.\n"
     "   :type v: float\n"
-    "   :arg freq: Noise frequency.\n"
+    "   :param freq: Noise frequency.\n"
     "   :type freq: float\n"
-    "   :arg amp: Amplitude.\n"
+    "   :param amp: Amplitude.\n"
     "   :type amp: float\n"
-    "   :arg oct: Number of octaves.\n"
+    "   :param oct: Number of octaves.\n"
     "   :type oct: int\n"
     "   :return: A noise value.\n"
     "   :rtype: float\n");
@@ -95,7 +102,14 @@ static PyObject *FrsNoise_drand(BPy_FrsNoise * /*self*/, PyObject *args, PyObjec
 {
   static const char *kwlist[] = {"seed", nullptr};
   long seed = 0;
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "|I", (char **)kwlist, &seed)) {
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "|" /* Optional arguments. */
+                                   "I" /* `seed` */
+                                   ":rand",
+                                   (char **)kwlist,
+                                   &seed))
+  {
     PyErr_SetString(PyExc_TypeError, "optional argument 1 must be of type int");
     return nullptr;
   }
@@ -112,7 +126,16 @@ static PyObject *FrsNoise_turbulence_smooth(BPy_FrsNoise *self, PyObject *args, 
   double x;  // NOTE: this has to be a double (not float)
   uint nbOctaves = 8;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "d|I", (char **)kwlist, &x, &nbOctaves)) {
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "d" /* `v` */
+                                   "|" /* Optional arguments. */
+                                   "I" /* `oct` */
+                                   ":turbulence_smooth",
+                                   (char **)kwlist,
+                                   &x,
+                                   &nbOctaves))
+  {
     return nullptr;
   }
   return PyFloat_FromDouble(self->pn->turbulenceSmooth(x, nbOctaves));
@@ -124,7 +147,20 @@ static PyObject *FrsNoise_turbulence1(BPy_FrsNoise *self, PyObject *args, PyObje
   float f1, f2, f3;
   uint i = 4;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "fff|I", (char **)kwlist, &f1, &f2, &f3, &i)) {
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "f" /* `v` */
+                                   "f" /* `freq` */
+                                   "f" /* `amp` */
+                                   "|" /* Optional arguments. */
+                                   "I" /* `oct` */
+                                   ":turbulence1",
+                                   (char **)kwlist,
+                                   &f1,
+                                   &f2,
+                                   &f3,
+                                   &i))
+  {
     return nullptr;
   }
   return PyFloat_FromDouble(self->n->turbulence1(f1, f2, f3, i));
@@ -137,13 +173,13 @@ PyDoc_STRVAR(
     "\n"
     "   Returns a noise value for a 2D element.\n"
     "\n"
-    "   :arg v: Two-dimensional sample point.\n"
+    "   :param v: Two-dimensional sample point.\n"
     "   :type v: :class:`mathutils.Vector` | tuple[float, float] | list[float]\n"
-    "   :arg freq: Noise frequency.\n"
+    "   :param freq: Noise frequency.\n"
     "   :type freq: float\n"
-    "   :arg amp: Amplitude.\n"
+    "   :param amp: Amplitude.\n"
     "   :type amp: float\n"
-    "   :arg oct: Number of octaves.\n"
+    "   :param oct: Number of octaves.\n"
     "   :type oct: int\n"
     "   :return: A noise value.\n"
     "   :rtype: float\n");
@@ -155,7 +191,20 @@ static PyObject *FrsNoise_turbulence2(BPy_FrsNoise *self, PyObject *args, PyObje
   uint i = 4;
   Vec2f vec;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "Off|I", (char **)kwlist, &obj1, &f2, &f3, &i)) {
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "O" /* `v` */
+                                   "f" /* `freq` */
+                                   "f" /* `amp` */
+                                   "|" /* Optional arguments. */
+                                   "I" /* `oct` */
+                                   ":turbulence2",
+                                   (char **)kwlist,
+                                   &obj1,
+                                   &f2,
+                                   &f3,
+                                   &i))
+  {
     return nullptr;
   }
   if (!Vec2f_ptr_from_PyObject(obj1, vec)) {
@@ -174,13 +223,13 @@ PyDoc_STRVAR(
     "\n"
     "   Returns a noise value for a 3D element.\n"
     "\n"
-    "   :arg v: Three-dimensional sample point.\n"
+    "   :param v: Three-dimensional sample point.\n"
     "   :type v: :class:`mathutils.Vector` | tuple[float, float, float] | list[float]\n"
-    "   :arg freq: Noise frequency.\n"
+    "   :param freq: Noise frequency.\n"
     "   :type freq: float\n"
-    "   :arg amp: Amplitude.\n"
+    "   :param amp: Amplitude.\n"
     "   :type amp: float\n"
-    "   :arg oct: Number of octaves.\n"
+    "   :param oct: Number of octaves.\n"
     "   :type oct: int\n"
     "   :return: A noise value.\n"
     "   :rtype: float\n");
@@ -192,7 +241,20 @@ static PyObject *FrsNoise_turbulence3(BPy_FrsNoise *self, PyObject *args, PyObje
   uint i = 4;
   Vec3f vec;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "Off|I", (char **)kwlist, &obj1, &f2, &f3, &i)) {
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "O" /* `v` */
+                                   "f" /* `freq` */
+                                   "f" /* `amp` */
+                                   "|" /* Optional arguments. */
+                                   "I" /* `oct` */
+                                   ":turbulence3",
+                                   (char **)kwlist,
+                                   &obj1,
+                                   &f2,
+                                   &f3,
+                                   &i))
+  {
     return nullptr;
   }
   if (!Vec3f_ptr_from_PyObject(obj1, vec)) {
@@ -211,7 +273,7 @@ PyDoc_STRVAR(
     "\n"
     "   Returns a smooth noise value for a 1D element.\n"
     "\n"
-    "   :arg v: One-dimensional sample point.\n"
+    "   :param v: One-dimensional sample point.\n"
     "   :type v: float\n"
     "   :return: A smooth noise value.\n"
     "   :rtype: float\n");
@@ -220,7 +282,13 @@ static PyObject *FrsNoise_smoothNoise1(BPy_FrsNoise *self, PyObject *args, PyObj
   static const char *kwlist[] = {"v", nullptr};
   float f;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "f", (char **)kwlist, &f)) {
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "f" /* `v` */
+                                   ":smoothNoise1",
+                                   (char **)kwlist,
+                                   &f))
+  {
     return nullptr;
   }
   return PyFloat_FromDouble(self->n->smoothNoise1(f));
@@ -233,7 +301,7 @@ PyDoc_STRVAR(
     "\n"
     "   Returns a smooth noise value for a 2D element.\n"
     "\n"
-    "   :arg v: Two-dimensional sample point.\n"
+    "   :param v: Two-dimensional sample point.\n"
     "   :type v: :class:`mathutils.Vector` | tuple[float, float] | list[float]\n"
     "   :return: A smooth noise value.\n"
     "   :rtype: float\n");
@@ -243,7 +311,13 @@ static PyObject *FrsNoise_smoothNoise2(BPy_FrsNoise *self, PyObject *args, PyObj
   PyObject *obj;
   Vec2f vec;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O", (char **)kwlist, &obj)) {
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "O" /* `v` */
+                                   ":smoothNoise2",
+                                   (char **)kwlist,
+                                   &obj))
+  {
     return nullptr;
   }
   if (!Vec2f_ptr_from_PyObject(obj, vec)) {
@@ -262,7 +336,7 @@ PyDoc_STRVAR(
     "\n"
     "   Returns a smooth noise value for a 3D element.\n"
     "\n"
-    "   :arg v: Three-dimensional sample point.\n"
+    "   :param v: Three-dimensional sample point.\n"
     "   :type v: :class:`mathutils.Vector` | tuple[float, float, float] | list[float]\n"
     "   :return: A smooth noise value.\n"
     "   :rtype: float\n");
@@ -272,7 +346,13 @@ static PyObject *FrsNoise_smoothNoise3(BPy_FrsNoise *self, PyObject *args, PyObj
   PyObject *obj;
   Vec3f vec;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O", (char **)kwlist, &obj)) {
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "O" /* `v` */
+                                   ":smoothNoise3",
+                                   (char **)kwlist,
+                                   &obj))
+  {
     return nullptr;
   }
   if (!Vec3f_ptr_from_PyObject(obj, vec)) {

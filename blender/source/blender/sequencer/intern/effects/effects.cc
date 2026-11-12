@@ -11,6 +11,7 @@
 #include "BLI_math_filter.hh"
 
 #include "BKE_fcurve.hh"
+#include "BKE_scene.hh"
 
 #include "DNA_scene_types.h"
 #include "DNA_sequence_types.h"
@@ -18,6 +19,8 @@
 #include "IMB_colormanagement.hh"
 #include "IMB_imbuf.hh"
 #include "IMB_metadata.hh"
+
+#include "PRF_profile.hh"
 
 #include "RNA_prototypes.hh"
 
@@ -28,51 +31,44 @@
 
 namespace blender::seq {
 
-ImBuf *prepare_effect_imbufs(const RenderData *context,
-                             ImBuf *ibuf1,
-                             ImBuf *ibuf2,
-                             bool uninitialized_pixels)
+SeqResult prepare_effect_imbufs(const RenderData *context,
+                                const SeqResult &ibuf1,
+                                const SeqResult &ibuf2,
+                                bool uninitialized_pixels)
 {
-  ImBuf *out;
+  PRF_scope_with_name("SeqFxPrepareImbufs", ProfileCategory::Draw);
+  SeqResult out;
   Scene *scene = context->scene;
   int x = context->rectx;
   int y = context->recty;
-  int base_flags = uninitialized_pixels ? IB_uninitialized_pixels : 0;
+  ImBufFlags base_flags = uninitialized_pixels ? ImBufFlags::UninitializedPixels :
+                                                 ImBufFlags::Zero;
 
-  if (!ibuf1 && !ibuf2) {
-    /* Hmm, global float option? */
-    out = IMB_allocImBuf(x, y, 32, IB_byte_data | base_flags);
-  }
-  else if ((ibuf1 && ibuf1->float_data()) || (ibuf2 && ibuf2->float_data())) {
-    /* if any inputs are float, output is float too */
-    out = IMB_allocImBuf(x, y, 32, IB_float_data | base_flags);
-  }
-  else {
-    out = IMB_allocImBuf(x, y, 32, IB_byte_data | base_flags);
-  }
+  /* Convert everything to the sequencer colorspace before applying the effects. */
+  const ColorSpace *sequencer_colorspace = IMB_colormanagement_space_get_named(
+      scene->sequencer_colorspace_settings.name);
+  const bool use_float =
+      (ibuf1.is_valid() &&
+       (ibuf1.image->float_data() || &ibuf1.image->byte_colorspace() != sequencer_colorspace)) ||
+      (ibuf2.is_valid() &&
+       (ibuf2.image->float_data() || &ibuf2.image->byte_colorspace() != sequencer_colorspace));
 
-  if (out->float_data()) {
-    if (ibuf1) {
-      ensure_ibuf_is_sequencer_space(scene, ibuf1, true);
-    }
-    if (ibuf2) {
-      ensure_ibuf_is_sequencer_space(scene, ibuf2, true);
-    }
-    IMB_colormanagement_assign_float_colorspace(out, scene->sequencer_colorspace_settings.name);
-  }
-  else {
-    if (ibuf1 && !ibuf1->byte_data()) {
-      IMB_byte_from_float(ibuf1);
-    }
+  out.image = IMB_allocImBuf(
+      x, y, (use_float ? ImBufFlags::FloatData : ImBufFlags::ByteData) | base_flags);
+  seq_imbuf_assign_sequencer_space(scene, out.image);
 
-    if (ibuf2 && !ibuf2->byte_data()) {
-      IMB_byte_from_float(ibuf2);
+  if (use_float) {
+    if (ibuf1.is_valid()) {
+      ensure_ibuf_is_sequencer_space(scene, ibuf1.image, true);
+    }
+    if (ibuf2.is_valid()) {
+      ensure_ibuf_is_sequencer_space(scene, ibuf2.image, true);
     }
   }
 
   /* If effect only affecting a single channel, forward input's metadata to the output. */
-  if (ibuf1 != nullptr && ibuf1 == ibuf2) {
-    IMB_metadata_copy(out, ibuf1);
+  if (ibuf1.is_valid() && ibuf1.image == ibuf2.image) {
+    IMB_metadata_copy(out.image, ibuf1.image);
   }
 
   return out;
@@ -319,7 +315,10 @@ static float transition_fader_calc(const Scene *scene, const Strip *strip, float
   return fac;
 }
 
-float effect_fader_calc(Scene *scene, Strip *strip, float timeline_frame)
+float effect_fader_calc(Scene *scene,
+                        Strip *strip,
+                        float timeline_frame,
+                        const bool is_current_frame)
 {
   if (strip->flag & SEQ_USE_EFFECT_DEFAULT_FADE) {
     if (effect_is_transition(strip->type)) {
@@ -331,6 +330,15 @@ float effect_fader_calc(Scene *scene, Strip *strip, float timeline_frame)
   const FCurve *fcu = id_data_find_fcurve(
       &scene->id, strip, RNA_Strip, "effect_fader", 0, nullptr);
   if (fcu) {
+    /* At the current frame, a value that differs from the curve is an interactive user edit
+     * that has not been committed to the curve yet. Use it directly so that preview reflects
+     * this edited state. Note that we need to evaluate at the scene time, so that a retimed
+     * meta strip case is covered. */
+    if (is_current_frame &&
+        strip->effect_fader != evaluate_fcurve(fcu, BKE_scene_frame_get(scene)))
+    {
+      return strip->effect_fader;
+    }
     return evaluate_fcurve(fcu, timeline_frame);
   }
   return strip->effect_fader;

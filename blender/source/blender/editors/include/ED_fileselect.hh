@@ -39,6 +39,8 @@ namespace asset_system {
 class AssetLibrary;
 }
 
+enum eFileSortType : short;
+
 #define FILE_LAYOUT_HOR 1
 #define FILE_LAYOUT_VER 2
 
@@ -57,7 +59,7 @@ struct FileAttributeColumn {
 
   float width;
   /** The sort type to use when sorting by this column. */
-  int sort_type; /* eFileSortType */
+  eFileSortType sort_type;
 
   /** Alignment of column texts, header text is always left aligned */
   int text_align; /* eFontStyle_Align */
@@ -125,9 +127,6 @@ void ED_fileselect_set_params_from_userdef(SpaceFile *sfile);
 /**
  * Update the user-preference data for the file space. In fact, this also contains some
  * non-FileSelectParams data, but we can safely ignore this.
- *
- * \param temp_win_size: If the browser was opened in a temporary window,
- * pass its size here so we can store that in the preferences. Otherwise NULL.
  */
 void ED_fileselect_params_to_userdef(SpaceFile *sfile);
 

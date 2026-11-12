@@ -9,6 +9,7 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
 #include <optional>
 
 #include "AS_asset_catalog.hh"
@@ -22,6 +23,7 @@
 #include "BLI_vector.hh"
 
 #include "BKE_callbacks.hh"
+#include "DNA_userdef_types.h"
 
 namespace blender {
 
@@ -50,10 +52,12 @@ class AssetLibrary {
    * to identify an asset library (e.g. by #AssetWeakReference).
    */
   std::string name_;
-  /** If this is an asset library on disk, the top-level directory path. Normalized using
+  /**
+   * If this is an asset library on disk, the top-level directory path. Normalized using
    * #normalize_directory_path(). Shared pointer so assets can safely point to it, and don't have
    * to hold a copy (which is the size of `std::string` + the allocated buffer, if no short string
-   * optimization is used). With thousands of assets this might make a reasonable difference. */
+   * optimization is used). With thousands of assets this might make a reasonable difference.
+   */
   std::shared_ptr<std::string> root_path_;
 
   /**
@@ -87,12 +91,18 @@ class AssetLibrary {
  protected:
   /* Changing this pointer should be protected using #catalog_service_mutex_. Note that changes
    * within the catalog service may still happen without the mutex being locked. They should be
-   * protected separately. */
-  std::unique_ptr<AssetCatalogService> catalog_service_;
-  Mutex catalog_service_mutex_;
+   * protected separately.
+   *
+   * This is a #shared_ptr (rather than #unique_ptr) so that readers can keep the service alive
+   * while using it, even if another thread replaces #catalog_service_ in the meantime (which frees
+   * the previously referenced service). See #catalog_service_ptr(). */
+  std::shared_ptr<AssetCatalogService> catalog_service_;
+  mutable std::recursive_mutex catalog_service_mutex_;
 
-  /** Assets owned by this library may be imported with a different method than set in
-   * #import_method_ above, it's just a default. */
+  /**
+   * Assets owned by this library may be imported with a different method than set in
+   * #import_method_ above, it's just a default.
+   */
   bool may_override_import_method_ = false;
 
   bCallbackFuncStore on_save_callback_store_{};
@@ -124,6 +134,8 @@ class AssetLibrary {
    * Execute \a fn for every asset library that is loaded and enabled. The asset library is passed
    * to the \a fn call.
    *
+   * \note Libraries may note be freed during the iteration.
+   *
    * \param include_all_library: When true, \a fn will also be executed for the "All" asset
    *   library. This is just a combination of the other ones, so usually iterating over it is
    *   redundant.
@@ -131,11 +143,28 @@ class AssetLibrary {
   static void foreach_loaded(FunctionRef<void(AssetLibrary &)> fn, bool include_all_library);
 
   /**
+   * (Re-)download the remote listing for this library.
+   *
+   * This only has an effect for asset libraries that are themselves a remote library, or contain
+   * one (such as the "Essentials" library if it includes online essentials, or the "All" if there
+   * are any remote libraries included).
+   *
+   * The "Allow Online Access" option will be enforced internally, but probably some check to give
+   * a user message should be done at a higher level.
+   */
+  virtual void force_remote_listing_download() const;
+
+  /**
    * Get the #AssetLibraryReference referencing this library. This can fail for custom libraries,
    * which have too look up their #bUserAssetLibrary. It will not return a value for values that
    * were loaded directly through a path.
    */
   virtual std::optional<AssetLibraryReference> library_reference() const = 0;
+
+  /**
+   * Get the bUserAssetLibrary that's backing this asset library, if there is any.
+   */
+  virtual const bUserAssetLibrary *user_asset_library() const;
 
   /**
    * Get the import method that should be used for assets in this library.
@@ -157,7 +186,19 @@ class AssetLibrary {
    */
   virtual std::optional<StringRefNull> remote_url() const;
 
+  virtual std::optional<StringRefNull> auth_token() const;
+
   AssetCatalogService &catalog_service() const;
+
+  /**
+   * Get shared ownership of the catalog service. Unlike #catalog_service(), this keeps the service
+   * alive for as long as the returned pointer is held, even if another thread replaces the
+   * library's catalog service in the meantime (e.g. a background catalog reload job). Use this
+   * instead of #catalog_service() when accessing the service from a thread that may run
+   * concurrently with such a replacement (e.g. the drawing/main thread while an asset read job is
+   * running).
+   */
+  std::shared_ptr<AssetCatalogService> catalog_service_ptr() const;
 
   /**
    * Create a representation of an asset to be considered part of this library. Once the
@@ -177,8 +218,10 @@ class AssetLibrary {
       StringRef name,
       int id_type,
       std::unique_ptr<AssetMetaData> metadata);
-  /** See #AssetLibrary::add_external_on_disk_asset(). Use this for assets that are not available
-   * on disk, and part of an online asset library. */
+  /**
+   * See #AssetLibrary::add_external_on_disk_asset(). Use this for assets that are not available
+   * on disk, and part of an online asset library.
+   */
   std::weak_ptr<AssetRepresentation> add_external_online_asset(
       StringRef relative_asset_path,
       StringRef name,
@@ -248,16 +291,21 @@ class AssetLibrary {
 Vector<AssetLibraryReference> all_valid_asset_library_refs();
 
 AssetLibraryReference all_library_reference();
+AssetLibraryReference essentials_library_reference();
 AssetLibraryReference current_file_library_reference();
+AssetLibraryReference online_essentials_library_reference();
+
+void all_library_tag_catalogs_dirty();
 void all_library_reload_catalogs_if_dirty();
 
 /**
  * Return whether this is a remote asset library, or contains remote assets.
  *
- * The All and Essentials libraries can (now resp. in the future) have a mixture of local & remote
- * assets.
+ * The All and Essentials libraries can have a mixture of local & remote assets.
  */
 bool is_or_contains_remote_libraries(const AssetLibraryReference &reference);
+
+bool contains_assets_from_remote_url(const AssetLibrary &library, StringRef remote_url);
 
 }  // namespace asset_system
 
@@ -292,12 +340,8 @@ std::string AS_asset_library_root_path_from_library_ref(
  * * If \a input_path is empty or doesn't have a parent path (e.g. because a .blend wasn't saved
  *   yet), there is no suitable path. The caller has to decide how to handle this case.
  *
- * \param r_library_path: The returned asset library path with a trailing slash, or an empty string
- *                        if no suitable path is found. Assumed to be a buffer of at least
- *                        #FILE_MAXDIR bytes.
- *
- * \return True if the function could find a valid, that is, a non-empty path to return in \a
- *         r_library_path.
+ * \return The returned asset library path with a trailing slash,
+ * or an empty string if no suitable path is found.
  */
 std::string AS_asset_library_find_suitable_root_path_from_path(StringRefNull input_path);
 
@@ -329,6 +373,12 @@ void AS_asset_libraries_exit();
  */
 asset_system::AssetLibrary *AS_asset_library_load_from_directory(const char *name,
                                                                  const char *library_dirpath);
+
+/**
+ * Return a normalized path string, will also expand project variables that are in the passed path
+ * string. *
+ */
+std::string AS_asset_library_resolve_path(StringRef path);
 
 /** Return whether any loaded AssetLibrary has unsaved changes to its catalogs. */
 bool AS_asset_library_has_any_unsaved_catalogs();

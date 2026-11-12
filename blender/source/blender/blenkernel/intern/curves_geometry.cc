@@ -14,7 +14,7 @@
 #include "BLI_bounds.hh"
 #include "BLI_index_mask.hh"
 #include "BLI_length_parameterize.hh"
-#include "BLI_listbase.h"
+#include "BLI_listbase.hh"
 #include "BLI_math_matrix.hh"
 #include "BLI_math_rotation_legacy.hh"
 #include "BLI_memory_counter.hh"
@@ -22,6 +22,8 @@
 #include "BLI_task.hh"
 
 #include "BLO_read_write.hh"
+
+#include "BLT_translation.hh"
 
 #include "DNA_curves_types.h"
 #include "DNA_material_types.h"
@@ -37,6 +39,7 @@
 #include "BKE_curves_utils.hh"
 #include "BKE_customdata.hh"
 #include "BKE_deform.hh"
+#include "BKE_report.hh"
 
 #include "attribute_storage_access.hh"
 
@@ -73,7 +76,7 @@ CurvesGeometry::CurvesGeometry(const int point_num, const int curve_num)
   CustomData_reset(&this->point_data);
   CustomData_reset(&this->curve_data_legacy);
   new (&this->attribute_storage.wrap()) bke::AttributeStorage();
-  BLI_listbase_clear(&this->vertex_group_names);
+  this->vertex_group_names.clear_no_delete();
 
   this->attributes_for_write().add<float3>(
       "position", AttrDomain::Point, AttributeInitConstruct());
@@ -184,13 +187,13 @@ CurvesGeometry::CurvesGeometry(CurvesGeometry &&other)
   other.curve_num = 0;
 
   this->vertex_group_names = other.vertex_group_names;
-  BLI_listbase_clear(&other.vertex_group_names);
+  other.vertex_group_names.clear_no_delete();
 
   this->vertex_group_active_index = other.vertex_group_active_index;
   other.vertex_group_active_index = 0;
 
   this->attributes_active_index = other.attributes_active_index;
-  other.attributes_active_index = 0;
+  other.attributes_active_index = -1;
 
   this->runtime = other.runtime;
   other.runtime = nullptr;
@@ -210,7 +213,7 @@ CurvesGeometry::~CurvesGeometry()
 {
   CustomData_free(&this->point_data);
   this->attribute_storage.wrap().~AttributeStorage();
-  BLI_freelistN(&this->vertex_group_names);
+  this->vertex_group_names.free_no_destruct();
   if (this->runtime) {
     implicit_sharing::free_shared_data(&this->curve_offsets,
                                        &this->runtime->curve_offsets_sharing_info);
@@ -282,8 +285,49 @@ void CurvesGeometry::fill_curve_types(const IndexMask &selection, const CurveTyp
   this->tag_topology_changed();
 }
 
+static bool is_valid_curve_type(const int8_t type)
+{
+  return type >= 0 && type < CURVE_TYPES_NUM;
+}
+
+/** Read-only, to avoid changing the storage or sharing of valid data. */
+static bool curve_types_are_valid(const VArray<int8_t> &types)
+{
+  if (const std::optional<int8_t> single = types.get_if_single()) {
+    return is_valid_curve_type(*single);
+  }
+  const Span<int8_t> types_span = types.get_internal_span();
+  return threading::parallel_reduce(
+      types_span.index_range(),
+      2048,
+      true,
+      [&](const IndexRange curves_range, const bool &init) {
+        if (!init) {
+          return false;
+        }
+        for (const int64_t curve_index : curves_range) {
+          if (!is_valid_curve_type(types_span[curve_index])) {
+            return false;
+          }
+        }
+        return true;
+      },
+      [](const bool &a, const bool &b) { return a && b; });
+}
+
+/** Replace invalid curve types by poly curves. */
+static void sanitize_curve_types(MutableSpan<int8_t> types)
+{
+  for (int8_t &type : types) {
+    if (!is_valid_curve_type(type)) {
+      type = CURVE_TYPE_POLY;
+    }
+  }
+}
+
 std::array<int, CURVE_TYPES_NUM> calculate_type_counts(const VArray<int8_t> &types)
 {
+  PRF_scope(ProfileCategory::Core);
   using CountsType = std::array<int, CURVE_TYPES_NUM>;
   CountsType counts;
   counts.fill(0);
@@ -649,6 +693,7 @@ static void calculate_evaluated_offsets(const CurvesGeometry &curves,
                                         MutableSpan<int> offsets,
                                         MutableSpan<int> all_bezier_offsets)
 {
+  PRF_scope(ProfileCategory::Default);
   const OffsetIndices points_by_curve = curves.points_by_curve();
   const VArray<int8_t> types = curves.curve_types();
   const VArray<int> resolution = curves.resolution();
@@ -763,6 +808,7 @@ void CurvesGeometry::ensure_nurbs_basis_cache() const
 {
   const CurvesGeometryRuntime &runtime = *this->runtime;
   runtime.nurbs_basis_cache.ensure([&](Vector<curves::nurbs::BasisCache> &r_data) {
+    PRF_scope_with_name("CurvesGeometry::ensure_nurbs_basis_cache", ProfileCategory::Default);
     IndexMaskMemory memory;
     const IndexMask nurbs_mask = this->indices_for_curve_type(CURVE_TYPE_NURBS, memory);
     if (nurbs_mask.is_empty()) {
@@ -833,6 +879,7 @@ Span<float3> CurvesGeometry::evaluated_positions() const
   }
   this->ensure_nurbs_basis_cache();
   runtime.evaluated_position_cache.ensure([&](Vector<float3> &r_data) {
+    PRF_scope_with_name("CurvesGeometry::evaluated_positions", ProfileCategory::Default);
     r_data.resize(this->evaluated_points_num());
     MutableSpan<float3> evaluated_positions = r_data;
 
@@ -915,6 +962,7 @@ Span<float3> CurvesGeometry::evaluated_tangents() const
 {
   const CurvesGeometryRuntime &runtime = *this->runtime;
   runtime.evaluated_tangent_cache.ensure([&](Vector<float3> &r_data) {
+    PRF_scope_with_name("CurvesGeometry::evaluated_tangents", ProfileCategory::Default);
     const OffsetIndices<int> evaluated_points_by_curve = this->evaluated_points_by_curve();
     const Span<float3> evaluated_positions = this->evaluated_positions();
     const VArray<bool> cyclic = this->cyclic();
@@ -976,7 +1024,7 @@ static void rotate_directions_around_axes(MutableSpan<float3> directions,
 {
   for (const int i : directions.index_range()) {
     const float3 axis = axes[i];
-    if (UNLIKELY(math::is_zero(axis))) {
+    if (math::is_zero(axis)) [[unlikely]] {
       continue;
     }
     directions[i] = math::rotate_direction_around_axis(directions[i], axis, angles[i]);
@@ -1163,6 +1211,7 @@ void CurvesGeometry::interpolate_to_evaluated(const GSpan src, GMutableSpan dst)
       this->nurbs_weights(),
   };
   const OffsetIndices evaluated_points_by_curve = this->evaluated_points_by_curve();
+  PRF_scope_with_name("CurvesGeometry::interpolate_to_evaluated", ProfileCategory::Default);
 
   threading::parallel_for(this->curves_range(), 512, [&](IndexRange curves_range) {
     for (const int curve_index : curves_range) {
@@ -1178,6 +1227,7 @@ void CurvesGeometry::ensure_evaluated_lengths() const
 {
   const CurvesGeometryRuntime &runtime = *this->runtime;
   runtime.evaluated_length_cache.ensure([&](Vector<float> &r_data) {
+    PRF_scope_with_name("CurvesGeometry::ensure_evaluated_lengths", ProfileCategory::Default);
     /* Use an extra length value for the final cyclic segment for a consistent size
      * (see comment on #evaluated_length_cache). */
     const int total_num = this->evaluated_points_num() + this->curves_num();
@@ -1492,6 +1542,7 @@ CurvesGeometry curves_copy_point_selection(const CurvesGeometry &curves,
                                            const IndexMask &points_to_copy,
                                            const AttributeFilter &attribute_filter)
 {
+  PRF_scope(ProfileCategory::Core);
   const Array<int> point_to_curve_map = curves.point_to_curve_map();
   Array<int> curve_point_counts(curves.curves_num(), 0);
   points_to_copy.foreach_index_optimized<int64_t>(
@@ -1588,6 +1639,7 @@ CurvesGeometry curves_copy_curve_selection(const CurvesGeometry &curves,
                                            const IndexMask &curves_to_copy,
                                            const AttributeFilter &attribute_filter)
 {
+  PRF_scope(ProfileCategory::Core);
   const OffsetIndices points_by_curve = curves.points_by_curve();
   CurvesGeometry dst_curves(0, curves_to_copy.size());
   const OffsetIndices dst_points_by_curve = offset_indices::gather_selected_offsets(
@@ -1619,7 +1671,6 @@ CurvesGeometry curves_copy_curve_selection(const CurvesGeometry &curves,
     copy_curve_selection_custom_knots(curves, curves_to_copy, dst_curves);
   }
 
-  dst_curves.update_curve_types();
   dst_curves.remove_attributes_based_on_types();
 
   return dst_curves;
@@ -1838,6 +1889,7 @@ void adapt_curve_domain_point_to_curve_impl(const CurvesGeometry &curves,
 static GVArray adapt_curve_domain_point_to_curve(const CurvesGeometry &curves,
                                                  const GVArray &varray)
 {
+  PRF_scope(ProfileCategory::Default);
   GVArray new_varray;
   attribute_math::to_static_type(varray.type(), [&]<typename T>() {
     if constexpr (!std::is_void_v<attribute_math::DefaultMixer<T>>) {
@@ -1856,27 +1908,14 @@ static GVArray adapt_curve_domain_point_to_curve(const CurvesGeometry &curves,
  * However, doing that makes the implementation simpler, and this can be optimized in the future if
  * only some values are required.
  */
-template<typename T>
-static void adapt_curve_domain_curve_to_point_impl(const CurvesGeometry &curves,
-                                                   const VArray<T> &old_values,
-                                                   MutableSpan<T> r_values)
-{
-  const OffsetIndices points_by_curve = curves.points_by_curve();
-  for (const int i_curve : IndexRange(curves.curves_num())) {
-    r_values.slice(points_by_curve[i_curve]).fill(old_values[i_curve]);
-  }
-}
-
 static GVArray adapt_curve_domain_curve_to_point(const CurvesGeometry &curves,
                                                  const GVArray &varray)
 {
-  GVArray new_varray;
-  attribute_math::to_static_type(varray.type(), [&]<typename T>() {
-    Array<T> values(curves.points_num());
-    adapt_curve_domain_curve_to_point_impl<T>(curves, varray.typed<T>(), values);
-    new_varray = VArray<T>::from_container(std::move(values));
-  });
-  return new_varray;
+  PRF_scope(ProfileCategory::Default);
+  GArray<> values(varray.type(), curves.points_num());
+  attribute_math::gather_to_groups(
+      curves.points_by_curve(), curves.curves_range(), GVArraySpan(varray), values);
+  return GVArray::from_garray(std::move(values));
 }
 
 GVArray CurvesGeometry::adapt_domain(const GVArray &varray,
@@ -1936,8 +1975,11 @@ void CurvesGeometry::blend_read(BlendDataReader &reader)
   if (this->curve_offsets) {
     this->runtime->curve_offsets_sharing_info = BLO_read_shared(
         &reader, &this->curve_offsets, [&]() {
-          BLO_read_int32_array(&reader, this->curve_num + 1, &this->curve_offsets);
-          return implicit_sharing::info_for_mem_free(this->curve_offsets);
+          if (!BLO_read_array(&reader, &this->curve_offsets, int64_t(this->curve_num) + 1)) {
+            this->curve_num = 0;
+          }
+          return this->curve_offsets ? implicit_sharing::info_for_mem_free(this->curve_offsets) :
+                                       nullptr;
         });
   }
 
@@ -1946,9 +1988,49 @@ void CurvesGeometry::blend_read(BlendDataReader &reader)
   if (this->custom_knot_num) {
     this->runtime->custom_knots_sharing_info = BLO_read_shared(
         &reader, &this->custom_knots, [&]() {
-          BLO_read_float_array(&reader, this->custom_knot_num, &this->custom_knots);
-          return implicit_sharing::info_for_mem_free(this->custom_knots);
+          BLO_read_array_and_validate_size(&reader, &this->custom_knots, &this->custom_knot_num);
+          return this->custom_knots ? implicit_sharing::info_for_mem_free(this->custom_knots) :
+                                      nullptr;
         });
+  }
+
+  /* Curve types are used as array indices when counting them below. There is always one value per
+   * curve when writing, so a different size means the file is corrupt. */
+  const VArray<int8_t> types = this->curve_types();
+  if (types.size() != this->curve_num) {
+    BLO_read_data_invalidate(&reader, "Invalid curve types");
+    return;
+  }
+
+  /* Out of range values can be written, since the attribute validator used to allow
+   * #CURVE_TYPES_NUM. Replace them so such files can still be loaded. */
+  bool any_invalid = false;
+  if (!curve_types_are_valid(types)) {
+    any_invalid = true;
+    if (this->curve_num > 0) {
+      sanitize_curve_types(this->curve_types_for_write());
+    }
+    else {
+      this->attribute_storage.wrap().remove(ATTR_CURVE_TYPE);
+    }
+  }
+
+  /* Older files store curve types in legacy custom data, converted during versioning. */
+  if (const void *legacy_types = CustomData_get_layer_named(
+          &this->curve_data_legacy, CD_PROP_INT8, ATTR_CURVE_TYPE))
+  {
+    const Span<int8_t> legacy_span(static_cast<const int8_t *>(legacy_types), this->curve_num);
+    if (!curve_types_are_valid(VArray<int8_t>::from_span(legacy_span))) {
+      any_invalid = true;
+      void *legacy_types_for_write = CustomData_get_layer_named_for_write(
+          &this->curve_data_legacy, CD_PROP_INT8, ATTR_CURVE_TYPE, this->curve_num);
+      sanitize_curve_types({static_cast<int8_t *>(legacy_types_for_write), this->curve_num});
+    }
+  }
+
+  if (any_invalid) {
+    BLO_reportf_wrap(
+        BLO_read_data_reports(&reader), RPT_ERROR, "%s", RPT_("Invalid curve type identifiers"));
   }
 
   /* Recalculate curve type count cache that isn't saved in files. */
@@ -1982,8 +2064,7 @@ void CurvesGeometry::blend_write_prepare(CurvesGeometry::BlendWriteData &write_d
     this->attribute_storage.dna_attributes_num = write_data.attribute_data.attributes.size();
   }
 
-  BLO_write_generated_pointer_tag(write_data.attribute_data.writer,
-                                  this->attribute_storage.dna_attributes);
+  write_data.attribute_data.writer->generated_pointer_tag(this->attribute_storage.dna_attributes);
 }
 
 void CurvesGeometry::blend_write(BlendWriter &writer,
@@ -1995,8 +2076,7 @@ void CurvesGeometry::blend_write(BlendWriter &writer,
   this->attribute_storage.wrap().blend_write(writer, write_data.attribute_data);
 
   if (this->curve_offsets) {
-    BLO_write_shared(
-        &writer,
+    writer.write_shared(
         this->curve_offsets,
         sizeof(int) * (this->curve_num + 1),
         this->runtime->curve_offsets_sharing_info,
@@ -2006,8 +2086,7 @@ void CurvesGeometry::blend_write(BlendWriter &writer,
   BKE_defbase_blend_write(&writer, &this->vertex_group_names);
 
   if (this->custom_knot_num) {
-    BLO_write_shared(
-        &writer,
+    writer.write_shared(
         this->custom_knots,
         sizeof(float) * this->custom_knot_num,
         this->runtime->custom_knots_sharing_info,

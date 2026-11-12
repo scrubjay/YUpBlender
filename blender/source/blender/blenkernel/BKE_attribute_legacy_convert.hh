@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup bke
+ */
+
 #pragma once
 
 #include "BLI_vector.hh"
@@ -25,7 +29,7 @@ struct Mesh;
 namespace bke {
 
 const CPPType *custom_data_type_to_cpp_type(eCustomDataType type);
-eCustomDataType cpp_type_to_custom_data_type(const CPPType &type);
+std::optional<eCustomDataType> cpp_type_to_custom_data_type(const CPPType &type);
 
 /**
  * Convert a custom data type to an attribute type. May return `std::nullopt` if the custom data

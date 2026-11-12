@@ -9,6 +9,10 @@
 #include "BKE_object.hh"
 #include "BKE_report.hh"
 
+#include "BLI_math_euler.hh"
+#include "BLI_math_matrix.hh"
+#include "BLI_math_rotation.hh"
+
 #include "DNA_modifier_types.h"
 #include "DNA_object_types.h"
 

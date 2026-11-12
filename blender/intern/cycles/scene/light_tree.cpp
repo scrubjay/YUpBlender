@@ -96,8 +96,9 @@ LightTreeEmitter::LightTreeEmitter(Scene *scene,
     const Mesh::Triangle triangle = mesh->get_triangle(prim_id);
     Shader *shader = static_cast<Shader *>(mesh->get_used_shaders()[mesh->get_shader()[prim_id]]);
 
+    const packed_float3 *mesh_positions = mesh->get_position();
     for (int i = 0; i < 3; i++) {
-      vertices[i] = mesh->get_verts()[triangle.v[i]];
+      vertices[i] = mesh_positions[triangle.v[i]];
     }
 
     if (need_transformation) {
@@ -115,8 +116,8 @@ LightTreeEmitter::LightTreeEmitter(Scene *scene,
     measure.energy = area * average(fabs(shader->emission_estimate));
 
     /* NOTE: the original implementation used the bounding box centroid, but triangle centroid
-     * seems to work fine */
-    centroid = (vertices[0] + vertices[1] + vertices[2]) / 3.0f;
+     * seems to work fine. */
+    centroid = (vertices[0] + vertices[1] + vertices[2]) * (1.0f / 3.0f);
 
     const bool is_front_only = (shader->emission_sampling == EMISSION_SAMPLING_FRONT);
     const bool is_back_only = (shader->emission_sampling == EMISSION_SAMPLING_BACK);

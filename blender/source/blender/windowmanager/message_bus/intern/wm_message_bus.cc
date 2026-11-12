@@ -12,10 +12,10 @@
 
 #include "MEM_guardedalloc.h"
 
-#include "BLI_listbase.h"
-#include "BLI_utildefines.h"
+#include "BLI_listbase.hh"
+#include "BLI_utildefines.hh"
 
-#include "BLI_ghash.h"
+#include "BLI_ghash.hh"
 
 #include "WM_types.hh"
 
@@ -69,15 +69,11 @@ void WM_msgbus_destroy(wmMsgBus *mbus)
 void WM_msgbus_clear_by_owner(wmMsgBus *mbus, void *owner)
 {
   wmMsgSubscribeKey *msg_key, *msg_key_next;
-  for (msg_key = static_cast<wmMsgSubscribeKey *>(mbus->messages.first); msg_key;
-       msg_key = msg_key_next)
-  {
+  for (msg_key = mbus->messages.first(); msg_key; msg_key = msg_key_next) {
     msg_key_next = msg_key->next;
 
     wmMsgSubscribeValueLink *msg_lnk_next;
-    for (wmMsgSubscribeValueLink *msg_lnk =
-             static_cast<wmMsgSubscribeValueLink *>(msg_key->values.first);
-         msg_lnk;
+    for (wmMsgSubscribeValueLink *msg_lnk = msg_key->values.first(); msg_lnk;
          msg_lnk = msg_lnk_next)
     {
       msg_lnk_next = msg_lnk->next;
@@ -93,7 +89,7 @@ void WM_msgbus_clear_by_owner(wmMsgBus *mbus, void *owner)
       }
     }
 
-    if (BLI_listbase_is_empty(&msg_key->values)) {
+    if (msg_key->values.is_empty()) {
       const wmMsg *msg = wm_msg_subscribe_value_msg_cast(msg_key);
       wmMsgTypeInfo *info = &wm_msg_types[msg->type];
       BLI_remlink(&mbus->messages, msg_key);
@@ -182,7 +178,7 @@ void WM_msg_publish_with_key(wmMsgBus *mbus, wmMsgSubscribeKey *msg_key)
   CLOG_DEBUG(WM_LOG_MSGBUS_SUB,
              "tagging subscribers: (ptr=%p, len=%d)",
              msg_key,
-             BLI_listbase_count(&msg_key->values));
+             msg_key->values.count());
 
   for (wmMsgSubscribeValueLink &msg_lnk : msg_key->values) {
     if (false) { /* Make an option? */

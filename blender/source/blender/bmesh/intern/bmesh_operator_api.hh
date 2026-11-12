@@ -9,7 +9,7 @@
  */
 
 #include "BLI_enum_flags.hh"
-#include "BLI_ghash.h"
+#include "BLI_ghash.hh"
 
 #include <cstdarg>
 
@@ -461,6 +461,9 @@ void BMO_pop(BMesh *bm);
 /** Executes an operator. */
 bool BMO_op_callf(BMesh *bm, int flag, const char *fmt, ...);
 
+/** A `va_list` version of #BMO_op_callf. */
+bool BMO_op_vcallf(BMesh *bm, int flag, const char *fmt, va_list list);
+
 /**
  * Initializes, but doesn't execute an operator.  this is so you can
  * gain access to the outputs of the operator.  note that you have
@@ -807,7 +810,8 @@ void *BMO_slot_buffer_get_first(BMOpSlot slot_args[BMO_OP_MAX_SLOTS], const char
  *
  * \param restrictmask: restricts the iteration to certain element types
  * (e.g. combination of BM_VERT, BM_EDGE, BM_FACE), if iterating
- * over an element buffer (not a mapping). */
+ * over an element buffer (not a mapping).
+ */
 void *BMO_iter_new(BMOIter *iter,
                    BMOpSlot slot_args[BMO_OP_MAX_SLOTS],
                    const char *slot_name,

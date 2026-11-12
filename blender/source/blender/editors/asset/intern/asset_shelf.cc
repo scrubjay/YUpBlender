@@ -16,8 +16,8 @@
 #include "AS_asset_representation.hh"
 
 #include "BLI_function_ref.hh"
-#include "BLI_listbase.h"
-#include "BLI_string_utf8.h"
+#include "BLI_listbase.hh"
+#include "BLI_string_utf8.hh"
 
 #include "BKE_context.hh"
 #include "BKE_idtype.hh"
@@ -239,7 +239,7 @@ static AssetShelf *update_active_shelf(const bContext &C,
           C, ensure_shelf_has_type(*shelf_regiondata.active_shelf), space_type))
   {
     /* Not a strong precondition, but if this is wrong something weird might be going on. */
-    BLI_assert(shelf_regiondata.active_shelf == shelf_regiondata.shelves.first);
+    BLI_assert(shelf_regiondata.active_shelf == shelf_regiondata.shelves.first_);
     return shelf_regiondata.active_shelf;
   }
 
@@ -321,8 +321,7 @@ static bool asset_shelf_space_poll(const bContext *C, const SpaceLink *space_lin
 
 bool regions_poll(const RegionPollParams *params)
 {
-  return asset_shelf_space_poll(params->context,
-                                static_cast<SpaceLink *>(params->area->spacedata.first));
+  return asset_shelf_space_poll(params->context, params->area->spacedata.first());
 }
 
 static void asset_shelf_region_listen(const wmRegionListenerParams *params)
@@ -423,7 +422,6 @@ void region_init(wmWindowManager *wm, ARegion *region)
   region->v2d.scroll = V2D_SCROLL_RIGHT | V2D_SCROLL_VERTICAL_HIDE;
   region->v2d.keepzoom |= V2D_LOCKZOOM_X | V2D_LOCKZOOM_Y;
   region->v2d.keepofs |= V2D_KEEPOFS_Y;
-  region->v2d.keeptot |= V2D_KEEPTOT_STRICT;
 
   region->v2d.flag |= V2D_SNAP_TO_PAGESIZE_Y;
   region->v2d.page_size_y = active_shelf ? tile_height(active_shelf->settings) :
@@ -568,10 +566,12 @@ void region_layout(const bContext *C, ARegion *region)
       shelf_regiondata,
       "Region-data should've been created by a previously called `region_on_poll_success()`.");
 
-  const AssetShelf *active_shelf = shelf_regiondata->active_shelf;
+  AssetShelf *active_shelf = shelf_regiondata->active_shelf;
   if (!active_shelf) {
     return;
   }
+
+  settings_ensure_valid_library_ref(active_shelf->settings);
 
   ui::Block *block = block_begin(C, region, __func__, ui::EmbossType::Emboss);
 
@@ -773,11 +773,8 @@ int context(const bContext *C, const char *member, bContextDataResult *result)
     if (!active_shelf) {
       return CTX_RESULT_NO_DATA;
     }
-
-    CTX_data_pointer_set(result,
-                         &screen->id,
-                         RNA_AssetLibraryReference,
-                         &active_shelf->settings.asset_library_reference);
+    AssetLibraryReference &library_ref = settings_ensure_valid_library_ref(active_shelf->settings);
+    CTX_data_pointer_set(result, &screen->id, RNA_AssetLibraryReference, &library_ref);
     return CTX_RESULT_OK;
   }
 
@@ -950,8 +947,8 @@ void type_unlink(const Main &bmain, const AssetShelfType &shelf_type)
   for (bScreen &screen : bmain.screens) {
     for (ScrArea &area : screen.areabase) {
       for (SpaceLink &sl : area.spacedata) {
-        ListBaseT<ARegion> *regionbase = (&sl == area.spacedata.first) ? &area.regionbase :
-                                                                         &sl.regionbase;
+        ListBaseT<ARegion> *regionbase = (&sl == area.spacedata.first_) ? &area.regionbase :
+                                                                          &sl.regionbase;
         for (ARegion &region : *regionbase) {
           if (region.regiontype != RGN_TYPE_ASSET_SHELF) {
             continue;

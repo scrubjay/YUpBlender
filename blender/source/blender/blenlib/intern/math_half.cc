@@ -8,6 +8,8 @@
 
 #include "BLI_math_half.hh"
 
+#include "BLI_math_base.hh"
+
 #if defined(__ARM_NEON)
 /* Use ARM FP16 conversion instructions */
 #  define USE_HARDWARE_FP16_NEON
@@ -213,7 +215,15 @@ static inline __m128i F32_to_F16_4x(const __m128 &f)
 static inline __m128 F16_to_F32_4x(const __m128i &h)
 {
   const __m128i mask_nosign = _mm_set1_epi32(0x7fff);
-  const __m128 magic_mult = _mm_castsi128_ps(_mm_set1_epi32((254 - 15) << 23));
+  /* Scaling the shifted exponent and mantissa by 2^112 is done by adding to the exponent
+   * field instead of multiplying, so that subnormal halves do not go through a subnormal
+   * float as intermediate value. Such a value would be flushed to zero when the CPU runs
+   * with flush-to-zero / denormals-are-zero enabled. Subnormal halves have a zero exponent
+   * and need a bias that makes them normal floats, with the implicit leading one that
+   * introduces subtracted again afterwards. */
+  const __m128i min_normal = _mm_set1_epi32(1 << 23);
+  const __m128i normal_bias = _mm_set1_epi32((254 - 15 - 127) << 23);
+  const __m128i subnorm_bias = _mm_set1_epi32((254 - 15 - 126) << 23);
   const __m128i was_infnan = _mm_set1_epi32(0x7bff);
   const __m128 exp_infnan = _mm_castsi128_ps(_mm_set1_epi32(255 << 23));
   const __m128i was_nan = _mm_set1_epi32(0x7c00);
@@ -222,7 +232,12 @@ static inline __m128 F16_to_F32_4x(const __m128i &h)
   __m128i expmant = _mm_and_si128(mask_nosign, h);
   __m128i justsign = _mm_xor_si128(h, expmant);
   __m128i shifted = _mm_slli_epi32(expmant, 13);
-  __m128 scaled = _mm_mul_ps(_mm_castsi128_ps(shifted), magic_mult);
+  __m128i b_wassubnorm = _mm_cmpgt_epi32(min_normal, shifted);
+  __m128 scaled_normal = _mm_castsi128_ps(_mm_add_epi32(shifted, normal_bias));
+  __m128 scaled_subnorm = _mm_sub_ps(_mm_castsi128_ps(_mm_add_epi32(shifted, subnorm_bias)),
+                                     _mm_castsi128_ps(subnorm_bias));
+  __m128 scaled = _mm_or_ps(_mm_and_ps(_mm_castsi128_ps(b_wassubnorm), scaled_subnorm),
+                            _mm_andnot_ps(_mm_castsi128_ps(b_wassubnorm), scaled_normal));
   __m128i b_wasinfnan = _mm_cmpgt_epi32(expmant, was_infnan);
   __m128i sign = _mm_slli_epi32(justsign, 16);
   __m128 infnanexp = _mm_and_ps(_mm_castsi128_ps(b_wasinfnan), exp_infnan);
@@ -271,6 +286,69 @@ void math::float_to_half_array(const float *src, uint16_t *dst, size_t length)
    * wider paths above were used). */
   for (; i < length; i++) {
     *dst++ = float_to_half(*src++);
+  }
+}
+
+void math::float_to_half_clamp_array(
+    const float *src, uint16_t *dst, size_t length, float min_value, float max_value)
+{
+  size_t i = 0;
+#if defined(USE_HARDWARE_FP16_F16C) /* 8-wide loop using AVX2 F16C */
+  __m256 min8 = _mm256_set1_ps(min_value);
+  __m256 max8 = _mm256_set1_ps(max_value);
+  for (; i + 7 < length; i += 8) {
+    __m256 src8 = _mm256_loadu_ps(src);
+    /* Turn NaNs into zeroes. */
+    __m256 not_nans_mask = _mm256_cmp_ps(src8, src8, _CMP_EQ_OQ);
+    src8 = _mm256_and_ps(src8, not_nans_mask);
+    /* Clamp between min & max. */
+    src8 = _mm256_min_ps(_mm256_max_ps(src8, min8), max8);
+
+    __m128i h8 = _mm256_cvtps_ph(src8, _MM_FROUND_TO_NEAREST_INT);
+    _mm_storeu_si128((__m128i *)dst, h8);
+    src += 8;
+    dst += 8;
+  }
+#elif (defined(USE_SSE2_FP16) && defined(__SSE4_1__)) /* 4-wide loop using SSE2 and SSE4.1 */
+  __m128 min4 = _mm_set1_ps(min_value);
+  __m128 max4 = _mm_set1_ps(max_value);
+  for (; i + 3 < length; i += 4) {
+    __m128 src4 = _mm_loadu_ps(src);
+    /* Turn NaNs into zeroes. */
+    __m128 not_nans_mask = _mm_cmpeq_ps(src4, src4);
+    src4 = _mm_and_ps(src4, not_nans_mask);
+    /* Clamp between min & max. */
+    src4 = _mm_min_ps(_mm_max_ps(src4, min4), max4);
+
+    __m128i h4 = F32_to_F16_4x(src4);
+    __m128i h4_packed = _mm_packs_epi32(h4, h4);
+    _mm_storeu_si64(dst, h4_packed);
+    src += 4;
+    dst += 4;
+  }
+#elif defined(USE_HARDWARE_FP16_NEON)                 /* 4-wide loop using NEON */
+  float32x4_t min4 = vdupq_n_f32(min_value);
+  float32x4_t max4 = vdupq_n_f32(max_value);
+  for (; i + 3 < length; i += 4) {
+    float32x4_t src4 = vld1q_f32(src);
+    /* Turn NaNs into zeroes. */
+    uint32x4_t not_nans_mask = vceqq_f32(src4, src4);
+    src4 = vreinterpretq_f32_u32(vandq_u32(vreinterpretq_u32_f32(src4), not_nans_mask));
+    src4 = vminq_f32(vmaxq_f32(src4, min4), max4);
+    float16x4_t h4 = vcvt_f16_f32(src4);
+    vst1_f16((float16_t *)dst, h4);
+    src += 4;
+    dst += 4;
+  }
+#endif
+  /* Use scalar path to convert the tail of array (or whole array if none of
+   * wider paths above were used). */
+  for (; i < length; i++) {
+    float v = clamp(*src++, min_value, max_value);
+    if (std::isnan(v)) { /* clamp does not handle NaNs */
+      v = 0.0f;
+    }
+    *dst++ = float_to_half(v);
   }
 }
 

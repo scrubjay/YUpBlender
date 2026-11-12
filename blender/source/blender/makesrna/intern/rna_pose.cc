@@ -15,15 +15,18 @@
 #include "rna_internal.hh"
 
 #include "DNA_action_types.h"
+#include "DNA_anim_types.h"
 #include "DNA_object_types.h"
 
-#include "BLI_math_base.h"
+#include "BLI_math_base_c.hh"
 
-#include "BLI_string_utf8_symbols.h"
+#include "BLI_string_utf8_symbols.hh"
 
 #include "UI_resources.hh"
 
 #include "WM_types.hh"
+
+#include "ANIM_rna.hh"
 
 namespace blender {
 
@@ -62,10 +65,10 @@ const EnumPropertyItem rna_enum_color_sets_items[] = {
 
 #  include <fmt/format.h>
 
-#  include "BLI_listbase.h"
-#  include "BLI_math_vector.h"
-#  include "BLI_string.h"
-#  include "BLI_string_utf8.h"
+#  include "BLI_listbase.hh"
+#  include "BLI_math_vector_c.hh"
+#  include "BLI_string.hh"
+#  include "BLI_string_utf8.hh"
 
 #  include "MEM_guardedalloc.h"
 
@@ -85,6 +88,8 @@ const EnumPropertyItem rna_enum_color_sets_items[] = {
 #  include "DEG_depsgraph.hh"
 #  include "DEG_depsgraph_build.hh"
 
+#  include "ED_anim_api.hh"
+#  include "ED_anim_transformable.hh"
 #  include "ED_armature.hh"
 #  include "ED_object.hh"
 
@@ -134,10 +139,7 @@ static std::optional<std::string> rna_Pose_path(const PointerRNA * /*ptr*/)
 static std::optional<std::string> rna_PoseBone_path(const PointerRNA *ptr)
 {
   const bPoseChannel *pchan = static_cast<const bPoseChannel *>(ptr->data);
-  char name_esc[sizeof(pchan->name) * 2];
-
-  BLI_str_escape(name_esc, pchan->name, sizeof(name_esc));
-  return fmt::format("pose.bones[\"{}\"]", name_esc);
+  return animrig::get_pose_bone_rna_path(*pchan);
 }
 
 /* shared for actions groups and bone groups */
@@ -197,7 +199,7 @@ static void rna_Pose_ik_solver_set(PointerRNA *ptr, int value)
     /* the solver has changed, must clean any temporary structures */
     BIK_clear_data(pose);
     MEM_SAFE_DELETE(pose->ikparam);
-    pose->iksolver = value;
+    pose->iksolver = ePose_IKSolverType(value);
     BKE_pose_ikparam_init(pose);
   }
 }
@@ -206,11 +208,12 @@ static void rna_Pose_ik_solver_update(Main *bmain, Scene * /*scene*/, PointerRNA
 {
   Object *ob = id_cast<Object *>(ptr->owner_id);
   bPose *pose = static_cast<bPose *>(ptr->data);
+  BLI_assert(ob->pose == pose);
 
   BKE_pose_tag_recalc(bmain, pose); /* checks & sorts pose channels */
   DEG_relations_tag_update(bmain);
 
-  BKE_pose_update_constraint_flags(pose);
+  BKE_pose_update_constraint_flags(*ob);
 
   ed::object::object_test_constraints(bmain, ob);
 
@@ -244,11 +247,28 @@ static void rna_PoseChannel_rotation_mode_set(PointerRNA *ptr, int value)
   bPoseChannel *pchan = static_cast<bPoseChannel *>(ptr->data);
 
   /* use API Method for conversions... */
-  BKE_rotMode_change_values(
-      pchan->quat, pchan->eul, pchan->rotAxis, &pchan->rotAngle, pchan->rotmode, short(value));
+  BKE_rotMode_change_values(pchan->quat,
+                            pchan->eul,
+                            pchan->rotAxis,
+                            &pchan->rotAngle,
+                            pchan->rotmode,
+                            eRotationModes(value));
 
   /* finally, set the new rotation type */
-  pchan->rotmode = clamp_i(value, ROT_MODE_MIN, ROT_MODE_MAX);
+  pchan->rotmode = eRotationModes(clamp_i(value, ROT_MODE_MIN, ROT_MODE_MAX));
+}
+
+static void rna_PoseChannel_convert_rotation_mode(
+    ID *id, bPoseChannel *pchan, bContext *C, const short rotation_mode, const bool bake)
+{
+  if (rotation_mode < ROT_MODE_MIN || rotation_mode > ROT_MODE_MAX) {
+    return;
+  }
+
+  Object *ob = id_cast<Object *>(id);
+  ed::AnimTransformable transformable(*ob, *pchan);
+
+  convert_to_rotation_mode(*C, transformable, eRotationModes(rotation_mode), bake);
 }
 
 static float rna_PoseChannel_length_get(PointerRNA *ptr)
@@ -293,7 +313,7 @@ static PointerRNA rna_PoseChannel_bone_get(PointerRNA *ptr)
   /* Replace the id_data pointer with the Armature ID. */
   tmp_ptr.owner_id = ob->data;
 
-  return RNA_pointer_create_with_parent(tmp_ptr, RNA_Bone, pchan->bone);
+  return RNA_pointer_create_with_parent(tmp_ptr, RNA_Bone, pchan->bone_get(*ob));
 }
 
 static bool rna_PoseChannel_has_ik_get(PointerRNA *ptr)
@@ -376,13 +396,11 @@ static void rna_PoseChannel_active_constraint_set(PointerRNA *ptr,
   BKE_constraints_active_set(&pchan->constraints, static_cast<bConstraint *>(value.data));
 }
 
-static bConstraint *rna_PoseChannel_constraints_new(ID *id,
-                                                    bPoseChannel *pchan,
-                                                    Main *main,
-                                                    int type)
+static bConstraint *rna_PoseChannel_constraints_new(
+    ID *id, bPoseChannel *pchan, Main *main, int type, const char *name)
 {
   Object *ob = id_cast<Object *>(id);
-  bConstraint *new_con = BKE_constraint_add_for_pose(ob, pchan, nullptr, type);
+  bConstraint *new_con = BKE_constraint_add_for_pose(ob, pchan, name, eBConstraint_Types(type));
 
   ed::object::constraint_dependency_tag_update(main, ob, new_con);
   WM_main_add_notifier(NC_OBJECT | ND_CONSTRAINT | NA_ADDED, id);
@@ -507,8 +525,8 @@ static int rna_PoseChannel_proxy_editable(const PointerRNA * /*ptr*/, const char
   Object *ob = (Object *)ptr->owner_id;
   bArmature *arm = ob->data;
   bPoseChannel *pchan = (bPoseChannel *)ptr->data;
-
-  if (pchan->bone && (pchan->bone->layer & arm->layer_protected)) {
+  Bone *bone = pchan->bone_get(*ob);
+  if (bone && (bone->layer & arm->layer_protected)) {
     *r_info = "Can't edit property of a proxy on a protected layer";
     return 0;
   }
@@ -607,7 +625,8 @@ static bool rna_PoseBones_lookup_string(PointerRNA *ptr, const char *key, Pointe
 static void rna_PoseChannel_matrix_basis_get(PointerRNA *ptr, float *values)
 {
   bPoseChannel *pchan = static_cast<bPoseChannel *>(ptr->data);
-  BKE_pchan_to_mat4(pchan, reinterpret_cast<float (*)[4]>(values));
+  Object *ob = id_cast<Object *>(ptr->owner_id);
+  BKE_pchan_to_mat4({pchan, pchan->bone_get(*ob)}, reinterpret_cast<float (*)[4]>(values));
 }
 
 static void rna_PoseChannel_matrix_basis_set(PointerRNA *ptr, const float *values)
@@ -785,11 +804,18 @@ static void rna_def_pose_channel_constraints(BlenderRNA *brna, PropertyRNA *cpro
                         FUNC_USE_MAIN | FUNC_USE_SELF_ID); /* ID and Main needed for refresh */
   /* return type */
   parm = RNA_def_pointer(func, "constraint", "Constraint", "", "New constraint");
+  RNA_def_parameter_flags(parm, PROP_NEVER_NULL, ParameterFlag(0));
   RNA_def_function_return(func, parm);
   /* constraint to add */
   parm = RNA_def_enum(
       func, "type", rna_enum_constraint_type_items, 1, "", "Constraint type to add");
   RNA_def_parameter_flags(parm, PropertyFlag(0), PARM_REQUIRED);
+  RNA_def_string(func,
+                 "name",
+                 nullptr,
+                 0,
+                 "",
+                 "Name of the new constraint. If empty, the name of the constraint type is used");
 
   func = RNA_def_function(srna, "remove", "rna_PoseChannel_constraints_remove");
   RNA_def_function_ui_description(func, "Remove a constraint from this object");
@@ -822,6 +848,7 @@ static void rna_def_pose_channel_constraints(BlenderRNA *brna, PropertyRNA *cpro
   RNA_def_parameter_clear_flags(parm, PROP_THICK_WRAP, ParameterFlag(0));
   /* return type */
   parm = RNA_def_pointer(func, "new_constraint", "Constraint", "", "New constraint");
+  RNA_def_parameter_flags(parm, PROP_NEVER_NULL, ParameterFlag(0));
   RNA_def_function_return(func, parm);
 }
 
@@ -942,6 +969,26 @@ static void rna_def_pose_channel(BlenderRNA *brna)
       /* This description is shared by other "rotation_mode" properties. */
       "The kind of rotation to apply, values from other rotation modes are not used");
   RNA_def_property_update(prop, NC_OBJECT | ND_POSE, "rna_Pose_update");
+
+  FunctionRNA *func = RNA_def_function(
+      srna, "convert_rotation_mode", "rna_PoseChannel_convert_rotation_mode");
+  RNA_def_function_ui_description(func,
+                                  "Changes the rotation mode and converts all actions used by "
+                                  "that bone to match that new mode");
+  RNA_def_function_flag(func, FUNC_USE_CONTEXT | FUNC_USE_SELF_ID);
+  PropertyRNA *parm = RNA_def_enum(func,
+                                   "rotation_mode",
+                                   rna_enum_object_rotation_mode_items,
+                                   ROT_MODE_XYZ,
+                                   "Rotation Mode",
+                                   "The rotation mode to change to");
+  RNA_def_parameter_flags(parm, PropertyFlag(0), PARM_REQUIRED);
+
+  parm = RNA_def_boolean(func,
+                         "bake",
+                         false,
+                         "Bake",
+                         "Insert a key on every frame to ensure interpolation is preserved");
 
   /* Curved bones settings - Applied on top of rest-pose values. */
   rna_def_bone_curved_common(srna, true, false);
@@ -1081,6 +1128,7 @@ static void rna_def_pose_channel(BlenderRNA *brna)
   prop = RNA_def_property(srna, "ik_min_x", PROP_FLOAT, PROP_ANGLE);
   RNA_def_property_float_sdna(prop, nullptr, "limitmin[0]");
   RNA_def_property_range(prop, -M_PI, 0.0f);
+  RNA_def_property_float_default(prop, -M_PI);
   RNA_def_property_ui_text(prop, "IK X Minimum", "Minimum angles for IK Limit");
   RNA_def_property_editable_func(prop, "rna_PoseChannel_proxy_editable");
   RNA_def_property_update(prop, NC_OBJECT | ND_POSE, "rna_Pose_IK_update");
@@ -1088,6 +1136,7 @@ static void rna_def_pose_channel(BlenderRNA *brna)
   prop = RNA_def_property(srna, "ik_max_x", PROP_FLOAT, PROP_ANGLE);
   RNA_def_property_float_sdna(prop, nullptr, "limitmax[0]");
   RNA_def_property_range(prop, 0.0f, M_PI);
+  RNA_def_property_float_default(prop, M_PI);
   RNA_def_property_ui_text(prop, "IK X Maximum", "Maximum angles for IK Limit");
   RNA_def_property_editable_func(prop, "rna_PoseChannel_proxy_editable");
   RNA_def_property_update(prop, NC_OBJECT | ND_POSE, "rna_Pose_IK_update");
@@ -1095,6 +1144,7 @@ static void rna_def_pose_channel(BlenderRNA *brna)
   prop = RNA_def_property(srna, "ik_min_y", PROP_FLOAT, PROP_ANGLE);
   RNA_def_property_float_sdna(prop, nullptr, "limitmin[1]");
   RNA_def_property_range(prop, -M_PI, 0.0f);
+  RNA_def_property_float_default(prop, -M_PI);
   RNA_def_property_ui_text(prop, "IK Y Minimum", "Minimum angles for IK Limit");
   RNA_def_property_editable_func(prop, "rna_PoseChannel_proxy_editable");
   RNA_def_property_update(prop, NC_OBJECT | ND_POSE, "rna_Pose_IK_update");
@@ -1102,6 +1152,7 @@ static void rna_def_pose_channel(BlenderRNA *brna)
   prop = RNA_def_property(srna, "ik_max_y", PROP_FLOAT, PROP_ANGLE);
   RNA_def_property_float_sdna(prop, nullptr, "limitmax[1]");
   RNA_def_property_range(prop, 0.0f, M_PI);
+  RNA_def_property_float_default(prop, M_PI);
   RNA_def_property_ui_text(prop, "IK Y Maximum", "Maximum angles for IK Limit");
   RNA_def_property_editable_func(prop, "rna_PoseChannel_proxy_editable");
   RNA_def_property_update(prop, NC_OBJECT | ND_POSE, "rna_Pose_IK_update");
@@ -1109,6 +1160,7 @@ static void rna_def_pose_channel(BlenderRNA *brna)
   prop = RNA_def_property(srna, "ik_min_z", PROP_FLOAT, PROP_ANGLE);
   RNA_def_property_float_sdna(prop, nullptr, "limitmin[2]");
   RNA_def_property_range(prop, -M_PI, 0.0f);
+  RNA_def_property_float_default(prop, -M_PI);
   RNA_def_property_ui_text(prop, "IK Z Minimum", "Minimum angles for IK Limit");
   RNA_def_property_editable_func(prop, "rna_PoseChannel_proxy_editable");
   RNA_def_property_update(prop, NC_OBJECT | ND_POSE, "rna_Pose_IK_update");
@@ -1116,6 +1168,7 @@ static void rna_def_pose_channel(BlenderRNA *brna)
   prop = RNA_def_property(srna, "ik_max_z", PROP_FLOAT, PROP_ANGLE);
   RNA_def_property_float_sdna(prop, nullptr, "limitmax[2]");
   RNA_def_property_range(prop, 0.0f, M_PI);
+  RNA_def_property_float_default(prop, M_PI);
   RNA_def_property_ui_text(prop, "IK Z Maximum", "Maximum angles for IK Limit");
   RNA_def_property_editable_func(prop, "rna_PoseChannel_proxy_editable");
   RNA_def_property_update(prop, NC_OBJECT | ND_POSE, "rna_Pose_IK_update");

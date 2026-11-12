@@ -61,8 +61,10 @@ enum {
   PyObject *cb_user; \
   /** Which user functions do we adhere to, RNA, etc */ \
   unsigned char cb_type; \
-  /** Sub-type: location, rotation... \
-   * to avoid defining many new functions for every attribute of the same type */ \
+  /** \
+   * Sub-type: location, rotation... \
+   * to avoid defining many new functions for every attribute of the same type. \
+   */ \
   unsigned char cb_subtype; \
   /** Wrapped data type. */ \
   unsigned char flag
@@ -230,10 +232,26 @@ void _BaseMathObject_RaiseNotFrozenExc(const BaseMathObject *self);
  */
 [[nodiscard]] bool mathutils_array_parse_alloc_viseq(PyObject *value,
                                                      const char *error_prefix,
-                                                     Array<Vector<int>> &r_data);
+                                                     Array<int> &r_offsets,
+                                                     Array<int> &r_data);
 [[nodiscard]] int mathutils_any_to_rotmat(float rmat[3][3],
                                           PyObject *value,
                                           const char *error_prefix);
+
+/**
+ * Returns true when a slice does *not* address every element of an `array_num`.
+ */
+[[nodiscard]] inline bool mathutils_slice_is_subset(Py_ssize_t start,
+                                                    Py_ssize_t step,
+                                                    Py_ssize_t slice_length,
+                                                    Py_ssize_t array_num)
+{
+  return !((slice_length == array_num) &&
+           /* All forward `[:]`. */
+           ((start == 0 && step == 1) ||
+            /* All reverse `[::-1]`. */
+            (start == array_num - 1 && step == -1)));
+}
 
 /**
  * helper function that returns a Python `__hash__`.

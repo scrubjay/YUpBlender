@@ -8,10 +8,10 @@
 
 #include "MEM_guardedalloc.h"
 
-#include "BLI_listbase.h"
-#include "BLI_math_matrix.h"
-#include "BLI_math_rotation.h"
-#include "BLI_math_vector.h"
+#include "BLI_listbase.hh"
+#include "BLI_math_matrix_c.hh"
+#include "BLI_math_rotation_c.hh"
+#include "BLI_math_vector_c.hh"
 
 #include "BKE_context.hh"
 #include "BKE_duplilist.hh"
@@ -129,12 +129,7 @@ static void trans_obchild_in_obmode_update_all(TransInfo *t)
 
 /* -------------------------------------------------------------------- */
 /** \name Object Transform Creation
- *
- * Instead of transforming the selection, move the 2D/3D cursor.
- *
  * \{ */
-
-/* *********************** Object Transform data ******************* */
 
 /**
  * Transcribe given object into TransData for Transforming.
@@ -181,7 +176,7 @@ static void ObjectToTransData(TransInfo *t, TransData *td, TransDataExtension *t
     }
   }
 
-  td->con = static_cast<bConstraint *>(ob->constraints.first);
+  td->con = ob->constraints.first();
 
   /* HACK: temporarily disable tracking and/or constraints when getting
    * object matrix, if tracking is on, or if constraints don't need
@@ -562,7 +557,7 @@ static void createTransObject(bContext *C, TransInfo *t)
     td->protectflag = ob->protectflag;
     tx->rotOrder = ob->rotmode;
 
-    if (base->flag & BA_TRANSFORM_CHILD) {
+    if (base->flag_legacy & BA_TRANSFORM_CHILD) {
       td->flag |= TD_NOCENTER;
       td->flag |= TD_NO_LOC;
     }
@@ -778,7 +773,7 @@ static bool motionpath_need_update_object(Scene *scene, Object *ob)
 /** \} */
 
 /* -------------------------------------------------------------------- */
-/** \name Recalc Data object
+/** \name Recalc Data Object
  * \{ */
 
 /* Given the transform mode `tmode` return a Vector of RNA paths that were possibly modified during
@@ -847,7 +842,7 @@ static void autokeyframe_object(bContext *C,
 {
   Vector<RNAPath> rna_paths;
   ViewLayer *view_layer = CTX_data_view_layer(C);
-  const StringRef rotation_path = animrig::get_rotation_mode_path(eRotationModes(ob->rotmode));
+  const StringRefNull rotation_path = animrig::get_rotation_mode_path(eRotationModes(ob->rotmode));
 
   if (animrig::is_keying_flag(scene, AUTOKEY_FLAG_INSERTNEEDED)) {
     const Main *bmain = CTX_data_main(C);
@@ -862,12 +857,10 @@ static void autokeyframe_object(bContext *C,
 
 static void recalcData_objects(TransInfo *t)
 {
-  bool motionpath_update = false;
-
   if (t->state != TRANS_CANCEL) {
     transform_snap_project_individual_apply(t);
   }
-
+  Set<Object *> motionpath_updates;
   FOREACH_TRANS_DATA_CONTAINER (t, tc) {
     TransData *td = tc->data;
 
@@ -888,7 +881,9 @@ static void recalcData_objects(TransInfo *t)
         autokeyframe_object(t->context, t->scene, ob, t->mode, t->data_len_all > 1);
       }
 
-      motionpath_update |= motionpath_need_update_object(t->scene, ob);
+      if (motionpath_need_update_object(t->scene, ob)) {
+        motionpath_updates.add(ob);
+      }
 
       /* Sets recalc flags fully, instead of flushing existing ones
        * otherwise proxies don't function correctly. */
@@ -896,10 +891,14 @@ static void recalcData_objects(TransInfo *t)
     }
   }
 
-  if (motionpath_update) {
-    /* Update motion paths once for all transformed objects. */
-    object::motion_paths_recalc_selected(
-        t->context, t->scene, object::OBJECT_PATH_CALC_RANGE_CURRENT_FRAME);
+  if (!motionpath_updates.is_empty()) {
+    Depsgraph *evaluated_dg = CTX_data_ensure_evaluated_depsgraph(t->context);
+    for (Object *ob : motionpath_updates) {
+      MPathTarget mpt;
+      mpt.mpath = ob->mpath;
+      mpt.ob = ob;
+      animviz_update_motionpath_preview(*evaluated_dg, {mpt});
+    }
   }
 
   if (t->options & CTX_OBMODE_XFORM_SKIP_CHILDREN) {
@@ -931,11 +930,13 @@ static void special_aftertrans_update__object(bContext *C, TransInfo *t)
     ANIM_deselect_keys_in_animation_editors(C);
   }
 
+  VectorSet<Object *> modified_objects;
   for (int i = 0; i < tc->data_len; i++) {
     TransData *td = tc->data + i;
     TransDataExtension *td_ext = tc->data_ext + i;
     ListBaseT<PTCacheID> pidlist;
     ob = static_cast<Object *>(td->extra);
+    modified_objects.add(ob);
 
     if (td->flag & TD_SKIP) {
       continue;
@@ -949,7 +950,7 @@ static void special_aftertrans_update__object(bContext *C, TransInfo *t)
         pid.cache->flag |= PTCACHE_OUTDATED;
       }
     }
-    BLI_freelistN(&pidlist);
+    pidlist.free_no_destruct();
 
     /* Point-cache refresh. */
     if (BKE_ptcache_object_reset(t->scene, ob, PTCACHE_RESET_OUTDATED)) {
@@ -967,7 +968,13 @@ static void special_aftertrans_update__object(bContext *C, TransInfo *t)
       autokeyframe_object(C, t->scene, ob, t->mode, tc->data_len > 1);
     }
 
-    motionpath_update |= motionpath_need_update_object(t->scene, ob);
+    if (motionpath_need_update_object(t->scene, ob)) {
+      motionpath_update = true;
+      MPathTarget mpt;
+      mpt.mpath = ob->mpath;
+      mpt.ob = ob;
+      animviz_clear_motionpath_preview({mpt});
+    }
 
     /* Restore rigid body transform. */
     if (ob->rigidbody_object && canceled) {
@@ -979,12 +986,9 @@ static void special_aftertrans_update__object(bContext *C, TransInfo *t)
     }
   }
 
-  if (motionpath_update) {
+  if (!canceled && motionpath_update) {
     /* Update motion paths once for all transformed objects. */
-    const object::eObjectPathCalcRange range = canceled ?
-                                                   object::OBJECT_PATH_CALC_RANGE_CURRENT_FRAME :
-                                                   object::OBJECT_PATH_CALC_RANGE_CHANGED;
-    object::motion_paths_recalc_selected(C, t->scene, range);
+    object::motion_paths_recalc(C, t->scene, modified_objects);
   }
 
   clear_trans_object_base_flags(t);

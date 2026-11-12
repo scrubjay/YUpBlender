@@ -11,7 +11,6 @@
 #include "BKE_compositor.hh"
 #include "BKE_context.hh"
 #include "BKE_curves.hh"
-#include "BKE_gpencil_legacy.h"
 #include "BKE_grease_pencil.hh"
 #include "BKE_material.hh"
 #include "BKE_object.hh"
@@ -20,8 +19,8 @@
 
 #include "BKE_camera.h"
 
-#include "BLI_listbase.h"
-#include "BLI_memblock.h"
+#include "BLI_listbase.hh"
+#include "BLI_memblock.hh"
 #include "BLI_virtual_array.hh"
 
 #include "BLT_translation.hh"
@@ -173,8 +172,9 @@ void Instance::begin_sync()
   this->use_object_fb = false;
   this->use_mask_fb = false;
 
-  const bool use_viewport_compositor = draw_ctx->is_viewport_compositor_enabled();
-  const Set<std::string> needed_passes = bke::compositor::get_used_passes(*scene, view_layer);
+  const bool use_viewport_compositor = draw_ctx->is_viewport_compositor_used();
+  const Set<std::string> needed_passes = bke::compositor::get_used_passes(
+      *scene, view_layer, bke::compositor::ExecutionMode::Preview);
   this->need_combined_pass = use_viewport_compositor &&
                              needed_passes.contains(RE_PASSNAME_COMBINED);
   this->need_grease_pencil_pass = use_viewport_compositor &&
@@ -680,17 +680,17 @@ void Instance::acquire_resources()
                                                gpu::TextureFormat::SFLOAT_16_16_16_16 :
                                                gpu::TextureFormat::UNORM_10_10_10_2;
 
-  this->depth_tx.acquire(size, gpu::TextureFormat::SFLOAT_32_DEPTH_UINT_8);
-  this->color_tx.acquire(size, format_color);
-  this->reveal_tx.acquire(size, format_reveal);
+  this->depth_tx.acquire_2d(size, gpu::TextureFormat::SFLOAT_32_DEPTH_UINT_8);
+  this->color_tx.acquire_2d(size, format_color);
+  this->reveal_tx.acquire_2d(size, format_reveal);
 
   this->gpencil_fb.ensure(GPU_ATTACHMENT_TEXTURE(this->depth_tx),
                           GPU_ATTACHMENT_TEXTURE(this->color_tx),
                           GPU_ATTACHMENT_TEXTURE(this->reveal_tx));
 
   if (this->use_layer_fb) {
-    this->color_layer_tx.acquire(size, format_color);
-    this->reveal_layer_tx.acquire(size, format_reveal);
+    this->color_layer_tx.acquire_2d(size, format_color);
+    this->reveal_layer_tx.acquire_2d(size, format_reveal);
 
     this->layer_fb.ensure(GPU_ATTACHMENT_TEXTURE(this->depth_tx),
                           GPU_ATTACHMENT_TEXTURE(this->color_layer_tx),
@@ -698,8 +698,8 @@ void Instance::acquire_resources()
   }
 
   if (this->use_object_fb) {
-    this->color_object_tx.acquire(size, format_color);
-    this->reveal_object_tx.acquire(size, format_reveal);
+    this->color_object_tx.acquire_2d(size, format_color);
+    this->reveal_object_tx.acquire_2d(size, format_reveal);
 
     this->object_fb.ensure(GPU_ATTACHMENT_TEXTURE(this->depth_tx),
                            GPU_ATTACHMENT_TEXTURE(this->color_object_tx),
@@ -711,10 +711,10 @@ void Instance::acquire_resources()
     const gpu::TextureFormat mask_format = this->is_render ? gpu::TextureFormat::UNORM_16 :
                                                              gpu::TextureFormat::UNORM_8;
     /* We need an extra depth to not disturb the normal drawing. */
-    this->mask_depth_tx.acquire(size, gpu::TextureFormat::SFLOAT_32_DEPTH_UINT_8);
+    this->mask_depth_tx.acquire_2d(size, gpu::TextureFormat::SFLOAT_32_DEPTH_UINT_8);
     /* The mask_color_tx is needed for frame-buffer completeness. */
-    this->mask_color_tx.acquire(size, gpu::TextureFormat::UNORM_8);
-    this->mask_tx.acquire(size, mask_format);
+    this->mask_color_tx.acquire_2d(size, gpu::TextureFormat::UNORM_8);
+    this->mask_tx.acquire_2d(size, mask_format);
 
     this->mask_fb.ensure(GPU_ATTACHMENT_TEXTURE(this->mask_depth_tx),
                          GPU_ATTACHMENT_TEXTURE(this->mask_color_tx),
@@ -733,7 +733,7 @@ void Instance::acquire_resources()
     const int2 size = int2(draw_ctx->viewport_size_get());
     draw::TextureFromPool &grease_pencil_pass = DRW_viewport_pass_texture_get(
         RE_PASSNAME_GREASE_PENCIL);
-    grease_pencil_pass.acquire(size, gpu::TextureFormat::SFLOAT_16_16_16_16);
+    grease_pencil_pass.acquire_2d(size, gpu::TextureFormat::SFLOAT_16_16_16_16);
     this->gpencil_pass_fb.ensure(GPU_ATTACHMENT_NONE, GPU_ATTACHMENT_TEXTURE(grease_pencil_pass));
   }
 

@@ -13,7 +13,7 @@
 
 #include "MEM_guardedalloc.h"
 
-#include "BLI_listbase.h"
+#include "BLI_listbase.hh"
 
 #include "BKE_nla.hh"
 
@@ -224,9 +224,7 @@ static void box_select_nla_strips(bAnimContext *ac, rcti rect, short mode, short
 
   /* loop over data, doing box select */
   float ymax = NLATRACK_FIRST_TOP(ac);
-  for (bAnimListElem *ale = static_cast<bAnimListElem *>(anim_data.first); ale;
-       ale = ale->next, ymax -= NLATRACK_STEP(snla))
-  {
+  for (bAnimListElem *ale = anim_data.first(); ale; ale = ale->next, ymax -= NLATRACK_STEP(snla)) {
     float ymin = ymax - NLATRACK_HEIGHT(snla);
 
     /* perform vertical suitability check (if applicable) */
@@ -409,7 +407,7 @@ void NLA_OT_select_box(wmOperatorType *ot)
   ot->modal = WM_gesture_box_modal;
   ot->cancel = WM_gesture_box_cancel;
 
-  ot->poll = nlaop_poll_tweakmode_off;
+  ot->poll = nlaop_poll_tweakmode_off_with_main_region;
 
   /* flags */
   ot->flag = OPTYPE_UNDO;
@@ -578,7 +576,7 @@ void NLA_OT_select_leftright(wmOperatorType *ot)
   /* API callbacks. */
   ot->invoke = nlaedit_select_leftright_invoke;
   ot->exec = nlaedit_select_leftright_exec;
-  ot->poll = ED_operator_nla_active;
+  ot->poll = ED_operator_region_nla_active;
 
   /* flags */
   ot->flag = OPTYPE_REGISTER | OPTYPE_UNDO;
@@ -629,7 +627,7 @@ static wmOperatorStatus mouse_nla_strips(bContext *C,
     /* reset selection mode for next steps */
     select_mode = SELECT_ADD;
 
-    if (strip && wait_to_deselect_others && (strip->flag & DESELECT_STRIPS_CLEARACTIVE)) {
+    if (strip && wait_to_deselect_others && (strip->flag & NLASTRIP_FLAG_SELECT)) {
       ret_value = OPERATOR_RUNNING_MODAL;
     }
     else {
@@ -718,7 +716,7 @@ void NLA_OT_click_select(wmOperatorType *ot)
   ot->description = "Handle clicks to select NLA Strips";
 
   /* callbacks */
-  ot->poll = ED_operator_nla_active;
+  ot->poll = ED_operator_region_nla_active;
   ot->exec = nlaedit_clickselect_exec;
   ot->invoke = WM_generic_select_invoke;
   ot->modal = WM_generic_select_modal;

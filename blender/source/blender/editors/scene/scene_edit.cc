@@ -9,8 +9,8 @@
 #include <cstdio>
 #include <cstring>
 
-#include "BLI_listbase.h"
-#include "BLI_string_utf8.h"
+#include "BLI_listbase.hh"
+#include "BLI_string_utf8.hh"
 
 #include "DNA_sequence_types.h"
 
@@ -58,6 +58,7 @@ static Scene *scene_add(Main *bmain, Scene *scene_old, eSceneCopyMethod method)
   else { /* different kinds of copying */
     /* We are going to deep-copy collections, objects and various object data, we need to have
      * up-to-date obdata for that. */
+    BLI_assert(scene_old != nullptr);
     if (method == SCE_COPY_FULL) {
       ED_editors_flush_edits(bmain);
     }
@@ -124,7 +125,7 @@ bool ED_scene_replace_active_for_deletion(bContext &C, Main &bmain, Scene &scene
   }
 
   /* Kill running jobs. */
-  wmWindowManager *wm = static_cast<wmWindowManager *>(bmain.wm.first);
+  wmWindowManager *wm = bmain.wm.first();
   WM_jobs_kill_all_from_owner(wm, &scene);
 
   for (wmWindow &win : wm->windows) {
@@ -200,7 +201,8 @@ static bool view_layer_remove_poll(const Scene *scene, const ViewLayer *layer)
   if (act == -1) {
     return false;
   }
-  if ((scene->view_layers.first == scene->view_layers.last) && (scene->view_layers.first == layer))
+  if ((scene->view_layers.first_ == scene->view_layers.last()) &&
+      (scene->view_layers.first_ == layer))
   {
     /* ensure 1 layer is kept */
     return false;
@@ -213,11 +215,12 @@ static void view_layer_remove_unset_nodetrees(const Main *bmain, Scene *scene, V
 {
   int act_layer_index = BLI_findindex(&scene->view_layers, layer);
 
-  for (Scene *sce = static_cast<Scene *>(bmain->scenes.first); sce;
-       sce = static_cast<Scene *>(sce->id.next))
-  {
-    if (sce->compositing_node_group) {
-      bke::node_tree_remove_layer_n(sce->compositing_node_group, scene, act_layer_index);
+  for (Scene *sce = bmain->scenes.first(); sce; sce = static_cast<Scene *>(sce->id.next)) {
+    for (SceneCompositorEffect &effect : sce->compositor_effects) {
+      if (!effect.node_group || ID_MISSING(effect.node_group)) {
+        continue;
+      }
+      bke::node_tree_remove_layer_n(effect.node_group, scene, act_layer_index);
     }
   }
 }
@@ -239,11 +242,24 @@ bool ED_scene_view_layer_delete(Main *bmain, Scene *scene, ViewLayer *layer, Rep
   /* We need to unset node-trees before removing the layer, otherwise its index will be -1. */
   view_layer_remove_unset_nodetrees(bmain, scene, layer);
 
+  /* Return whether the given screen uses the to-be-removed view layer. */
+  const auto is_using_view_layer = [&](const bScreen &screen) -> bool {
+    const ScreenAnimData *sad = static_cast<const ScreenAnimData *>(screen.animtimer->customdata);
+    return (sad && sad->scene == scene && sad->view_layer == layer);
+  };
+
+  /* Stop animation playback of this layer before removing it, as the ScreenAnimData struct
+   * has a pointer to it. */
+  wmWindowManager *wm = bmain->wm.first();
+  ED_screen_animation_stop(bmain, wm, is_using_view_layer);
+
+  /* Kill the compositor job since it might be referencing the viewer layer to be removed. */
+  WM_jobs_kill_type(wm, scene, WM_JOB_TYPE_COMPOSITE);
+
   BLI_remlink(&scene->view_layers, layer);
-  BLI_assert(BLI_listbase_is_empty(&scene->view_layers) == false);
+  BLI_assert(scene->view_layers.is_empty() == false);
 
   /* Remove from windows. */
-  wmWindowManager *wm = static_cast<wmWindowManager *>(bmain->wm.first);
   for (wmWindow &win : wm->windows) {
     if (win.scene == scene && STREQ(win.view_layer_name, layer->name)) {
       ViewLayer *first_layer = BKE_view_layer_default_view(scene);
@@ -252,6 +268,9 @@ bool ED_scene_view_layer_delete(Main *bmain, Scene *scene, ViewLayer *layer, Rep
   }
 
   BKE_scene_free_view_layer_depsgraph(scene, layer);
+
+  /* Update any sequencer scene strips referencing this view layer by name. */
+  seq::relations_update_view_layer_scene_strips(bmain, scene, layer->name, nullptr);
 
   BKE_view_layer_free(layer);
 
@@ -425,12 +444,18 @@ static wmOperatorStatus new_sequencer_scene_exec(bContext *C, wmOperator *op)
   wmWindow *win = CTX_wm_window(C);
   WorkSpace *workspace = CTX_wm_workspace(C);
   Scene *scene_old = CTX_data_sequencer_scene(C);
-  const int type = RNA_enum_get(op->ptr, "type");
-
+  eSceneCopyMethod type = eSceneCopyMethod(RNA_enum_get(op->ptr, "type"));
+  /* When there is no scene to copy from, force new. */
+  if (scene_old == nullptr) {
+    type = SCE_COPY_NEW;
+  }
   Scene *new_scene = scene_add(bmain, scene_old, eSceneCopyMethod(type));
   seq::editing_ensure(new_scene);
 
-  workspace->sequencer_scene = new_scene;
+  /* Unlikely but not impossible as poll doesn't check for this. */
+  if (workspace != nullptr) [[unlikely]] {
+    workspace->sequencer_scene = new_scene;
+  }
 
   /* Switching the active scene to the newly created sequencer scene should prevent confusion among
    * new users to the VSE. For example, this prevents the case where attempting to change
@@ -468,6 +493,7 @@ static void SCENE_OT_new_sequencer_scene(wmOperatorType *ot)
   /* API callbacks. */
   ot->exec = new_sequencer_scene_exec;
   ot->invoke = new_sequencer_scene_invoke;
+  ot->poll = ED_operator_screenactive;
 
   /* flags */
   ot->flag = OPTYPE_REGISTER | OPTYPE_UNDO;

@@ -15,13 +15,14 @@
 #include "BLI_color_types.hh"
 #include "BLI_function_ref.hh"
 #include "BLI_implicit_sharing_ptr.hh"
-#include "BLI_sys_types.h"
+#include "BLI_sys_types.hh"
 
 #include "DNA_ID.h"
 
 namespace blender {
 
 struct AssetTypeInfo;
+struct AssetWeakReference;
 struct BPathForeachPathData;
 struct BlendDataReader;
 struct BlendLibReader;
@@ -123,6 +124,9 @@ struct IDTypeForeachColorFunctionCallback {
       implicit_sharing_array;
 };
 using IDTypeForeachColorFunction = void (*)(ID *id, const IDTypeForeachColorFunctionCallback &cb);
+
+using IDTypeForeachAssetWeakReferenceFunction =
+    void (*)(ID *id, FunctionRef<void(AssetWeakReference &weak_ref)> fn);
 
 /**
  * Callback returning the address of the pointer to the owner ID,
@@ -247,6 +251,12 @@ struct IDTypeInfo {
    */
   IDTypeForeachColorFunction foreach_working_space_color =
       InvalidPointer<IDTypeForeachColorFunction>();
+
+  /**
+   * Iterator to edit all asset weak references of given ID.
+   */
+  IDTypeForeachAssetWeakReferenceFunction foreach_asset_weak_reference =
+      InvalidPointer<IDTypeForeachAssetWeakReferenceFunction>();
 
   /**
    * For embedded IDs, return the address of the pointer to their owner ID.
@@ -421,8 +431,21 @@ short BKE_idtype_idcode_from_name(const char *idtype_name);
  *
  * Particularly useful when the ID type name is written as ID type identifier for I/O or cache
  * files.
+ *
+ * NOTE: idtype_name MUST be valid.
  */
 short BKE_idtype_idcode_from_name_case_insensitive(const char *idtype_name);
+
+/**
+ * Normalize the ID type name to the expected case.
+ *
+ * Particularly useful when the ID type name is written as ID type identifier for I/O or cache
+ * files, where the data comes from an untrusted source.
+ *
+ * \return the normalized name that can be used in a call to #BKE_idtype_idcode_from_name(), or
+ * nullptr if the name does not lead to a valid ID type.
+ */
+const char *BKE_idtype_name_normalize(const char *idtype_name);
 
 /**
  * Convert an \a idcode into an \a idtype_index (e.g. #ID_OB -> #INDEX_ID_OB).
@@ -454,7 +477,7 @@ short BKE_idtype_idfilter_to_idcode(uint64_t idfilter);
 /**
  * Return an ID code and steps the index forward 1.
  *
- * \param index: start as 0.
+ * \param idtype_index: start as 0.
  * \return the code, 0 when all codes have been returned.
  */
 short BKE_idtype_idcode_iter_step(int *idtype_index);

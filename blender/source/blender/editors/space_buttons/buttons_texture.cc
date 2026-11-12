@@ -11,9 +11,9 @@
 
 #include "MEM_guardedalloc.h"
 
-#include "BLI_listbase.h"
-#include "BLI_string_utf8.h"
-#include "BLI_utildefines.h"
+#include "BLI_listbase.hh"
+#include "BLI_string_utf8.hh"
+#include "BLI_utildefines.hh"
 
 #include "BLT_translation.hh"
 
@@ -84,7 +84,7 @@ static void buttons_texture_user_socket_property_add(ListBaseT<ButsTextureUser> 
   user->category = category;
   user->icon = icon;
   user->name = name;
-  user->index = BLI_listbase_count(users);
+  user->index = users->count();
 
   BLI_addtail(users, user);
 }
@@ -105,7 +105,7 @@ static void buttons_texture_user_property_add(ListBaseT<ButsTextureUser> *users,
   user->category = category;
   user->icon = icon;
   user->name = name;
-  user->index = BLI_listbase_count(users);
+  user->index = users->count();
 
   BLI_addtail(users, user);
 }
@@ -130,7 +130,7 @@ static void buttons_texture_user_node_add(ListBaseT<ButsTextureUser> *users,
   user->category = category;
   user->icon = icon;
   user->name = name;
-  user->index = BLI_listbase_count(users);
+  user->index = users->count();
 
   BLI_addtail(users, user);
 }
@@ -234,7 +234,7 @@ static void buttons_texture_modifier_foreach(void *user_data,
     }
   }
   else {
-    const ModifierTypeInfo *modifier_type = BKE_modifier_get_info(ModifierType(md->type));
+    const ModifierTypeInfo *modifier_type = BKE_modifier_get_info(md->type);
 
     buttons_texture_user_property_add(
         users, &ob->id, *ptr, texture_prop, N_("Modifiers"), modifier_type->icon, md->name);
@@ -286,11 +286,13 @@ static void buttons_texture_users_from_context(ListBaseT<ButsTextureUser> *users
   }
 
   /* fill users */
-  BLI_listbase_clear(users);
+  users->clear_no_delete();
 
-  if (scene && scene->compositing_node_group) {
-    buttons_texture_users_find_nodetree(
-        users, &scene->id, scene->compositing_node_group, N_("Compositor"));
+  for (SceneCompositorEffect &effect : scene->compositor_effects) {
+    if (!effect.node_group || ID_MISSING(effect.node_group)) {
+      continue;
+    }
+    buttons_texture_users_find_nodetree(users, &scene->id, effect.node_group, N_("Compositor"));
   }
 
   if (linestyle && !limited_mode) {
@@ -381,7 +383,7 @@ void buttons_texture_context_compute(const bContext *C, SpaceProperties *sbuts)
     for (ButsTextureUser &user : ct->users.items_mutable()) {
       MEM_delete(&user);
     }
-    BLI_listbase_clear(&ct->users);
+    ct->users.clear_no_delete();
   }
 
   buttons_texture_users_from_context(&ct->users, C, sbuts);
@@ -415,7 +417,7 @@ void buttons_texture_context_compute(const bContext *C, SpaceProperties *sbuts)
           }
         }
       }
-      if (ct->user->ptr.data) {
+      if (ct->user->ptr) {
         PointerRNA texptr;
         Tex *tex;
 
@@ -455,7 +457,7 @@ static void template_texture_select(bContext *C, void *user_p, void * /*arg*/)
     bke::node_set_selected(*user->node, true);
     WM_event_add_notifier(C, NC_NODE | NA_SELECTED, nullptr);
   }
-  if (user->ptr.data) {
+  if (user->ptr) {
     texptr = RNA_property_pointer_get(&user->ptr, user->prop);
     tex = RNA_struct_is_a(texptr.type, RNA_Texture) ? static_cast<Tex *>(texptr.data) : nullptr;
 
@@ -588,7 +590,7 @@ static ScrArea *find_area_properties(const bContext *C)
   for (ScrArea &area : screen->areabase) {
     if (area.spacetype == SPACE_PROPERTIES) {
       /* Only if unpinned, or if pinned object matches. */
-      SpaceProperties *sbuts = static_cast<SpaceProperties *>(area.spacedata.first);
+      SpaceProperties *sbuts = area.spacedata.first_as<SpaceProperties>();
       ID *pinid = sbuts->pinid;
       if (pinid == nullptr || ((GS(pinid->name) == ID_OB) && id_cast<Object *>(pinid) == ob)) {
         return &area;
@@ -603,7 +605,7 @@ static SpaceProperties *find_space_properties(const bContext *C)
 {
   ScrArea *area = find_area_properties(C);
   if (area != nullptr) {
-    return static_cast<SpaceProperties *>(area->spacedata.first);
+    return area->spacedata.first_as<SpaceProperties>();
   }
 
   return nullptr;
@@ -620,14 +622,14 @@ static void template_texture_show(bContext *C, void *data_p, void *prop_p)
     return;
   }
 
-  SpaceProperties *sbuts = static_cast<SpaceProperties *>(area->spacedata.first);
+  SpaceProperties *sbuts = area->spacedata.first_as<SpaceProperties>();
   ButsContextTexture *ct = (sbuts) ? static_cast<ButsContextTexture *>(sbuts->texuser) : nullptr;
   if (!ct) {
     return;
   }
 
   ButsTextureUser *user;
-  for (user = static_cast<ButsTextureUser *>(ct->users.first); user; user = user->next) {
+  for (user = ct->users.first(); user; user = user->next) {
     if (user->ptr.data == data_p && user->prop == prop_p) {
       break;
     }
@@ -671,7 +673,7 @@ void uiTemplateTextureShow(ui::Layout *layout,
   ButsTextureUser *user;
   bool user_found = false;
   if (ct != nullptr) {
-    for (user = static_cast<ButsTextureUser *>(ct->users.first); user; user = user->next) {
+    for (user = ct->users.first(); user; user = user->next) {
       if (user->ptr.data == ptr->data && user->prop == prop) {
         user_found = true;
         break;

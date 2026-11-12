@@ -13,7 +13,7 @@
 #include "BKE_library.hh"
 #include "BKE_screen.hh"
 
-#include "BLI_listbase.h"
+#include "BLI_listbase.hh"
 #include "BLI_string_utils.hh"
 
 #include "BLT_translation.hh"
@@ -89,7 +89,7 @@ static void constraint_ops_extra_draw(bContext *C, Layout *layout, void *con_v)
                    UI_ITEM_NONE);
   ListBaseT<bConstraint> *constraint_list = ed::object::constraint_list_from_constraint(
       ob, con, nullptr);
-  RNA_int_set(&op_ptr, "index", BLI_listbase_count(constraint_list) - 1);
+  RNA_int_set(&op_ptr, "index", constraint_list->count() - 1);
   if (!con->next) {
     row->enabled_set(false);
   }
@@ -279,9 +279,7 @@ void template_constraints(Layout * /*layout*/, bContext *C, bool use_bone_constr
 
   if (!panels_match) {
     panels_free_instanced(C, region);
-    for (bConstraint *con =
-             (constraints == nullptr) ? nullptr : static_cast<bConstraint *>(constraints->first);
-         con;
+    for (bConstraint *con = (constraints == nullptr) ? nullptr : constraints->first(); con;
          con = con->next)
     {
       /* Don't show invalid/legacy constraints. */
@@ -315,7 +313,7 @@ void template_constraints(Layout * /*layout*/, bContext *C, bool use_bone_constr
   }
   else {
     /* Assuming there's only one group of instanced panels, update the custom data pointers. */
-    Panel *panel = static_cast<Panel *>(region->panels.first);
+    Panel *panel = region->panels.first();
     for (bConstraint &con : *constraints) {
       /* Don't show invalid/legacy constraints. */
       if (con.type == CONSTRAINT_TYPE_NULL) {

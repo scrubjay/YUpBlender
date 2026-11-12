@@ -18,7 +18,7 @@ CCL_NAMESPACE_BEGIN
 /* Visibility for the shadow ray. */
 ccl_device_forceinline uint integrate_intersect_shadow_visibility(ConstIntegratorShadowState state)
 {
-  uint visibility = PATH_RAY_SHADOW;
+  uint visibility = PATH_RAY_VISIBILITY_SHADOW;
 
 #ifdef __SHADOW_CATCHER__
   const uint32_t path_flag = INTEGRATOR_STATE(state, shadow_path, flag);
@@ -37,8 +37,9 @@ ccl_device bool integrate_intersect_shadow_opaque(KernelGlobals kg,
    * Calculate the mask at compile time: the visibility will either be a high bits for the shadow
    * catcher objects, or lower bits for the regular objects (there is no need to check the path
    * state here again). */
-  constexpr const uint opaque_mask = SHADOW_CATCHER_VISIBILITY_SHIFT(PATH_RAY_SHADOW_OPAQUE) |
-                                     PATH_RAY_SHADOW_OPAQUE;
+  constexpr const uint opaque_mask = SHADOW_CATCHER_VISIBILITY_SHIFT(
+                                         PATH_RAY_VISIBILITY_SHADOW_OPAQUE) |
+                                     PATH_RAY_VISIBILITY_SHADOW_OPAQUE;
 
   const bool opaque_hit = scene_intersect_shadow(kg, ray, visibility & opaque_mask);
 
@@ -117,15 +118,17 @@ ccl_device bool integrate_intersect_shadow_transparent(KernelGlobals kg,
    * have available in the integrator state. */
   const uint max_transparent_hits = integrate_shadow_max_transparent_hits(kg, state);
   uint num_hits = 0;
-  float throughput = 1.0f;
+  float3 throughput = one_float3();
   scene_intersect_shadow_all(
       kg, state, ray, visibility, max_transparent_hits, &num_hits, &throughput);
 
-  const bool opaque_hit = (throughput == 0.0f);
+  const bool opaque_hit = is_zero(throughput);
 
   /* Computed throughput from baked shadow transparency, where we can bypass recording
-   * intersections and shader evaluation. */
-  if (throughput != 1.0f) {
+   * intersections and shader evaluation.
+   * The hypothesis here is that the majority of the shadow rays do not hit anything, and the
+   * kernel is memory-bound. Try to avoid unnecessary access and writes to the global memory. */
+  if (!isequal(throughput, one_float3())) {
     INTEGRATOR_STATE_WRITE(state, shadow_path, throughput) *= throughput;
   }
 

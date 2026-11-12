@@ -11,11 +11,11 @@
 
 #include "MEM_guardedalloc.h"
 
-#include "BLI_listbase.h"
-#include "BLI_math_matrix.h"
-#include "BLI_math_vector.h"
+#include "BLI_listbase.hh"
+#include "BLI_math_matrix_c.hh"
 #include "BLI_math_vector.hh"
-#include "BLI_rect.h"
+#include "BLI_math_vector_c.hh"
+#include "BLI_rect.hh"
 
 #include "BKE_context.hh"
 #include "BKE_main_invariants.hh"
@@ -88,7 +88,7 @@ static void create_transform_data_for_node(TransData &td,
 static bool is_node_parent_select(const bNode *node)
 {
   while ((node = node->parent)) {
-    if (node->flag & NODE_SELECT) {
+    if (node->is_selected()) {
       return true;
     }
   }
@@ -134,7 +134,7 @@ static VectorSet<bNode *> get_transformed_nodes(bNodeTree &node_tree)
 
   /* Keep only nodes that are selected or inside a frame that is selected. */
   nodes.remove_if([&](bNode *node) {
-    const bool node_selected = node->flag & NODE_SELECT;
+    const bool node_selected = node->is_selected();
     const bool parent_selected = is_node_parent_select(node);
     return (!node_selected && !parent_selected);
   });
@@ -145,9 +145,9 @@ static VectorSet<bNode *> get_transformed_nodes(bNodeTree &node_tree)
   return nodes;
 }
 
-static void createTransNodeData(bContext *C, TransInfo *t)
+static void createTransNodeData(bContext * /*C*/, TransInfo *t)
 {
-  SpaceNode *snode = static_cast<SpaceNode *>(t->area->spacedata.first);
+  SpaceNode *snode = t->area->spacedata.first_as<SpaceNode>();
   bNodeTree *node_tree = snode->edittree;
   if (!node_tree) {
     return;
@@ -166,9 +166,11 @@ static void createTransNodeData(bContext *C, TransInfo *t)
   customdata->viewrect_prev = customdata->edgepan_data.initial_rect;
   customdata->is_new_node = t->remove_on_cancel;
 
-  space_node::node_insert_on_link_flags_set(
-      *snode, *t->region, t->modifiers & MOD_NODE_ATTACH, customdata->is_new_node);
-  space_node::node_insert_on_frame_flag_set(*C, *snode, int2(t->mval));
+  if (t->region) {
+    space_node::node_insert_on_link_flags_set(
+        *snode, *t->region, t->modifiers & MOD_NODE_ATTACH, customdata->is_new_node);
+    space_node::node_insert_on_frame_flag_set(*snode, *t->region, int2(t->mval));
+  }
 
   t->custom.type.data = customdata;
   t->custom.type.free_cb = [](TransInfo *, TransDataContainer *, TransCustomData *custom_data) {
@@ -264,7 +266,7 @@ static void move_child_nodes(bNode &node, const float2 &delta)
 static bool has_selected_parent(const bNode &node)
 {
   for (bNode *parent = node.parent; parent; parent = parent->parent) {
-    if (parent->flag & NODE_SELECT) {
+    if (parent->is_selected()) {
       return true;
     }
   }
@@ -274,7 +276,7 @@ static bool has_selected_parent(const bNode &node)
 static void flushTransNodes(TransInfo *t)
 {
   const float dpi_fac = UI_SCALE_FAC;
-  SpaceNode *snode = static_cast<SpaceNode *>(t->area->spacedata.first);
+  SpaceNode *snode = t->area->spacedata.first_as<SpaceNode>();
 
   TransCustomDataNode *customdata = static_cast<TransCustomDataNode *>(t->custom.type.data);
 
@@ -282,7 +284,7 @@ static void flushTransNodes(TransInfo *t)
     if (t->state == TRANS_CANCEL) {
       view2d_edge_pan_cancel(t->context, &customdata->edgepan_data);
     }
-    else {
+    else if (t->region) {
       /* Edge panning functions expect window coordinates, mval is relative to region. */
       const int xy[2] = {
           t->region->winrct.xmin + int(t->mval[0]),
@@ -294,7 +296,9 @@ static void flushTransNodes(TransInfo *t)
 
   float offset[2] = {0.0f, 0.0f};
   if (t->state != TRANS_CANCEL) {
-    if (!BLI_rctf_compare(&customdata->viewrect_prev, &t->region->v2d.cur, FLT_EPSILON)) {
+    if (t->region &&
+        !BLI_rctf_compare(&customdata->viewrect_prev, &t->region->v2d.cur, FLT_EPSILON))
+    {
       /* Additional offset due to change in view2D rect. */
       BLI_rctf_transform_pt_v(&t->region->v2d.cur, &customdata->viewrect_prev, offset, offset);
       transformViewUpdate(t);
@@ -306,7 +310,7 @@ static void flushTransNodes(TransInfo *t)
     t->modifiers &= ~MOD_NODE_FRAME;
     Vector<bNode *> nodes_to_detach;
     for (bNode *node : snode->edittree->all_nodes()) {
-      if (!(node->flag & NODE_SELECT)) {
+      if (!node->is_selected()) {
         continue;
       }
       if (has_selected_parent(*node)) {
@@ -353,11 +357,13 @@ static void flushTransNodes(TransInfo *t)
     }
 
     /* Handle intersection with noodles. */
-    if (tc->data_len == 1) {
+    if (tc->data_len == 1 && t->region) {
       space_node::node_insert_on_link_flags_set(
           *snode, *t->region, t->modifiers & MOD_NODE_ATTACH, customdata->is_new_node);
     }
-    space_node::node_insert_on_frame_flag_set(*t->context, *snode, int2(t->mval));
+    if (t->region) {
+      space_node::node_insert_on_frame_flag_set(*snode, *t->region, int2(t->mval));
+    }
   }
 }
 
@@ -370,7 +376,7 @@ static void flushTransNodes(TransInfo *t)
 static void special_aftertrans_update__node(bContext *C, TransInfo *t)
 {
   Main *bmain = CTX_data_main(C);
-  SpaceNode *snode = static_cast<SpaceNode *>(t->area->spacedata.first);
+  SpaceNode *snode = t->area->spacedata.first_as<SpaceNode>();
   bNodeTree *ntree = snode->edittree;
   const TransCustomDataNode &customdata = *static_cast<TransCustomDataNode *>(t->custom.type.data);
 
@@ -385,7 +391,7 @@ static void special_aftertrans_update__node(bContext *C, TransInfo *t)
     /* Remove selected nodes on cancel. */
     if (ntree) {
       for (bNode &node : ntree->nodes.items_mutable()) {
-        if (node.flag & NODE_SELECT) {
+        if (node.is_selected()) {
           bke::node_remove_node(bmain, *ntree, node, true);
         }
       }

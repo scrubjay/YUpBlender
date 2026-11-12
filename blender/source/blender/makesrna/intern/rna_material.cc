@@ -12,7 +12,7 @@
 #include "DNA_material_types.h"
 #include "DNA_mesh_types.h"
 
-#include "BLI_math_rotation.h"
+#include "BLI_math_rotation_c.hh"
 
 #include "BLT_translation.hh"
 
@@ -69,14 +69,13 @@ const EnumPropertyItem rna_enum_ramp_blend_items[] = {
 #  include "DNA_screen_types.h"
 #  include "DNA_space_types.h"
 
-#  include "BLI_string_utf8.h"
+#  include "BLI_string_utf8.hh"
 
 #  include "BKE_attribute.h"
 #  include "BKE_attribute.hh"
 #  include "BKE_colorband.hh"
 #  include "BKE_context.hh"
 #  include "BKE_editmesh.hh"
-#  include "BKE_gpencil_legacy.h"
 #  include "BKE_grease_pencil.hh"
 #  include "BKE_lib_id.hh"
 #  include "BKE_main.hh"
@@ -96,6 +95,9 @@ const EnumPropertyItem rna_enum_ramp_blend_items[] = {
 #  include "ED_image.hh"
 #  include "ED_node.hh"
 #  include "ED_screen.hh"
+
+/* Stroke and Fill - Alpha Visibility Threshold */
+#  define GPENCIL_ALPHA_OPACITY_THRESH 0.001f
 
 namespace blender {
 
@@ -120,9 +122,7 @@ static void rna_MaterialGpencil_update(Main *bmain, Scene *scene, PointerRNA *pt
   rna_Material_update(bmain, scene, ptr);
 
   /* Need set all caches as dirty. */
-  for (Object *ob = static_cast<Object *>(bmain->objects.first); ob;
-       ob = static_cast<Object *>(ob->id.next))
-  {
+  for (Object *ob = bmain->objects.first(); ob; ob = static_cast<Object *>(ob->id.next)) {
     if (ob->type == OB_GREASE_PENCIL) {
       GreasePencil &grease_pencil = *id_cast<GreasePencil *>(ob->data);
       DEG_id_tag_update(&grease_pencil.id, ID_RECALC_GEOMETRY);
@@ -249,7 +249,7 @@ static void rna_Material_blend_method_set(PointerRNA *ptr, int new_blend_method)
 static void rna_Material_render_method_set(PointerRNA *ptr, int new_render_method)
 {
   Material *material = id_cast<Material *>(ptr->owner_id);
-  material->surface_render_method = new_render_method;
+  material->surface_render_method = eMaterial_SurfaceRenderMethod(new_render_method);
 
   /* Still sets the legacy property for forward compatibility. */
   switch (new_render_method) {
@@ -422,6 +422,27 @@ static bool rna_is_grease_pencil_get(PointerRNA *ptr)
   return false;
 }
 
+static void rna_grease_pencil_fill_style_set(PointerRNA *ptr, int value)
+{
+  MaterialGPencilStyle *pcolor = static_cast<MaterialGPencilStyle *>(ptr->data);
+  pcolor->fill_style = eMaterialGPencilStyle_FillStyle(value);
+
+  if ((pcolor->fill_style == GP_MATERIAL_FILL_STYLE_GRADIENT) && pcolor->gradient == nullptr) {
+    pcolor->gradient = BKE_colorband_add(true);
+  }
+}
+
+static PointerRNA rna_grease_pencil_gradient_get(PointerRNA *ptr)
+{
+  MaterialGPencilStyle *pcolor = static_cast<MaterialGPencilStyle *>(ptr->data);
+
+  if (pcolor->gradient == nullptr) {
+    pcolor->gradient = BKE_colorband_add(true);
+  }
+
+  return RNA_pointer_create_discrete(ptr->owner_id, RNA_ColorRamp, pcolor->gradient);
+}
+
 static std::optional<std::string> rna_GpencilColorData_path(const PointerRNA * /*ptr*/)
 {
   return "grease_pencil";
@@ -446,6 +467,7 @@ static void rna_GpencilColorData_stroke_image_set(PointerRNA *ptr,
   MaterialGPencilStyle *pcolor = static_cast<MaterialGPencilStyle *>(ptr->data);
   ID *id = static_cast<ID *>(value.data);
 
+  id_us_min(id_cast<ID *>(pcolor->sima));
   id_us_plus(id);
   pcolor->sima = id_cast<Image *>(id);
 }
@@ -457,6 +479,7 @@ static void rna_GpencilColorData_fill_image_set(PointerRNA *ptr,
   MaterialGPencilStyle *pcolor = static_cast<MaterialGPencilStyle *>(ptr->data);
   ID *id = static_cast<ID *>(value.data);
 
+  id_us_min(id_cast<ID *>(pcolor->ima));
   id_us_plus(id);
   pcolor->ima = id_cast<Image *>(id);
 }
@@ -603,9 +626,10 @@ static void rna_def_material_greasepencil(BlenderRNA *brna)
   RNA_def_struct_path_func(srna, "rna_GpencilColorData_path");
 
   prop = RNA_def_property(srna, "color", PROP_FLOAT, PROP_COLOR);
-  RNA_def_property_range(prop, 0.0, 1.0);
   RNA_def_property_float_sdna(prop, nullptr, "stroke_rgba");
   RNA_def_property_array(prop, 4);
+  RNA_def_property_range(prop, 0.0f, FLT_MAX);
+  RNA_def_property_ui_range(prop, 0.0f, 1.0f, 0.1f, 3);
   RNA_def_property_ui_text(prop, "Color", "");
   RNA_def_property_update(prop, NC_GPENCIL | ND_SHADING, "rna_MaterialGpencil_update");
 
@@ -613,7 +637,8 @@ static void rna_def_material_greasepencil(BlenderRNA *brna)
   prop = RNA_def_property(srna, "fill_color", PROP_FLOAT, PROP_COLOR);
   RNA_def_property_float_sdna(prop, nullptr, "fill_rgba");
   RNA_def_property_array(prop, 4);
-  RNA_def_property_range(prop, 0.0f, 1.0f);
+  RNA_def_property_range(prop, 0.0f, FLT_MAX);
+  RNA_def_property_ui_range(prop, 0.0f, 1.0f, 0.1f, 3);
   RNA_def_property_ui_text(prop, "Fill Color", "Color for filling region bounded by each stroke");
   RNA_def_property_update(prop, NC_GPENCIL | ND_SHADING, "rna_MaterialGpencil_update");
 
@@ -621,8 +646,20 @@ static void rna_def_material_greasepencil(BlenderRNA *brna)
   prop = RNA_def_property(srna, "mix_color", PROP_FLOAT, PROP_COLOR);
   RNA_def_property_float_sdna(prop, nullptr, "mix_rgba");
   RNA_def_property_array(prop, 4);
-  RNA_def_property_range(prop, 0.0f, 1.0f);
+  RNA_def_property_range(prop, 0.0f, FLT_MAX);
+  RNA_def_property_ui_range(prop, 0.0f, 1.0f, 0.1f, 3);
   RNA_def_property_ui_text(prop, "Mix Color", "Color for mixing with primary filling color");
+  RNA_def_property_update(prop, NC_GPENCIL | ND_SHADING, "rna_MaterialGpencil_update");
+  RNA_def_property_deprecated(
+      prop, "Unused but kept for compatibility with older versions of Blender.", 503, 600);
+
+  /* Gradient */
+  prop = RNA_def_property(srna, "gradient", PROP_POINTER, PROP_NEVER_NULL);
+  RNA_def_property_pointer_sdna(prop, nullptr, "gradient");
+  RNA_def_property_pointer_funcs(
+      prop, "rna_grease_pencil_gradient_get", nullptr, nullptr, nullptr);
+  RNA_def_property_struct_type(prop, "ColorRamp");
+  RNA_def_property_ui_text(prop, "Gradient", "");
   RNA_def_property_update(prop, NC_GPENCIL | ND_SHADING, "rna_MaterialGpencil_update");
 
   /* Mix factor */
@@ -698,6 +735,8 @@ static void rna_def_material_greasepencil(BlenderRNA *brna)
   RNA_def_property_boolean_sdna(prop, nullptr, "flag", GP_MATERIAL_FLIP_FILL);
   RNA_def_property_ui_text(prop, "Flip", "Flip filling colors");
   RNA_def_property_update(prop, NC_GPENCIL | ND_SHADING, "rna_MaterialGpencil_update");
+  RNA_def_property_deprecated(
+      prop, "Unused but kept for compatibility with older versions of Blender.", 503, 600);
 
   prop = RNA_def_property(srna, "use_overlap_strokes", PROP_BOOLEAN, PROP_NONE);
   RNA_def_property_boolean_sdna(prop, nullptr, "flag", GP_MATERIAL_DISABLE_STENCIL);
@@ -722,14 +761,14 @@ static void rna_def_material_greasepencil(BlenderRNA *brna)
   RNA_def_property_ui_text(prop, "Show Stroke", "Show stroke lines of this material");
   RNA_def_property_update(prop, NC_GPENCIL | ND_SHADING, "rna_MaterialGpencil_update");
   RNA_def_property_deprecated(
-      prop, "Unused but kept for compatibility with older versions of Blender.", 510, 600);
+      prop, "Unused but kept for compatibility with older versions of Blender.", 501, 600);
 
   prop = RNA_def_property(srna, "show_fill", PROP_BOOLEAN, PROP_NONE);
   RNA_def_property_boolean_sdna(prop, nullptr, "flag", GP_MATERIAL_FILL_SHOW);
   RNA_def_property_ui_text(prop, "Show Fill", "Show stroke fills of this material");
   RNA_def_property_update(prop, NC_GPENCIL | ND_SHADING, "rna_MaterialGpencil_update");
   RNA_def_property_deprecated(
-      prop, "Unused but kept for compatibility with older versions of Blender.", 510, 600);
+      prop, "Unused but kept for compatibility with older versions of Blender.", 501, 600);
 
   /* Mode to align Dots and Boxes to drawing path and object rotation */
   prop = RNA_def_property(srna, "alignment_mode", PROP_ENUM, PROP_NONE);
@@ -745,10 +784,8 @@ static void rna_def_material_greasepencil(BlenderRNA *brna)
   RNA_def_property_float_default(prop, 0.0f);
   RNA_def_property_range(prop, -DEG2RADF(90.0f), DEG2RADF(90.0f));
   RNA_def_property_ui_range(prop, -DEG2RADF(90.0f), DEG2RADF(90.0f), 10, 3);
-  RNA_def_property_ui_text(prop,
-                           "Rotation",
-                           "Additional rotation applied to dots and square texture of strokes. "
-                           "Only applies in texture shading mode.");
+  RNA_def_property_ui_text(
+      prop, "Rotation", "Additional rotation applied to dots and square texture of strokes");
   RNA_def_property_update(prop, NC_GPENCIL | ND_SHADING, "rna_MaterialGpencil_update");
 
   /* Placement mode for Dots and Squares. */
@@ -788,7 +825,7 @@ static void rna_def_material_greasepencil(BlenderRNA *brna)
   /* Use Randomization. */
   prop = RNA_def_property(srna, "use_randomization", PROP_BOOLEAN, PROP_NONE);
   RNA_def_property_boolean_sdna(prop, nullptr, "flag", GP_MATERIAL_USE_DOTS_RANDOMIZATION);
-  RNA_def_property_ui_text(prop, "Randomization", "Use materiel randomization");
+  RNA_def_property_ui_text(prop, "Randomization", "Use material randomization");
   RNA_def_property_update(prop, NC_GPENCIL | ND_SHADING, "rna_MaterialGpencil_update");
 
   /* Random Size. */
@@ -848,10 +885,13 @@ static void rna_def_material_greasepencil(BlenderRNA *brna)
   RNA_def_property_ui_text(prop, "Noise Scale", "Scale the noise frequency");
   RNA_def_property_update(prop, NC_GPENCIL | ND_SHADING, "rna_MaterialGpencil_update");
 
-  /* pass index for future compositing and editing tools */
+  /* Pass index for modifiers. */
   prop = RNA_def_property(srna, "pass_index", PROP_INT, PROP_UNSIGNED);
   RNA_def_property_int_sdna(prop, nullptr, "index");
-  RNA_def_property_ui_text(prop, "Pass Index", "Index number for the \"Color Index\" pass");
+  RNA_def_property_ui_text(prop,
+                           "Pass Index",
+                           "Identifier that can be used with some modifiers to restrict their "
+                           "influence to only certain materials");
   RNA_def_property_update(prop, NC_GPENCIL | ND_SHADING, "rna_MaterialGpencil_update");
 
   /* mode type */
@@ -883,6 +923,7 @@ static void rna_def_material_greasepencil(BlenderRNA *brna)
   prop = RNA_def_property(srna, "fill_style", PROP_ENUM, PROP_NONE);
   RNA_def_property_enum_bitflag_sdna(prop, nullptr, "fill_style");
   RNA_def_property_enum_items(prop, fill_style_items);
+  RNA_def_property_enum_funcs(prop, nullptr, "rna_grease_pencil_fill_style_set", nullptr);
   RNA_def_property_ui_text(prop, "Fill Style", "Select style used to fill strokes");
   RNA_def_property_translation_context(prop, BLT_I18NCONTEXT_ID_GPENCIL);
   RNA_def_property_update(prop, NC_GPENCIL | ND_SHADING, "rna_MaterialGpencil_update");
@@ -1320,6 +1361,7 @@ static void rna_def_texture_slots(BlenderRNA *brna,
   RNA_def_function_flag(func,
                         FUNC_USE_SELF_ID | FUNC_NO_SELF | FUNC_USE_CONTEXT | FUNC_USE_REPORTS);
   parm = RNA_def_pointer(func, "mtex", structname, "", "The newly initialized mtex");
+  RNA_def_parameter_flags(parm, PROP_NEVER_NULL, ParameterFlag(0));
   RNA_def_function_return(func, parm);
 
   func = RNA_def_function(srna, "create", "rna_mtex_texture_slots_create");
@@ -1329,6 +1371,7 @@ static void rna_def_texture_slots(BlenderRNA *brna,
       func, "index", 0, 0, INT_MAX, "Index", "Slot index to initialize", 0, INT_MAX);
   RNA_def_parameter_flags(parm, PropertyFlag(0), PARM_REQUIRED);
   parm = RNA_def_pointer(func, "mtex", structname, "", "The newly initialized mtex");
+  RNA_def_parameter_flags(parm, PROP_NEVER_NULL, ParameterFlag(0));
   RNA_def_function_return(func, parm);
 
   func = RNA_def_function(srna, "clear", "rna_mtex_texture_slots_clear");

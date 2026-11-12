@@ -74,7 +74,8 @@ namespace blender {
 /**
  * If there is no other specialization of #DefaultHash for a given type, look for a hash function
  * on the type itself. Implementing a `hash()` method on a type is often significantly easier than
- * specializing #DefaultHash.
+ * specializing #DefaultHash. As a fallback, it also tries to use the #hash_value function which
+ * some libraries implement for their types.
  *
  * To support heterogeneous lookup, a type can also implement a static `hash_as(const OtherType &)`
  * function.
@@ -88,10 +89,25 @@ template<typename T> struct DefaultHash {
       /* For enums use the value as hash directly. */
       return uint64_t(value);
     }
-    else {
-      /* Try to call the `hash()` function on the value. */
-      /* If this results in a compiler error, no hash function for the type has been found. */
+    else if constexpr (requires {
+                         { value.hash() } -> std::convertible_to<uint64_t>;
+                       })
+    {
+      /* When the type has a hash method directly. */
       return value.hash();
+    }
+    else if constexpr (requires(const T &v) {
+                         { hash_value(v) } -> std::convertible_to<uint64_t>;
+                       })
+    {
+      /* When the type has an overload of the #hash_value which is standard popularized by boost.
+       * https://www.boost.org/doc/libs/latest/libs/container_hash/doc/html/hash.html
+       * This works e.g. for the pxr::SdfPath type. */
+      return hash_value(value);
+    }
+    else {
+      /* No hash function for the type has been found. */
+      BLI_assert_unreachable_static_t(T);
     }
   }
 
@@ -116,43 +132,43 @@ template<typename T> struct DefaultHash<const T> {
   }
 };
 
-#define TRIVIAL_DEFAULT_INT_HASH(TYPE) \
-  template<> struct DefaultHash<TYPE> { \
-    constexpr uint64_t operator()(TYPE value) const \
-    { \
-      return uint64_t(value); \
-    } \
-  }
-
 /**
  * We cannot make any assumptions about the distribution of keys, so use a trivial hash function by
  * default. The default probing strategy is designed to take all bits of the hash into account
  * to avoid worst case behavior when the lower bits are all zero. Special hash functions can be
  * implemented when more knowledge about a specific key distribution is available.
  */
-TRIVIAL_DEFAULT_INT_HASH(int8_t);
-TRIVIAL_DEFAULT_INT_HASH(uint8_t);
-TRIVIAL_DEFAULT_INT_HASH(int16_t);
-TRIVIAL_DEFAULT_INT_HASH(uint16_t);
-TRIVIAL_DEFAULT_INT_HASH(int32_t);
-TRIVIAL_DEFAULT_INT_HASH(uint32_t);
-TRIVIAL_DEFAULT_INT_HASH(int64_t);
-TRIVIAL_DEFAULT_INT_HASH(uint64_t);
+template<typename T>
+  requires(std::is_integral_v<T> && !std::is_same_v<T, bool>)
+struct DefaultHash<T> {
+  constexpr uint64_t operator()(const T &value) const
+  {
+    return uint64_t(value);
+  }
+};
 
 /**
  * One should try to avoid using floats as keys in hash tables, but sometimes it is convenient.
  */
 template<> struct DefaultHash<float> {
-  constexpr uint64_t operator()(float value) const
+  constexpr uint64_t operator()(const float value) const
   {
+    /* Make sure +0 and -0 hash to the same value. */
+    if (value == 0.0f) {
+      return 0;
+    }
     /* Explicit `uint64_t` cast to suppress CPPCHECK warning. */
     return uint64_t(std::bit_cast<uint32_t>(value));
   }
 };
 
 template<> struct DefaultHash<double> {
-  constexpr uint64_t operator()(double value) const
+  constexpr uint64_t operator()(const double value) const
   {
+    /* Make sure +0 and -0 hash to the same value. */
+    if (value == 0.0) {
+      return 0;
+    }
     return std::bit_cast<uint64_t>(value);
   }
 };
@@ -262,6 +278,17 @@ template<typename T1, typename T2> struct DefaultHash<std::pair<T1, T2>> {
   constexpr uint64_t operator()(const std::pair<T1, T2> &value) const
   {
     return get_default_hash(value.first, value.second);
+  }
+};
+
+/**
+ * Special overload for function pointers to avoid adding const to them which causes a warning with
+ * MSVC.
+ */
+template<typename Ret, typename... Args> struct DefaultHash<Ret (*)(Args...)> {
+  constexpr uint64_t operator()(Ret (*fn)(Args...)) const
+  {
+    return get_default_hash(reinterpret_cast<const void *>(fn));
   }
 };
 

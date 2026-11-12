@@ -3,15 +3,18 @@
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
 #include "node_geometry_util.hh"
+#include "shader/node_shader_util.hh"
 
 #include "UI_interface_layout.hh"
 #include "UI_resources.hh"
 
-#include "BLI_string_utf8.h"
+#include "BLI_string_utf8.hh"
 
 #include "NOD_rna_define.hh"
 #include "RNA_access.hh"
 #include "RNA_enum_types.hh"
+
+#include "COM_node_operation.hh"
 
 namespace blender {
 
@@ -45,7 +48,7 @@ class LazyFunctionForWarningNode : public LazyFunction {
   void execute_impl(lf::Params &params, const lf::Context &context) const override
   {
     const SocketValueVariant show_variant = params.get_input<SocketValueVariant>(0);
-    const bool show = show_variant.get<bool>();
+    const bool show = show_variant.copy_as<bool>();
     if (!show) {
       params.set_output(0, show_variant);
       return;
@@ -69,6 +72,31 @@ class LazyFunctionForWarningNode : public LazyFunction {
     params.set_output(0, show_variant);
   }
 };
+
+using namespace blender::compositor;
+
+class WarningOperation : public NodeOperation {
+ public:
+  using NodeOperation::NodeOperation;
+
+  void execute() override
+  {
+    const Result &input_show = this->get_input("Show");
+    Result &output_show = this->get_result("Show");
+    output_show.share_data(input_show);
+    if (!input_show.get_single_value_default<bool>()) {
+      return;
+    }
+
+    const std::string message = this->get_input("Message").get_single_value_default<std::string>();
+    this->add_warning(NodeWarningType(this->node().custom1), message);
+  }
+};
+
+static NodeOperation *get_compositor_operation(Context &context, const bNode &node)
+{
+  return new WarningOperation(context, node);
+}
 
 static void node_layout(ui::Layout &layout, bContext * /*C*/, PointerRNA *ptr)
 {
@@ -104,7 +132,7 @@ static void node_register()
 {
   static bke::bNodeType ntype;
 
-  geo_node_type_base(&ntype, "GeometryNodeWarning"_ustr, GEO_NODE_WARNING);
+  common_node_type_base(&ntype, "GeometryNodeWarning"_ustr, GEO_NODE_WARNING);
   ntype.ui_name = "Warning";
   ntype.ui_description = "Create custom warnings in node groups";
   ntype.enum_name_legacy = "WARNING";
@@ -112,6 +140,7 @@ static void node_register()
   ntype.declare = node_declare;
   ntype.labelfunc = node_label;
   ntype.draw_buttons = node_layout;
+  ntype.get_compositor_operation = get_compositor_operation;
   bke::node_register_type(ntype);
 
   node_rna(ntype.rna_ext.srna);

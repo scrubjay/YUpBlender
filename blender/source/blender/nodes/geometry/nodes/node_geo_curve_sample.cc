@@ -31,14 +31,15 @@ static void node_declare(NodeDeclarationBuilder &b)
 
   if (const bNode *node = b.node_or_null()) {
     const NodeGeometryCurveSample &storage = node_storage(*node);
-    b.add_input(eCustomDataType(storage.data_type), "Value"_ustr).hide_value().field_on_all();
+    b.add_input(eCustomDataType(storage.data_type), "Value"_ustr)
+        .hide_value()
+        .evaluated_geometry_field();
   }
 
   auto &factor = b.add_input<decl::Float>("Factor"_ustr)
                      .min(0.0f)
                      .max(1.0f)
                      .subtype(PROP_FACTOR)
-                     .supports_field()
                      .structure_type(StructureType::Dynamic)
                      .make_available([](bNode &node) {
                        node_storage(node).mode = GEO_NODE_CURVE_SAMPLE_FACTOR;
@@ -46,30 +47,38 @@ static void node_declare(NodeDeclarationBuilder &b)
   auto &length = b.add_input<decl::Float>("Length"_ustr)
                      .min(0.0f)
                      .subtype(PROP_DISTANCE)
-                     .supports_field()
                      .structure_type(StructureType::Dynamic)
                      .make_available([](bNode &node) {
                        node_storage(node).mode = GEO_NODE_CURVE_SAMPLE_LENGTH;
                      });
   auto &index = b.add_input<decl::Int>("Curve Index"_ustr)
-                    .supports_field()
                     .structure_type(StructureType::Dynamic)
                     .make_available(
                         [](bNode &node) { node_storage(node).use_all_curves = false; });
 
+  const std::array<int, 3> dynamic_inputs = {factor.index(), length.index(), index.index()};
+
   if (const bNode *node = b.node_or_null()) {
     const NodeGeometryCurveSample &storage = node_storage(*node);
     const GeometryNodeCurveSampleMode mode = GeometryNodeCurveSampleMode(storage.mode);
-    b.add_output(eCustomDataType(storage.data_type), "Value"_ustr).dependent_field({2, 3, 4});
+    b.add_output(eCustomDataType(storage.data_type), "Value"_ustr)
+        .propagate_references(dynamic_inputs)
+        .inferred_structure_type(dynamic_inputs);
 
     factor.available(mode == GEO_NODE_CURVE_SAMPLE_FACTOR);
     length.available(mode == GEO_NODE_CURVE_SAMPLE_LENGTH);
     index.available(!storage.use_all_curves);
   }
 
-  b.add_output<decl::Vector>("Position"_ustr).dependent_field({2, 3, 4});
-  b.add_output<decl::Vector>("Tangent"_ustr).dependent_field({2, 3, 4});
-  b.add_output<decl::Vector>("Normal"_ustr).dependent_field({2, 3, 4});
+  b.add_output<decl::Vector>("Position"_ustr)
+      .propagate_references(dynamic_inputs)
+      .inferred_structure_type(dynamic_inputs);
+  b.add_output<decl::Vector>("Tangent"_ustr)
+      .propagate_references(dynamic_inputs)
+      .inferred_structure_type(dynamic_inputs);
+  b.add_output<decl::Vector>("Normal"_ustr)
+      .propagate_references(dynamic_inputs)
+      .inferred_structure_type(dynamic_inputs);
 }
 
 static void node_layout(ui::Layout &layout, bContext * /*C*/, PointerRNA *ptr)
@@ -96,7 +105,7 @@ static void node_gather_link_searches(GatherLinkSearchOpParams &params)
   search_link_ops_for_declarations(params, declaration.outputs.as_span().take_back(3));
 
   const std::optional<eCustomDataType> type = bke::socket_type_to_custom_data_type(
-      eNodeSocketDatatype(params.other_socket().type));
+      params.other_socket().type);
   if (type && *type != CD_PROP_STRING) {
     /* The input and output sockets have the same name. */
     params.add_item(IFACE_("Value"), [type](LinkSearchOpParams &params) {
@@ -400,38 +409,18 @@ class SampleCurveFunction : public mf::MultiFunction {
       }
     }
     else {
-      Vector<int> valid_indices;
-      Vector<int> invalid_indices;
-      VectorSet<int> used_curves;
-      devirtualize_varray(curve_indices, [&](const auto curve_indices) {
-        mask.foreach_index([&](const int i) {
-          const int curve_i = curve_indices[i];
-          if (curves.curves_range().contains(curve_i)) {
-            used_curves.add(curve_i);
-            valid_indices.append(i);
-          }
-          else {
-            invalid_indices.append(i);
-          }
-        });
-      });
-
+      const VArraySpan<int> curve_indices_span(curve_indices);
       IndexMaskMemory memory;
-      const IndexMask valid_indices_mask = valid_indices.size() == mask.size() ?
-                                               mask :
-                                               IndexMask::from_indices(valid_indices.as_span(),
-                                                                       memory);
-      Array<IndexMask> mask_by_curve(used_curves.size());
-      IndexMask::from_groups<int>(
-          valid_indices_mask,
-          memory,
-          [&](const int i) { return used_curves.index_of(curve_indices[i]); },
-          mask_by_curve);
-
-      for (const int i : mask_by_curve.index_range()) {
-        sample_curve(used_curves[i], mask_by_curve[i]);
+      const IndexMask valid_mask = IndexMask::from_predicate(mask, memory, [&](const int i) {
+        return curves.curves_range().contains(curve_indices_span[i]);
+      });
+      const IndexMask invalid_mask = IndexMask::from_difference(mask, valid_mask, memory);
+      const Vector<IndexMask, 4> mask_by_curve = IndexMask::from_group_ids(
+          valid_mask, curve_indices, memory);
+      for (const IndexMask &curve_mask : mask_by_curve) {
+        sample_curve(curve_indices_span[curve_mask.first()], curve_mask);
       }
-      fill_invalid(IndexMask::from_indices<int>(invalid_indices, memory));
+      fill_invalid(invalid_mask);
     }
   }
 
@@ -506,7 +495,7 @@ static void node_geo_exec(GeoNodeExecParams params)
   bke::SocketValueVariant value;
   std::shared_ptr<FieldOperation> sample_op;
   if (curves.curves_num() == 1) {
-    auto curve_index = bke::SocketValueVariant::From(fn::Field<int>(0));
+    auto curve_index = bke::SocketValueVariant::from(fn::Field<int>(0));
     if (!execute_multi_function_on_value_variant(
             std::make_unique<SampleCurveFunction>(
                 std::move(geometry_set), mode, std::move(src_values_field)),

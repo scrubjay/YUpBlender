@@ -49,8 +49,8 @@ static const EnumPropertyItem window_function_items[] = {
     {int(WindowFunction::Rectangular),
      "Rectangular",
      0,
-     "Rectangular",
-     "Equivalent to having no window function"},
+     N_("Rectangular"),
+     N_("Equivalent to having no window function")},
     {},
 };
 
@@ -60,18 +60,16 @@ static void node_declare(NodeDeclarationBuilder &b)
   b.allow_any_socket_order();
 
   b.add_output<decl::Float>("Amplitude"_ustr)
-      .reference_pass_all()
+      .propagate_references()
       .description("Sum of amplitudes of the frequencies in the given range")
       .structure_type(StructureType::Dynamic);
   b.add_input<decl::Sound>("Sound"_ustr).optional_label().description("Sound to sample");
   b.add_input<decl::Float>("Time"_ustr)
       .subtype(PROP_TIME_ABSOLUTE)
-      .supports_field()
       .structure_type(StructureType::Dynamic)
       .description("Time in seconds of the sound to sample at");
   b.add_input<decl::Bool>("All Channels"_ustr)
       .default_value(true)
-      .supports_field()
       .structure_type(StructureType::Dynamic)
       .description("Mix all channels before sampling the sound (e.g. stereo to mono)");
   b.add_input<decl::Int>("Channel"_ustr)
@@ -93,21 +91,18 @@ static void node_declare(NodeDeclarationBuilder &b)
             }
             return !*all_channels;
           })
-      .supports_field()
       .structure_type(StructureType::Dynamic)
       .description("The channel to sample unless 'All Channels' is checked");
   b.add_input<decl::Float>("Low"_ustr)
       .subtype(PROP_FREQUENCY)
       .default_value(0.0f)
       .min(0.0f)
-      .supports_field()
       .structure_type(StructureType::Dynamic)
       .description("Lower bound of the sampled frequency range");
   b.add_input<decl::Float>("High"_ustr)
       .subtype(PROP_FREQUENCY)
       .default_value(10'000.0f)
       .min(0.0f)
-      .supports_field()
       .structure_type(StructureType::Dynamic)
       .description("Upper bound of the sampled frequency range");
 
@@ -183,8 +178,8 @@ class SampleSoundFunction : public mf::MultiFunction {
       key.window_function = window_function_;
       key.fft_size = fft_size_;
       key.channel = *all_channels_value ? std::nullopt : channel_value;
-      const bke::bSoundFrequencySampler *sampler = bke::bSoundFrequencySampler::get_cached(sound_,
-                                                                                           key);
+      const std::shared_ptr<const bke::bSoundFrequencySampler> sampler =
+          bke::bSoundFrequencySampler::get_cached(sound_, key);
       if (!sampler) {
         index_mask::masked_fill(amplitudes, 0.0f, mask);
         return;
@@ -232,8 +227,8 @@ class SampleSoundFunction : public mf::MultiFunction {
       key.window_function = window_function_;
       key.fft_size = fft_size_;
       key.channel = channel;
-      const bke::bSoundFrequencySampler *sampler = bke::bSoundFrequencySampler::get_cached(sound_,
-                                                                                           key);
+      const std::shared_ptr<const bke::bSoundFrequencySampler> sampler =
+          bke::bSoundFrequencySampler::get_cached(sound_, key);
       if (!sampler) {
         amplitudes.fill_indices(indices, 0.0f);
         return;
@@ -346,7 +341,7 @@ static void node_register()
   ntype.nclass = NODE_CLASS_CONVERTER;
   ntype.declare = node_declare;
   ntype.geometry_node_execute = node_geo_exec;
-  bke::node_type_size(ntype, 180, 100, NODE_DEFAULT_MAX_WIDTH);
+  ntype.default_width = bke::NodeWidth::_180;
   bke::node_register_type(ntype);
 }
 NOD_REGISTER_NODE(node_register)

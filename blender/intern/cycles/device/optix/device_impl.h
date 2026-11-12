@@ -26,12 +26,12 @@ enum {
   PG_RGEN_INTERSECT_SUBSURFACE,
   PG_RGEN_INTERSECT_VOLUME_STACK,
   PG_RGEN_INTERSECT_DEDICATED_LIGHT,
+  PG_RGEN_INTERSECT_MNEE,
   PG_RGEN_SHADE_BACKGROUND,
   PG_RGEN_SHADE_LIGHT_NEE,
   PG_RGEN_SHADE_LIGHT_FORWARD,
   PG_RGEN_SHADE_SURFACE,
   PG_RGEN_SHADE_SURFACE_RAYTRACE,
-  PG_RGEN_SHADE_SURFACE_MNEE,
   PG_RGEN_SHADE_VOLUME,
   PG_RGEN_SHADE_VOLUME_RAY_MARCHING,
   PG_RGEN_SHADE_SHADOW,
@@ -97,7 +97,9 @@ class OptiXDevice : public CUDADevice {
  public:
   OptixDeviceContext context = nullptr;
 
-  OptixModule optix_module = nullptr; /* All necessary OptiX kernels are in one module. */
+  OptixModule optix_module = nullptr;
+  OptixModule mnee_module = nullptr;
+  OptixModule shader_raytrace_module = nullptr;
   OptixModule builtin_modules[4] = {};
   OptixPipeline pipelines[NUM_PIPELINES] = {};
   OptixProgramGroup groups[NUM_PROGRAM_GROUPS] = {};
@@ -108,6 +110,9 @@ class OptiXDevice : public CUDADevice {
   vector<OptixModule> osl_modules;
   vector<OptixProgramGroup> osl_groups;
   OptixModule osl_camera_module = nullptr;
+  OptixModule osl_shadow_module = nullptr;
+  OptixModule osl_shadow_curve_module = nullptr;
+  OptixModule osl_volume_module = nullptr;
   device_vector<uint8_t> osl_colorsystem;
 #  endif
 
@@ -123,9 +128,9 @@ class OptiXDevice : public CUDADevice {
   OptiXDevice(const DeviceInfo &info, Stats &stats, Profiler &profiler, bool headless);
   ~OptiXDevice() override;
 
-  BVHLayoutMask get_bvh_layout_mask(uint /*kernel_features*/) const override;
+  BVHLayoutMask get_bvh_layout_mask(uint64_t kernel_features) const override;
 
-  string compile_kernel_get_common_cflags(const uint kernel_features);
+  string compile_kernel_get_common_cflags(uint64_t kernel_features);
 
   void create_optix_module(TaskPool &pool,
                            OptixModuleCompileOptions &module_options,
@@ -133,7 +138,7 @@ class OptiXDevice : public CUDADevice {
                            OptixModule &module,
                            OptixResult &failure_reason);
 
-  bool load_kernels(const uint kernel_features) override;
+  bool load_kernels(uint64_t kernel_features) override;
 
   bool load_osl_kernels() override;
 

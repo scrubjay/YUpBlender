@@ -12,12 +12,12 @@
 #include "DNA_userdef_types.h"
 
 #include "BLI_lasso_2d.hh"
-#include "BLI_listbase.h"
+#include "BLI_listbase.hh"
 #include "BLI_math_base.hh"
-#include "BLI_math_geom.h"
-#include "BLI_math_vector.h"
+#include "BLI_math_geom_c.hh"
+#include "BLI_math_vector_c.hh"
 #include "BLI_math_vector_types.hh"
-#include "BLI_rect.h"
+#include "BLI_rect.hh"
 
 #include "BKE_context.hh"
 #include "BKE_tracking.hh"
@@ -41,7 +41,7 @@
 namespace blender {
 
 /* -------------------------------------------------------------------- */
-/** \name Point track marker picking.
+/** \name Point Track Marker Picking
  * \{ */
 
 BLI_INLINE PointTrackPick point_track_pick_make_null()
@@ -353,7 +353,7 @@ bool ed_tracking_point_track_pick_can_slide(const SpaceClip *space_clip,
 /** \} */
 
 /* -------------------------------------------------------------------- */
-/** \name Plane track marker picking.
+/** \name Plane Track Marker Picking
  * \{ */
 
 BLI_INLINE PlaneTrackPick plane_track_pick_make_null()
@@ -457,7 +457,7 @@ bool ed_tracking_plane_track_pick_can_slide(const PlaneTrackPick *pick)
 /** \} */
 
 /* -------------------------------------------------------------------- */
-/** \name Pick closest point or plane track.
+/** \name Closest Track Picking
  * \{ */
 
 BLI_INLINE TrackingPick tracking_pick_make_null()
@@ -523,21 +523,29 @@ TrackingPick ed_tracking_pick_closest(const TrackPickOptions *options,
 
 /** \} */
 
-/********************** mouse select operator *********************/
+/* -------------------------------------------------------------------- */
+/** \name Deselect Utilities
+ * \{ */
 
 void ed_tracking_deselect_all_tracks(ListBaseT<MovieTrackingTrack> *tracks_base)
 {
   for (MovieTrackingTrack &track : *tracks_base) {
-    BKE_tracking_track_flag_clear(&track, TRACK_AREA_ALL, SELECT);
+    BKE_tracking_track_flag_clear(&track, TRACK_AREA_ALL, TRACK_SELECT);
   }
 }
 
 void ed_tracking_deselect_all_plane_tracks(ListBaseT<MovieTrackingPlaneTrack> *plane_tracks_base)
 {
   for (MovieTrackingPlaneTrack &plane_track : *plane_tracks_base) {
-    plane_track.flag &= ~SELECT;
+    plane_track.flag &= ~PLANE_TRACK_SELECT;
   }
 }
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Mouse Select Operator
+ * \{ */
 
 static bool select_poll(bContext *C)
 {
@@ -629,11 +637,11 @@ static wmOperatorStatus select_exec(bContext *C, wmOperator *op)
 
     if (PLANE_TRACK_VIEW_SELECTED(plane_track)) {
       if (extend) {
-        plane_track->flag &= ~SELECT;
+        plane_track->flag &= ~PLANE_TRACK_SELECT;
       }
     }
     else {
-      plane_track->flag |= SELECT;
+      plane_track->flag |= PLANE_TRACK_SELECT;
     }
 
     tracking_object->active_track = nullptr;
@@ -716,7 +724,11 @@ bool ED_clip_can_select(bContext *C)
   return select_poll(C);
 }
 
-/********************** box select operator *********************/
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Box Select Operator
+ * \{ */
 
 static wmOperatorStatus box_select_exec(bContext *C, wmOperator *op)
 {
@@ -754,10 +766,10 @@ static wmOperatorStatus box_select_exec(bContext *C, wmOperator *op)
     if (ED_space_clip_marker_is_visible(sc, tracking_object, &track, marker)) {
       if (BLI_rctf_isect_pt_v(&rectf, marker->pos)) {
         if (select) {
-          BKE_tracking_track_flag_set(&track, TRACK_AREA_ALL, SELECT);
+          BKE_tracking_track_flag_set(&track, TRACK_AREA_ALL, TRACK_SELECT);
         }
         else {
-          BKE_tracking_track_flag_clear(&track, TRACK_AREA_ALL, SELECT);
+          BKE_tracking_track_flag_clear(&track, TRACK_AREA_ALL, TRACK_SELECT);
         }
       }
       changed = true;
@@ -775,10 +787,10 @@ static wmOperatorStatus box_select_exec(bContext *C, wmOperator *op)
     for (int i = 0; i < 4; i++) {
       if (BLI_rctf_isect_pt_v(&rectf, plane_marker->corners[i])) {
         if (select) {
-          plane_track.flag |= SELECT;
+          plane_track.flag |= PLANE_TRACK_SELECT;
         }
         else {
-          plane_track.flag &= ~SELECT;
+          plane_track.flag &= ~PLANE_TRACK_SELECT;
         }
       }
     }
@@ -818,7 +830,11 @@ void CLIP_OT_select_box(wmOperatorType *ot)
   WM_operator_properties_select_operation_simple(ot);
 }
 
-/********************** lasso select operator *********************/
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Lasso Select Operator
+ * \{ */
 
 static int do_lasso_select_marker(bContext *C, const Span<int2> mcoords, bool select)
 {
@@ -852,10 +868,10 @@ static int do_lasso_select_marker(bContext *C, const Span<int2> mcoords, bool se
           BLI_lasso_is_point_inside(mcoords, screen_co[0], screen_co[1], V2D_IS_CLIPPED))
       {
         if (select) {
-          BKE_tracking_track_flag_set(&track, TRACK_AREA_ALL, SELECT);
+          BKE_tracking_track_flag_set(&track, TRACK_AREA_ALL, TRACK_SELECT);
         }
         else {
-          BKE_tracking_track_flag_clear(&track, TRACK_AREA_ALL, SELECT);
+          BKE_tracking_track_flag_clear(&track, TRACK_AREA_ALL, TRACK_SELECT);
         }
       }
 
@@ -881,10 +897,10 @@ static int do_lasso_select_marker(bContext *C, const Span<int2> mcoords, bool se
           BLI_lasso_is_point_inside(mcoords, screen_co[0], screen_co[1], V2D_IS_CLIPPED))
       {
         if (select) {
-          plane_track.flag |= SELECT;
+          plane_track.flag |= PLANE_TRACK_SELECT;
         }
         else {
-          plane_track.flag &= ~SELECT;
+          plane_track.flag &= ~PLANE_TRACK_SELECT;
         }
       }
     }
@@ -944,7 +960,11 @@ void CLIP_OT_select_lasso(wmOperatorType *ot)
   WM_operator_properties_select_operation_simple(ot);
 }
 
-/********************** circle select operator *********************/
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Circle Select Operator
+ * \{ */
 
 static int point_inside_ellipse(const float point[2],
                                 const float offset[2],
@@ -1013,10 +1033,10 @@ static wmOperatorStatus circle_select_exec(bContext *C, wmOperator *op)
         marker_inside_ellipse(marker, offset, ellipse))
     {
       if (select) {
-        BKE_tracking_track_flag_set(&track, TRACK_AREA_ALL, SELECT);
+        BKE_tracking_track_flag_set(&track, TRACK_AREA_ALL, TRACK_SELECT);
       }
       else {
-        BKE_tracking_track_flag_clear(&track, TRACK_AREA_ALL, SELECT);
+        BKE_tracking_track_flag_clear(&track, TRACK_AREA_ALL, TRACK_SELECT);
       }
       changed = true;
     }
@@ -1033,10 +1053,10 @@ static wmOperatorStatus circle_select_exec(bContext *C, wmOperator *op)
     for (int i = 0; i < 4; i++) {
       if (point_inside_ellipse(plane_marker->corners[i], offset, ellipse)) {
         if (select) {
-          plane_track.flag |= SELECT;
+          plane_track.flag |= PLANE_TRACK_SELECT;
         }
         else {
-          plane_track.flag &= ~SELECT;
+          plane_track.flag &= ~PLANE_TRACK_SELECT;
         }
       }
     }
@@ -1078,7 +1098,11 @@ void CLIP_OT_select_circle(wmOperatorType *ot)
   WM_operator_properties_select_operation_simple(ot);
 }
 
-/********************** select all operator *********************/
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Select All Operator
+ * \{ */
 
 static wmOperatorStatus select_all_exec(bContext *C, wmOperator *op)
 {
@@ -1123,7 +1147,11 @@ void CLIP_OT_select_all(wmOperatorType *ot)
   WM_operator_properties_select_all(ot);
 }
 
-/********************** select grouped operator *********************/
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Select Grouped Operator
+ * \{ */
 
 static wmOperatorStatus select_grouped_exec(bContext *C, wmOperator *op)
 {
@@ -1169,12 +1197,12 @@ static wmOperatorStatus select_grouped_exec(bContext *C, wmOperator *op)
     }
 
     if (ok) {
-      track.flag |= SELECT;
+      track.flag |= TRACK_SELECT;
       if (sc->flag & SC_SHOW_MARKER_PATTERN) {
-        track.pat_flag |= SELECT;
+        track.pat_flag |= TRACK_SELECT;
       }
       if (sc->flag & SC_SHOW_MARKER_SEARCH) {
-        track.search_flag |= SELECT;
+        track.search_flag |= TRACK_SELECT;
       }
     }
   }
@@ -1219,5 +1247,7 @@ void CLIP_OT_select_grouped(wmOperatorType *ot)
   /* properties */
   RNA_def_enum(ot->srna, "group", select_group_items, 1, "Group", "Select tracks by group");
 }
+
+/** \} */
 
 }  // namespace blender

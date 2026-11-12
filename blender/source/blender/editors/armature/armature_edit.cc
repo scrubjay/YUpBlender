@@ -15,10 +15,10 @@
 
 #include "BLT_translation.hh"
 
-#include "BLI_listbase.h"
-#include "BLI_math_matrix.h"
-#include "BLI_math_rotation.h"
-#include "BLI_math_vector.h"
+#include "BLI_listbase.hh"
+#include "BLI_math_matrix_c.hh"
+#include "BLI_math_rotation_c.hh"
+#include "BLI_math_vector_c.hh"
 
 #include "BKE_action.hh"
 #include "BKE_armature.hh"
@@ -718,9 +718,9 @@ static wmOperatorStatus armature_fill_bones_exec(bContext *C, wmOperator *op)
   /* the number of joints determines how we fill:
    *  1) between joint and cursor (joint=head, cursor=tail)
    *  2) between the two joints (order is dependent on active-bone/hierarchy)
-   *  3+) error (a smarter method involving finding chains needs to be worked out
+   *  3+) error (a smarter method involving finding chains needs to be worked out)
    */
-  count = BLI_listbase_count(&points);
+  count = points.count();
 
   if (count == 0) {
     BKE_report(op->reports, RPT_ERROR, "No joints selected");
@@ -729,7 +729,7 @@ static wmOperatorStatus armature_fill_bones_exec(bContext *C, wmOperator *op)
 
   if (mixed_object_error) {
     BKE_report(op->reports, RPT_ERROR, "Bones for different objects selected");
-    BLI_freelistN(&points);
+    points.free_no_destruct();
     return OPERATOR_CANCELLED;
   }
 
@@ -751,7 +751,7 @@ static wmOperatorStatus armature_fill_bones_exec(bContext *C, wmOperator *op)
     float curs[3];
 
     /* Get Points - selected joint */
-    ebp = static_cast<EditBonePoint *>(points.first);
+    ebp = points.first();
 
     /* Get points - cursor (tail) */
     invert_m4_m4(obedit->runtime->world_to_object.ptr(), obedit->object_to_world().ptr());
@@ -774,14 +774,14 @@ static wmOperatorStatus armature_fill_bones_exec(bContext *C, wmOperator *op)
     short headtail = 0;
 
     /* check that the points don't belong to the same bone */
-    ebp_a = static_cast<EditBonePoint *>(points.first);
+    ebp_a = points.first();
     ebp_b = ebp_a->next;
 
     if (((ebp_a->head_owner == ebp_b->tail_owner) && (ebp_a->head_owner != nullptr)) ||
         ((ebp_a->tail_owner == ebp_b->head_owner) && (ebp_a->tail_owner != nullptr)))
     {
       BKE_report(op->reports, RPT_ERROR, "Same bone selected...");
-      BLI_freelistN(&points);
+      points.free_no_destruct();
       return OPERATOR_CANCELLED;
     }
 
@@ -874,7 +874,7 @@ static wmOperatorStatus armature_fill_bones_exec(bContext *C, wmOperator *op)
   }
   else {
     BKE_reportf(op->reports, RPT_ERROR, "Too many points selected: %d", count);
-    BLI_freelistN(&points);
+    points.free_no_destruct();
     return OPERATOR_CANCELLED;
   }
 
@@ -889,7 +889,7 @@ static wmOperatorStatus armature_fill_bones_exec(bContext *C, wmOperator *op)
   DEG_id_tag_update(&arm->id, ID_RECALC_SYNC_TO_EVAL);
 
   /* free points */
-  BLI_freelistN(&points);
+  points.free_no_destruct();
 
   return OPERATOR_FINISHED;
 }
@@ -942,7 +942,7 @@ static wmOperatorStatus armature_switch_direction_exec(bContext *C, wmOperator *
 
     /* get chains of bones (ends on chains) */
     chains_find_tips(arm->edbo, &chains);
-    if (BLI_listbase_is_empty(&chains)) {
+    if (chains.is_empty()) {
       continue;
     }
 
@@ -1014,7 +1014,7 @@ static wmOperatorStatus armature_switch_direction_exec(bContext *C, wmOperator *
     }
 
     /* free chains */
-    BLI_freelistN(&chains);
+    chains.free_no_destruct();
 
     /* clear temp flags */
     armature_clear_swap_done_flags(arm);
@@ -1282,7 +1282,7 @@ static wmOperatorStatus armature_delete_selected_exec(bContext *C, wmOperator * 
 
     BKE_pose_channels_remove(obedit, armature_delete_ebone_cb, arm);
 
-    for (curBone = static_cast<EditBone *>(arm->edbo->first); curBone; curBone = ebone_next) {
+    for (curBone = arm->edbo->first(); curBone; curBone = ebone_next) {
       ebone_next = curBone->next;
       if (animrig::bone_is_selected(arm, curBone)) {
         if (curBone == arm->act_edbone) {
@@ -1368,7 +1368,7 @@ static wmOperatorStatus armature_dissolve_selected_exec(bContext *C, wmOperator 
     bool changed = false;
 
     /* store for mirror */
-    Map<EditBone *, int> ebone_flag_orig;
+    Map<EditBone *, eBone_Flag> ebone_flag_orig;
     int ebone_num = 0;
 
     for (EditBone &ebone : *arm->edbo) {
@@ -1387,7 +1387,7 @@ static wmOperatorStatus armature_dissolve_selected_exec(bContext *C, wmOperator 
 
       for (const auto &item : ebone_flag_orig.items()) {
         ebone = item.key;
-        int &flag = item.value;
+        eBone_Flag &flag = item.value;
         flag = ebone->flag & ~flag;
       }
     }
@@ -1441,7 +1441,7 @@ static wmOperatorStatus armature_dissolve_selected_exec(bContext *C, wmOperator 
 
     BKE_pose_channels_remove(obedit, armature_dissolve_ebone_cb, arm);
 
-    for (ebone = static_cast<EditBone *>(arm->edbo->first); ebone; ebone = ebone_next) {
+    for (ebone = arm->edbo->first(); ebone; ebone = ebone_next) {
       ebone_next = ebone->next;
 
       if (ebone->flag & BONE_DONE) {
@@ -1463,7 +1463,7 @@ static wmOperatorStatus armature_dissolve_selected_exec(bContext *C, wmOperator 
 
       if (arm->flag & ARM_MIRROR_EDIT) {
         for (EditBone &ebone : *arm->edbo) {
-          if (const int *flag_p = ebone_flag_orig.lookup_ptr(&ebone)) {
+          if (const eBone_Flag *flag_p = ebone_flag_orig.lookup_ptr(&ebone)) {
             ebone.flag &= ~*flag_p;
           }
         }

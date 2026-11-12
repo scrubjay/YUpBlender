@@ -58,7 +58,7 @@ PyDoc_STRVAR(
     "\n"
     "   Returns the SVertex (among the 2) belonging to the given FEdge.\n"
     "\n"
-    "   :arg fedge: An FEdge object.\n"
+    "   :param fedge: An FEdge object.\n"
     "   :type fedge: :class:`FEdge`\n"
     "   :return: The SVertex belonging to the given FEdge.\n"
     "   :rtype: :class:`SVertex`\n");
@@ -67,7 +67,14 @@ static PyObject *TVertex_get_svertex(BPy_TVertex *self, PyObject *args, PyObject
   static const char *kwlist[] = {"fedge", nullptr};
   PyObject *py_fe;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!", (char **)kwlist, &FEdge_Type, &py_fe)) {
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "O!" /* `fedge` */
+                                   ":get_svertex",
+                                   (char **)kwlist,
+                                   &FEdge_Type,
+                                   &py_fe))
+  {
     return nullptr;
   }
   SVertex *sv = self->tv->getSVertex(((BPy_FEdge *)py_fe)->fe);
@@ -86,7 +93,7 @@ PyDoc_STRVAR(
     "   ViewEdge is frontEdgeA, frontEdgeB is returned. If the ViewEdge is\n"
     "   frontEdgeB, frontEdgeA is returned. Same for back edges.\n"
     "\n"
-    "   :arg viewedge: A ViewEdge object.\n"
+    "   :param viewedge: A ViewEdge object.\n"
     "   :type viewedge: :class:`ViewEdge`\n"
     "   :return: The mate edge of the given ViewEdge.\n"
     "   :rtype: :class:`ViewEdge`\n");
@@ -95,7 +102,14 @@ static PyObject *TVertex_get_mate(BPy_TVertex *self, PyObject *args, PyObject *k
   static const char *kwlist[] = {"viewedge", nullptr};
   PyObject *py_ve;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!", (char **)kwlist, &ViewEdge_Type, &py_ve)) {
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "O!" /* `viewedge` */
+                                   ":get_mate",
+                                   (char **)kwlist,
+                                   &ViewEdge_Type,
+                                   &py_ve))
+  {
     return nullptr;
   }
   ViewEdge *ve = self->tv->mate(((BPy_ViewEdge *)py_ve)->ve);

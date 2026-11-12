@@ -128,9 +128,9 @@ class FrsImage {
    *    The width of the rectangle that will actually be stored.
    *  \param sh:
    *    The height of the rectangle that will actually be stored.
-   *  \param ox:
+   *  \param x:
    *    The x-abscissa of the origin of the rectangle that will actually be stored.
-   *  \param oy:
+   *  \param y:
    *    The x-abscissa of the origin of the rectangle that will actually be stored.
    *  \param copy:
    *    If true, the array is copied, otherwise the pointer is copied
@@ -369,7 +369,7 @@ class GrayImage : public FrsImage {
 
   /** Sets the array.
    *    copy
-   *      If true, the array is copied, otherwise the pounsigneder is copied
+   *      If true, the array is copied, otherwise the pointer is copied
    */
   void setArray(
       float *lvl, uint width, uint height, uint sw, uint sh, uint x, uint y, bool copy = true)

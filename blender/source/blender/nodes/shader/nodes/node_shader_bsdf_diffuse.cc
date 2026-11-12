@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup shdnodes
+ */
+
 #include "node_shader_util.hh"
 
 namespace blender {
@@ -31,12 +35,13 @@ static int node_shader_gpu_bsdf_diffuse(GPUMaterial *mat,
                                         GPUNodeStack *out)
 {
   if (!in[2].link) {
-    GPU_link(mat, "world_normals_get", &in[2].link);
+    GPU_link(mat, "world_normals_get", GPU_shading_data(), &in[2].link);
   }
 
   GPU_material_flag_set(mat, GPU_MATFLAG_DIFFUSE);
 
-  return GPU_stack_link(mat, node, "node_bsdf_diffuse", in, out);
+  return GPU_stack_link(
+      mat, node, "node_bsdf_diffuse", in, out, GPU_kernel_globals(), GPU_shading_data());
 }
 
 NODE_SHADER_MATERIALX_BEGIN
@@ -74,7 +79,7 @@ void register_node_type_sh_bsdf_diffuse()
   ntype.declare = file_ns::node_declare;
   ntype.gather_link_search_ops = search_link_ops_for_shader_bsdf_node;
   ntype.add_ui_poll = object_shader_nodes_poll;
-  bke::node_type_size_preset(ntype, bke::eNodeSizePreset::Middle);
+  ntype.default_width = bke::NodeWidth::_160;
   ntype.gpu_fn = file_ns::node_shader_gpu_bsdf_diffuse;
   ntype.materialx_fn = file_ns::node_shader_materialx;
 

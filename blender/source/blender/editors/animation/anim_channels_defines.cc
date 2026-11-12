@@ -14,12 +14,12 @@
 
 #include "MEM_guardedalloc.h"
 
-#include "BLI_listbase.h"
-#include "BLI_math_color.h"
-#include "BLI_math_vector.h"
-#include "BLI_string.h"
-#include "BLI_string_utf8.h"
-#include "BLI_utildefines.h"
+#include "BLI_listbase.hh"
+#include "BLI_math_color_c.hh"
+#include "BLI_math_vector_c.hh"
+#include "BLI_string.hh"
+#include "BLI_string_utf8.hh"
+#include "BLI_utildefines.hh"
 
 #include "BLT_translation.hh"
 
@@ -57,7 +57,7 @@
 #include "RNA_prototypes.hh"
 
 #include "BKE_anim_data.hh"
-#include "BKE_animsys.h"
+#include "BKE_animsys.hh"
 #include "BKE_context.hh"
 #include "BKE_curve.hh"
 #include "BKE_grease_pencil.hh"
@@ -281,6 +281,11 @@ static short acf_nodetree_rootType_offset(bNodeTree *ntree)
       case NTREE_TEXTURE:
         /* 2 additional levels */
         return INDENT_STEP_SIZE * 2;
+
+      case NTREE_GEOMETRY:
+      case NTREE_UNDEFINED:
+      case NTREE_CUSTOM:
+        break;
     }
   }
 
@@ -916,7 +921,7 @@ static int acf_group_setting_flag(bAnimContext *ac, eAnimChannel_Settings settin
        * proved to be a hazard for workflows...
        */
       return (ac->spacetype == SPACE_GRAPH) ? AGRP_EXPANDED_G : /* Graph Editor case */
-                                              AGRP_EXPANDED;                                 /* DopeSheet and elsewhere */
+                                              AGRP_EXPANDED;    /* DopeSheet and elsewhere */
     }
 
     case ACHANNEL_SETTING_MUTE: /* muted */
@@ -1043,7 +1048,7 @@ static void acf_fcurve_name(bAnimListElem *ale, char *name)
       PointerRNA id_ptr = RNA_id_pointer_create(ale->id);
       PointerRNA ptr;
       PropertyRNA *prop;
-      if (!RNA_path_resolve_property(&id_ptr, fcurve->rna_path, &ptr, &prop)) {
+      if (!RNA_path_resolve_property(&id_ptr, fcurve->rna_path_parsed(), &ptr, &prop)) {
         fcurve->flag |= FCURVE_DISABLED;
       }
     }
@@ -1301,7 +1306,7 @@ static void acf_nla_curve_name(bAnimListElem *ale, char *name)
   PropertyRNA *prop;
 
   /* try to get RNA property that this shortened path (relative to the strip) refers to */
-  prop = RNA_struct_type_find_property(RNA_NlaStrip, fcu->rna_path);
+  prop = RNA_struct_type_find_property(RNA_NlaStrip, fcu->rna_path().c_str());
   if (prop) {
     /* "name" of this strip displays the UI identifier + the name of the NlaStrip */
     BLI_snprintf_utf8(
@@ -1309,7 +1314,8 @@ static void acf_nla_curve_name(bAnimListElem *ale, char *name)
   }
   else {
     /* unknown property... */
-    BLI_snprintf_utf8(name, ANIM_CHAN_NAME_SIZE, "%s[%d]", fcu->rna_path, fcu->array_index);
+    BLI_snprintf_utf8(
+        name, ANIM_CHAN_NAME_SIZE, "%s[%d]", fcu->rna_path().c_str(), fcu->array_index);
   }
 }
 
@@ -4036,7 +4042,7 @@ static int layer_group_icon(bAnimListElem *ale)
   const LayerGroup &group = *static_cast<LayerGroup *>(ale->data);
   int icon = ICON_GREASEPENCIL_LAYER_GROUP;
   if (group.color_tag != LAYERGROUP_COLOR_NONE) {
-    icon = ICON_LAYERGROUP_COLOR_01 + group.color_tag;
+    icon = ICON_LAYERGROUP_COLOR_01 + int(group.color_tag);
   }
   return icon;
 }
@@ -4858,6 +4864,9 @@ void ANIM_channel_debug_print_info(bAnimContext &ac, bAnimListElem *ale, short i
 
     short setting_type = 0;
     const void *setting_ptr = acf->setting_ptr(ale, setting, &setting_type);
+    if (setting_ptr == nullptr) {
+      continue;
+    }
 
     bool setting_value = false;
     switch (setting_type) {
@@ -5127,7 +5136,7 @@ static bool achannel_is_broken(const bAnimListElem *ale)
 
 float ANIM_UI_get_keyframe_scale_factor()
 {
-  bTheme *btheme = ui::theme::theme_get();
+  const bTheme *btheme = ui::theme::theme_get();
   const float yscale_fac = btheme->space_action.keyframe_scale_fac;
 
   /* clamp to avoid problems with uninitialized values... */
@@ -5498,13 +5507,96 @@ static void achannel_setting_widget_cb(bContext *C, void *ale_npoin, void *setti
   }
 }
 
+/**
+ * Determine if element pointed by `iter` belongs to the same "isolate visibility path" WRT to
+ * `target`.
+ */
+static bool anim_list_el_is_visibility_related_or_self(const bAnimListElem *target,
+                                                       const bAnimListElem *iter)
+{
+  /* 1. Self */
+  if (target->data == iter->data) {
+    return true;
+  }
+
+  /* 2. Hierarchy Roots (Summary/Scene) - Always keep structure visible */
+  if (ELEM(iter->type, ANIMTYPE_SUMMARY, ANIMTYPE_SCENE)) {
+    return true;
+  }
+
+  /* 3. Parent Containers
+   * If the iterator is an Expander (like Object, Material) and shares the ID of the target,
+   * it is the parent container. Keep it visible. */
+  const bAnimChannelType *acf_iter = ANIM_channel_get_typeinfo(iter);
+  if (acf_iter && acf_iter->channel_role == ACHANNEL_ROLE_EXPANDER) {
+    /* Check if they belong to the same ID */
+    if (target->id && iter->id && target->id == iter->id) {
+      return true;
+    }
+  }
+
+  /* 4. Group / F-Curve Relationships
+   * Target is FCurve, Iter is its Parent Group */
+  if (target->type == ANIMTYPE_FCURVE && iter->type == ANIMTYPE_GROUP) {
+    const FCurve *fcu = static_cast<const FCurve *>(target->data);
+    if (fcu->grp == iter->data) {
+      return true;
+    }
+  }
+  /* Target is Group, Iter is its Child FCurve */
+  if (target->type == ANIMTYPE_GROUP && iter->type == ANIMTYPE_FCURVE) {
+    const FCurve *fcu = static_cast<const FCurve *>(iter->data);
+    if (fcu->grp == target->data) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+static void anim_channels_toggle_isolate(bAnimContext &ac, bAnimListElem *ale_setting)
+{
+  ListBaseT<bAnimListElem> anim_data = {nullptr, nullptr};
+  bool any_unrelated_visible = false;
+
+  /* 1. Get List of all channels. */
+  ANIM_animdata_filter(
+      &ac, &anim_data, ANIMFILTER_DATA_VISIBLE | ANIMFILTER_LIST_CHANNELS, ac.data, ac.datatype);
+
+  /* 2. Pass 1: Check the state of UNRELATED channels.
+   * If we find visible unrelated items, we want to ISOLATE (hide them).
+   * If we find NO visible unrelated items, we are already isolated, so UN-ISOLATE (show them). */
+  for (bAnimListElem &ale_it : anim_data) {
+    if (anim_list_el_is_visibility_related_or_self(ale_setting, &ale_it)) {
+      continue;
+    }
+
+    if (ANIM_channel_setting_get(&ac, &ale_it, ACHANNEL_SETTING_VISIBLE) == 1) {
+      any_unrelated_visible = true;
+      break;
+    }
+  }
+
+  /* 3. Pass 2: Apply visibility. */
+  const eAnimChannels_SetFlag unrelated_setflag = any_unrelated_visible ? ACHANNEL_SETFLAG_CLEAR :
+                                                                          ACHANNEL_SETFLAG_ADD;
+  for (bAnimListElem &ale_it : anim_data) {
+    /* Parents/Children/Self are ALWAYS forced visible.
+     * Unrelated items are toggled depending on `any_unrelated_visible`. */
+    const bool is_related = anim_list_el_is_visibility_related_or_self(ale_setting, &ale_it);
+    const eAnimChannels_SetFlag setflag = is_related ? ACHANNEL_SETFLAG_ADD : unrelated_setflag;
+    ANIM_channel_setting_set(&ac, &ale_it, ACHANNEL_SETTING_VISIBLE, setflag);
+  }
+
+  ANIM_animdata_freelist(&anim_data);
+}
+
 /* callback for widget settings that need flushing */
 static void achannel_setting_flush_widget_cb(bContext *C, void *ale_npoin, void *setting_wrap)
 {
   bAnimListElem *ale_setting = static_cast<bAnimListElem *>(ale_npoin);
   bAnimContext ac;
   ListBaseT<bAnimListElem> anim_data = {nullptr, nullptr};
-  int filter;
   const eAnimChannel_Settings setting = eAnimChannel_Settings(POINTER_AS_INT(setting_wrap));
   short on = 0;
 
@@ -5549,6 +5641,13 @@ static void achannel_setting_flush_widget_cb(bContext *C, void *ale_npoin, void 
     return;
   }
 
+  wmWindow *win = CTX_wm_window(C);
+  /* Handle Ctrl+Click to 'Isolate'-toggle visibility of graph editor channels. */
+  if (setting == ACHANNEL_SETTING_VISIBLE && (win->runtime->eventstate->modifier & KM_CTRL)) {
+    anim_channels_toggle_isolate(ac, ale_setting);
+    return;
+  }
+
   /* check if the setting is on... */
   on = ANIM_channel_setting_get(&ac, ale_setting, eAnimChannel_Settings(setting));
 
@@ -5558,9 +5657,8 @@ static void achannel_setting_flush_widget_cb(bContext *C, void *ale_npoin, void 
   }
 
   /* get all channels that can possibly be chosen - but ignore hierarchy */
-  filter = ANIMFILTER_DATA_VISIBLE | ANIMFILTER_LIST_CHANNELS;
   ANIM_animdata_filter(
-      &ac, &anim_data, eAnimFilter_Flags(filter), ac.data, eAnimCont_Types(ac.datatype));
+      &ac, &anim_data, ANIMFILTER_DATA_VISIBLE | ANIMFILTER_LIST_CHANNELS, ac.data, ac.datatype);
 
   /* call API method to flush the setting */
   ANIM_flush_setting_anim_channels(
@@ -5627,7 +5725,7 @@ static void achannel_setting_slider_cb(bContext *C, void *id_poin, void *fcu_poi
   flag = animrig::get_keyframing_flags(scene);
 
   /* try to resolve the path stored in the F-Curve */
-  if (RNA_path_resolve_property(&id_ptr, fcu->rna_path, &ptr, &prop)) {
+  if (RNA_path_resolve_property(&id_ptr, fcu->rna_path_parsed(), &ptr, &prop)) {
     /* set the special 'replace' flag if on a keyframe */
     if (animrig::fcurve_frame_has_keyframe(fcu, cfra)) {
       flag |= INSERTKEY_REPLACE;
@@ -5876,48 +5974,48 @@ static void draw_setting_widget(bAnimContext *ac,
   ui::Button *but = nullptr;
   switch (ptrsize) {
     case sizeof(int): /* integer pointer for setting */
-      but = uiDefIconButBitI(block,
-                             butType,
-                             flag,
-                             icon,
-                             xpos,
-                             ypos,
-                             ICON_WIDTH,
-                             ICON_WIDTH,
-                             static_cast<int *>(ptr),
-                             0,
-                             0,
-                             tooltip);
+      but = uiDefIconButBit(block,
+                            butType,
+                            flag,
+                            icon,
+                            xpos,
+                            ypos,
+                            ICON_WIDTH,
+                            ICON_WIDTH,
+                            static_cast<int *>(ptr),
+                            0,
+                            0,
+                            tooltip);
       break;
 
     case sizeof(short): /* short pointer for setting */
-      but = uiDefIconButBitS(block,
-                             butType,
-                             flag,
-                             icon,
-                             xpos,
-                             ypos,
-                             ICON_WIDTH,
-                             ICON_WIDTH,
-                             static_cast<short *>(ptr),
-                             0,
-                             0,
-                             tooltip);
+      but = uiDefIconButBit(block,
+                            butType,
+                            flag,
+                            icon,
+                            xpos,
+                            ypos,
+                            ICON_WIDTH,
+                            ICON_WIDTH,
+                            static_cast<short *>(ptr),
+                            0,
+                            0,
+                            tooltip);
       break;
 
     case sizeof(char): /* char pointer for setting */
-      but = uiDefIconButBitC(block,
-                             butType,
-                             flag,
-                             icon,
-                             xpos,
-                             ypos,
-                             ICON_WIDTH,
-                             ICON_WIDTH,
-                             static_cast<char *>(ptr),
-                             0,
-                             0,
-                             tooltip);
+      but = uiDefIconButBit(block,
+                            butType,
+                            flag,
+                            icon,
+                            xpos,
+                            ypos,
+                            ICON_WIDTH,
+                            ICON_WIDTH,
+                            static_cast<char *>(ptr),
+                            0,
+                            0,
+                            tooltip);
       break;
   }
   if (!but) {
@@ -5968,7 +6066,7 @@ static void draw_setting_widget(bAnimContext *ac,
       /* Deactivate the button when there are no FCurve modifiers. */
       if (ale->datatype == ALE_FCURVE) {
         const FCurve *fcu = static_cast<const FCurve *>(ale->key_data);
-        if (BLI_listbase_is_empty(&fcu->modifiers)) {
+        if (fcu->modifiers.is_empty()) {
           button_flag_enable(but, ui::BUT_INACTIVE);
         }
       }
@@ -6363,7 +6461,7 @@ void ANIM_channel_draw_widgets(const bContext *C,
 
           /* create RNA pointers */
           PointerRNA ptr = RNA_pointer_create_discrete(ale->id, RNA_NlaStrip, strip);
-          prop = RNA_struct_find_property(&ptr, fcu->rna_path);
+          prop = RNA_struct_find_property(&ptr, fcu->rna_path().c_str());
 
           /* create property slider */
           if (prop) {
@@ -6395,7 +6493,7 @@ void ANIM_channel_draw_widgets(const bContext *C,
         if (ale->type == ANIMTYPE_FCURVE) {
           FCurve *fcu = static_cast<FCurve *>(ale->data);
 
-          rna_path = fcu->rna_path;
+          rna_path = fcu->rna_path();
           array_index = fcu->array_index;
         }
         else if (ale->type == ANIMTYPE_SHAPEKEY) {

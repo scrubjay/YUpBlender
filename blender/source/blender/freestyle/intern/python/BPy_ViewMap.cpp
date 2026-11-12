@@ -71,9 +71,9 @@ PyDoc_STRVAR(
     "\n"
     "   Gets the ViewEdge nearest to the 2D point specified as arguments.\n"
     "\n"
-    "   :arg x: X coordinate of a 2D point.\n"
+    "   :param x: X coordinate of a 2D point.\n"
     "   :type x: float\n"
-    "   :arg y: Y coordinate of a 2D point.\n"
+    "   :param y: Y coordinate of a 2D point.\n"
     "   :type y: float\n"
     "   :return: The ViewEdge nearest to the specified 2D point.\n"
     "   :rtype: :class:`ViewEdge`\n");
@@ -82,7 +82,15 @@ static PyObject *ViewMap_get_closest_viewedge(BPy_ViewMap *self, PyObject *args,
   static const char *kwlist[] = {"x", "y", nullptr};
   double x, y;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "dd", (char **)kwlist, &x, &y)) {
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "d" /* `x` */
+                                   "d" /* `y` */
+                                   ":get_closest_viewedge",
+                                   (char **)kwlist,
+                                   &x,
+                                   &y))
+  {
     return nullptr;
   }
   ViewEdge *ve = const_cast<ViewEdge *>(self->vm->getClosestViewEdge(x, y));
@@ -99,9 +107,9 @@ PyDoc_STRVAR(
     "\n"
     "   Gets the FEdge nearest to the 2D point specified as arguments.\n"
     "\n"
-    "   :arg x: X coordinate of a 2D point.\n"
+    "   :param x: X coordinate of a 2D point.\n"
     "   :type x: float\n"
-    "   :arg y: Y coordinate of a 2D point.\n"
+    "   :param y: Y coordinate of a 2D point.\n"
     "   :type y: float\n"
     "   :return: The FEdge nearest to the specified 2D point.\n"
     "   :rtype: :class:`FEdge`\n");
@@ -110,7 +118,15 @@ static PyObject *ViewMap_get_closest_fedge(BPy_ViewMap *self, PyObject *args, Py
   static const char *kwlist[] = {"x", "y", nullptr};
   double x, y;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "dd", (char **)kwlist, &x, &y)) {
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "d" /* `x` */
+                                   "d" /* `y` */
+                                   ":get_closest_fedge",
+                                   (char **)kwlist,
+                                   &x,
+                                   &y))
+  {
     return nullptr;
   }
   FEdge *fe = const_cast<FEdge *>(self->vm->getClosestFEdge(x, y));

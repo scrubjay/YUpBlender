@@ -9,10 +9,10 @@
 #include "DNA_screen_types.h"
 #include "DNA_userdef_types.h"
 
-#include "BLI_listbase.h"
-#include "BLI_math_vector.h"
+#include "BLI_listbase.hh"
+#include "BLI_math_vector_c.hh"
 #include "BLI_math_vector_types.hh"
-#include "BLI_rect.h"
+#include "BLI_rect.hh"
 #include "BLI_vector.hh"
 
 #include "interface_intern.hh"
@@ -501,6 +501,8 @@ int button_align_opposite_to_area_align_get(const ARegion *region)
       return BUT_ALIGN_RIGHT;
     case RGN_ALIGN_RIGHT:
       return BUT_ALIGN_LEFT;
+    default:
+      break;
   }
 
   return 0;

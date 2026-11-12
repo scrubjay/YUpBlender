@@ -15,11 +15,11 @@
 
 #include "MEM_guardedalloc.h"
 
-#include "BLI_math_matrix.h"
-#include "BLI_math_vector.h"
+#include "BLI_math_matrix_c.hh"
+#include "BLI_math_vector_c.hh"
 #include "BLI_simd.hh"
-#include "BLI_task.h"
-#include "BLI_utildefines.h"
+#include "BLI_task_c.hh"
+#include "BLI_utildefines.hh"
 
 #include "DNA_curve_types.h"
 #include "DNA_lattice_types.h"
@@ -140,6 +140,30 @@ LatticeDeformData *BKE_lattice_deform_data_create(const Object *oblatt, const Ob
   return lattice_deform_data;
 }
 
+/**
+ * Clamp `value` for a lattice axis with `points_num` points so `int(floor(value))` is valid.
+ */
+static float lattice_deform_axis_clamp(const float value, const int points_num)
+{
+  /* `int(floor(value))` (performed by the caller) is undefined when `value` is non-finite or
+   * outside the `int` range. This can happen when an object is located near the limits of float.
+   * Clamping `value` rather than the resulting index keeps the fractional `value - floor()`
+   * in `[0, 1)`, as it is for coordinates inside the lattice, see: #160589.
+   *
+   * Regarding the range: `[-2, points_num]`.
+   * The caller samples cells `index - 1` to `index + 2` so values outside this range
+   * all clamp to one boundary cell and the result is unchanged. */
+
+  /* Catches infinity and NaN. */
+  if (!(value > -2.0f)) [[unlikely]] {
+    return -2.0f;
+  }
+  if (value >= float(points_num)) [[unlikely]] {
+    return float(points_num);
+  }
+  return value;
+}
+
 void BKE_lattice_deform_data_eval_co(LatticeDeformData *lattice_deform_data,
                                      float co[3],
                                      float weight)
@@ -166,7 +190,7 @@ void BKE_lattice_deform_data_eval_co(LatticeDeformData *lattice_deform_data,
   /* u v w coords */
 
   if (lt->pntsu > 1) {
-    u = (vec[0] - lt->fu) / lt->du;
+    u = lattice_deform_axis_clamp((vec[0] - lt->fu) / lt->du, lt->pntsu);
     ui = int(floor(u));
     u -= ui;
     key_curve_position_weights(u, tu, KeyInterpolationType(lt->typeu));
@@ -178,7 +202,7 @@ void BKE_lattice_deform_data_eval_co(LatticeDeformData *lattice_deform_data,
   }
 
   if (lt->pntsv > 1) {
-    v = (vec[1] - lt->fv) / lt->dv;
+    v = lattice_deform_axis_clamp((vec[1] - lt->fv) / lt->dv, lt->pntsv);
     vi = int(floor(v));
     v -= vi;
     key_curve_position_weights(v, tv, KeyInterpolationType(lt->typev));
@@ -190,7 +214,7 @@ void BKE_lattice_deform_data_eval_co(LatticeDeformData *lattice_deform_data,
   }
 
   if (lt->pntsw > 1) {
-    w = (vec[2] - lt->fw) / lt->dw;
+    w = lattice_deform_axis_clamp((vec[2] - lt->fw) / lt->dw, lt->pntsw);
     wi = int(floor(w));
     w -= wi;
     key_curve_position_weights(w, tw, KeyInterpolationType(lt->typew));
@@ -338,12 +362,13 @@ static void lattice_deform_coords_impl(const Object *ob_lattice,
                                        const char *defgrp_name,
                                        const float fac,
                                        const Mesh *me_target,
-                                       const BMEditMesh *em_target)
+                                       const BMesh *bm_target)
 {
   LatticeDeformData *lattice_deform_data;
   const MDeformVert *dvert = nullptr;
   int defgrp_index = -1;
   int cd_dvert_offset = -1;
+  BMesh *bm = const_cast<BMesh *>(bm_target);
 
   if (ob_lattice->type != OB_LATTICE) {
     return;
@@ -360,8 +385,8 @@ static void lattice_deform_coords_impl(const Object *ob_lattice,
 
     if (defgrp_index != -1) {
       /* if there's derived data without deformverts, don't use vgroups */
-      if (em_target) {
-        cd_dvert_offset = CustomData_get_offset(&em_target->bm->vdata, CD_MDEFORMVERT);
+      if (bm) {
+        cd_dvert_offset = CustomData_get_offset(&bm->vdata, CD_MDEFORMVERT);
       }
       else if (me_target) {
         dvert = me_target->deform_verts().data();
@@ -384,21 +409,19 @@ static void lattice_deform_coords_impl(const Object *ob_lattice,
   data.invert_vgroup = (flag & MOD_LATTICE_INVERT_VGROUP) != 0;
   data.bmesh.cd_dvert_offset = cd_dvert_offset;
 
-  if (em_target != nullptr) {
+  if (bm != nullptr) {
     /* While this could cause an extra loop over mesh data, in most cases this will
      * have already been properly set. */
-    BM_mesh_elem_index_ensure(em_target->bm, BM_VERT);
+    BM_mesh_elem_index_ensure(bm, BM_VERT);
 
     TaskParallelSettings settings;
     BLI_parallel_mempool_settings_defaults(&settings);
 
     if (cd_dvert_offset != -1) {
-      BLI_task_parallel_mempool(
-          em_target->bm->vpool, &data, lattice_vert_task_editmesh, &settings);
+      BLI_task_parallel_mempool(bm->vpool, &data, lattice_vert_task_editmesh, &settings);
     }
     else {
-      BLI_task_parallel_mempool(
-          em_target->bm->vpool, &data, lattice_vert_task_editmesh_no_dvert, &settings);
+      BLI_task_parallel_mempool(bm->vpool, &data, lattice_vert_task_editmesh_no_dvert, &settings);
     }
   }
   else {
@@ -457,7 +480,7 @@ void BKE_lattice_deform_coords_with_editmesh(const Object *ob_lattice,
                                              const short flag,
                                              const char *defgrp_name,
                                              const float fac,
-                                             const BMEditMesh *em_target)
+                                             const BMesh &bm_target)
 {
   lattice_deform_coords_impl(ob_lattice,
                              ob_target,
@@ -467,7 +490,7 @@ void BKE_lattice_deform_coords_with_editmesh(const Object *ob_lattice,
                              defgrp_name,
                              fac,
                              nullptr,
-                             em_target);
+                             &bm_target);
 }
 
 /** \} */

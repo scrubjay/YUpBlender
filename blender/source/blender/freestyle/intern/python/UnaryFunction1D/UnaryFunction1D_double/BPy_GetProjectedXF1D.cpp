@@ -28,7 +28,7 @@ PyDoc_STRVAR(
     "\n"
     "   Builds a GetProjectedXF1D object.\n"
     "\n"
-    "   :arg integration_type: The integration method used to compute a single value\n"
+    "   :param integration_type: The integration method used to compute a single value\n"
     "      from a set of values. \n"
     "   :type integration_type: :class:`freestyle.types.IntegrationType`\n"
     "\n"
@@ -36,7 +36,7 @@ PyDoc_STRVAR(
     "\n"
     "   Returns the projected X 3D coordinate of an Interface1D.\n"
     "\n"
-    "   :arg inter: An Interface1D object.\n"
+    "   :param inter: An Interface1D object.\n"
     "   :type inter: :class:`freestyle.types.Interface1D`\n"
     "   :return: The projected X 3D coordinate of an Interface1D.\n"
     "   :rtype: float\n");
@@ -45,8 +45,14 @@ static int GetProjectedXF1D___init__(BPy_GetProjectedXF1D *self, PyObject *args,
   static const char *kwlist[] = {"integration_type", nullptr};
   PyObject *obj = nullptr;
 
-  if (!PyArg_ParseTupleAndKeywords(
-          args, kwds, "|O!", (char **)kwlist, &IntegrationType_Type, &obj))
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "|"  /* Optional arguments. */
+                                   "O!" /* `integration_type` */
+                                   ":__init__",
+                                   (char **)kwlist,
+                                   &IntegrationType_Type,
+                                   &obj))
   {
     return -1;
   }

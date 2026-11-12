@@ -11,8 +11,8 @@
 #include "BKE_linestyle.h"
 #include "BKE_scene.hh"
 
-#include "BLI_listbase.h"
-#include "BLI_string_utf8.h"
+#include "BLI_listbase.hh"
+#include "BLI_string_utf8.hh"
 
 #include "BLT_translation.hh"
 
@@ -30,18 +30,7 @@
 #include "UI_interface.hh"
 #include "UI_interface_layout.hh"
 
-#define B_MATPRV 1
-
 namespace blender::ui {
-
-static void do_preview_buttons(bContext *C, void *arg, int event)
-{
-  switch (event) {
-    case B_MATPRV:
-      WM_event_add_notifier(C, NC_MATERIAL | ND_SHADING_PREVIEW, arg);
-      break;
-  }
-}
 
 void template_preview(Layout *layout,
                       bContext *C,
@@ -132,9 +121,7 @@ void template_preview(Layout *layout,
                             [pid, pparent, slot, ui_preview](const bContext *C, rcti *rect) {
                               ED_preview_draw(C, pid, pparent, slot, ui_preview, rect);
                             });
-  block_func_handle_set(block, do_preview_buttons, nullptr);
-
-  uiDefIconButS(block,
+  uiDefIconButV(block,
                 ButtonType::Grip,
                 ICON_GRIP,
                 0,
@@ -176,7 +163,7 @@ void template_preview(Layout *layout,
       PointerRNA texture_ptr = RNA_id_pointer_create(id);
 
       layout->row(true);
-      Button *but = uiDefButS(block,
+      Button *but = uiDefButV(block,
                               ButtonType::Row,
                               IFACE_("Texture"),
                               0,
@@ -187,9 +174,11 @@ void template_preview(Layout *layout,
                               10,
                               TEX_PR_TEXTURE,
                               "");
-      button_retval_set(but, B_MATPRV);
+      button_func_set(but, [](bContext &C) {
+        WM_event_add_notifier(&C, NC_MATERIAL | ND_SHADING_PREVIEW, nullptr);
+      });
       if (GS(parent->name) == ID_MA) {
-        but = uiDefButS(block,
+        but = uiDefButV(block,
                         ButtonType::Row,
                         IFACE_("Material"),
                         0,
@@ -200,10 +189,12 @@ void template_preview(Layout *layout,
                         10,
                         TEX_PR_OTHER,
                         "");
-        button_retval_set(but, B_MATPRV);
+        button_func_set(but, [](bContext &C) {
+          WM_event_add_notifier(&C, NC_MATERIAL | ND_SHADING_PREVIEW, nullptr);
+        });
       }
       else if (GS(parent->name) == ID_LA) {
-        but = uiDefButS(block,
+        but = uiDefButV(block,
                         ButtonType::Row,
                         CTX_IFACE_(BLT_I18NCONTEXT_ID_LIGHT, "Light"),
                         0,
@@ -214,10 +205,12 @@ void template_preview(Layout *layout,
                         10,
                         TEX_PR_OTHER,
                         "");
-        button_retval_set(but, B_MATPRV);
+        button_func_set(but, [](bContext &C) {
+          WM_event_add_notifier(&C, NC_MATERIAL | ND_SHADING_PREVIEW, nullptr);
+        });
       }
       else if (GS(parent->name) == ID_WO) {
-        but = uiDefButS(block,
+        but = uiDefButV(block,
                         ButtonType::Row,
                         CTX_IFACE_(BLT_I18NCONTEXT_ID_WORLD, "World"),
                         0,
@@ -228,10 +221,12 @@ void template_preview(Layout *layout,
                         10,
                         TEX_PR_OTHER,
                         "");
-        button_retval_set(but, B_MATPRV);
+        button_func_set(but, [](bContext &C) {
+          WM_event_add_notifier(&C, NC_MATERIAL | ND_SHADING_PREVIEW, nullptr);
+        });
       }
       else if (GS(parent->name) == ID_LS) {
-        but = uiDefButS(block,
+        but = uiDefButV(block,
                         ButtonType::Row,
                         IFACE_("Line Style"),
                         0,
@@ -242,9 +237,11 @@ void template_preview(Layout *layout,
                         10,
                         TEX_PR_OTHER,
                         "");
-        button_retval_set(but, B_MATPRV);
+        button_func_set(but, [](bContext &C) {
+          WM_event_add_notifier(&C, NC_MATERIAL | ND_SHADING_PREVIEW, nullptr);
+        });
       }
-      but = uiDefButS(block,
+      but = uiDefButV(block,
                       ButtonType::Row,
                       IFACE_("Both"),
                       0,
@@ -255,7 +252,9 @@ void template_preview(Layout *layout,
                       10,
                       TEX_PR_BOTH,
                       "");
-      button_retval_set(but, B_MATPRV);
+      button_func_set(but, [](bContext &C) {
+        WM_event_add_notifier(&C, NC_MATERIAL | ND_SHADING_PREVIEW, nullptr);
+      });
 
       /* Alpha button for texture preview */
       if (*pr_texture != TEX_PR_OTHER) {

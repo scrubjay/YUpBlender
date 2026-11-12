@@ -66,10 +66,20 @@ class Rig(BaseSkinRig):
     # UTILITIES
 
     def get_mouth_orientation(self) -> Quaternion:
-        jaw_axis = self.get_bone(self.base_bone).y_axis.copy()
-        jaw_axis[2] = 0
+        jaw_bone_axis = self.get_bone(self.base_bone).y_axis
+        if abs(jaw_bone_axis.z) > abs(jaw_bone_axis.y):
+            # Y-up: vertical is Y, forward is Z
+            jaw_axis = Vector((jaw_bone_axis.x, 0, jaw_bone_axis.z))
+            up_vec = (0, 1, 0)
+        else:
+            # Z-up: vertical is Z, forward is Y
+            jaw_axis = Vector((jaw_bone_axis.x, jaw_bone_axis.y, 0))
+            up_vec = (0, 0, 1)
 
-        return matrix_from_axis_pair(jaw_axis, (0, 0, 1), 'z').to_quaternion()
+        if jaw_axis.length < 1e-6:
+            jaw_axis = jaw_bone_axis
+
+        return matrix_from_axis_pair(jaw_axis, up_vec, 'z').to_quaternion()
 
     def is_corner_node(self, node: ControlBoneNode) -> Side | SideZ | None:
         # Corners are nodes where two T/B or L/R chains meet.

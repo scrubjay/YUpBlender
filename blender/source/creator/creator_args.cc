@@ -9,29 +9,31 @@
 #ifndef WITH_PYTHON_MODULE
 
 #  include <cerrno>
+#  include <cstdint>
 #  include <cstdlib>
 #  include <cstring>
+#  include <limits>
 
 #  include "MEM_guardedalloc.h"
 
 #  include "CLG_log.h"
 
 #  ifdef WIN32
-#    include "BLI_winstuff.h"
+#    include "BLI_winstuff.hh"
 #  endif
 
-#  include "BLI_args.h"
-#  include "BLI_dynstr.h"
-#  include "BLI_fileops.h"
-#  include "BLI_listbase.h"
+#  include "BLI_args.hh"
+#  include "BLI_dynstr.hh"
+#  include "BLI_fileops.hh"
+#  include "BLI_listbase.hh"
 #  include "BLI_path_utils.hh"
-#  include "BLI_string.h"
-#  include "BLI_string_utf8.h"
-#  include "BLI_system.h"
-#  include "BLI_threads.h"
-#  include "BLI_utildefines.h"
+#  include "BLI_string.hh"
+#  include "BLI_string_utf8.hh"
+#  include "BLI_system.hh"
+#  include "BLI_threads.hh"
+#  include "BLI_utildefines.hh"
 #  ifndef NDEBUG
-#    include "BLI_mempool.h"
+#    include "BLI_mempool.hh"
 #  endif
 
 #  include "BKE_appdir.hh"
@@ -540,10 +542,10 @@ static void arg_py_context_backup(bContext *C, BlendePyContextStore *c_py)
 {
   c_py->wm = CTX_wm_manager(C);
   c_py->scene = CTX_data_scene(C);
-  c_py->has_win = c_py->wm && !BLI_listbase_is_empty(&c_py->wm->windows);
+  c_py->has_win = c_py->wm && !c_py->wm->windows.is_empty();
   if (c_py->has_win) {
     c_py->win = CTX_wm_window(C);
-    CTX_wm_window_set(C, static_cast<wmWindow *>(c_py->wm->windows.first));
+    CTX_wm_window_set(C, c_py->wm->windows.first());
   }
   else {
     /* NOTE: this should never happen, although it may be possible when loading
@@ -775,12 +777,14 @@ static void print_help(bArgs *ba, bool all)
   BLI_args_print_arg_doc(ba, "--debug-gpu-shader-no-preprocessor");
   BLI_args_print_arg_doc(ba, "--debug-gpu-shader-no-dce");
   BLI_args_print_arg_doc(ba, "--debug-gpu-no-texture-pool");
+  BLI_args_print_arg_doc(ba, "--debug-gpu-backend-no-fallback");
   if (defs.with_renderdoc) {
     BLI_args_print_arg_doc(ba, "--debug-gpu-renderdoc");
   }
   if (defs.with_vulkan_backend) {
     BLI_args_print_arg_doc(ba, "--debug-gpu-vulkan-local-read");
   }
+  BLI_args_print_arg_doc(ba, "--debug-gpu-no-hw-raytracing");
   BLI_args_print_arg_doc(ba, "--debug-wm");
   if (defs.with_xr_openxr) {
     BLI_args_print_arg_doc(ba, "--debug-xr");
@@ -795,6 +799,7 @@ static void print_help(bArgs *ba, bool all)
   if (defs.with_freestyle) {
     BLI_args_print_arg_doc(ba, "--debug-freestyle");
   }
+  BLI_args_print_arg_doc(ba, "--console-crash-handler");
   BLI_args_print_arg_doc(ba, "--disable-crash-handler");
   BLI_args_print_arg_doc(ba, "--disable-abort-handler");
 
@@ -804,6 +809,8 @@ static void print_help(bArgs *ba, bool all)
   PRINT("\n");
   PRINT("GPU Options:\n");
   BLI_args_print_arg_doc(ba, "--gpu-backend");
+  BLI_args_print_arg_doc(ba, "--gpu-device");
+  BLI_args_print_arg_doc(ba, "--gpu-device-no-fallback");
   BLI_args_print_arg_doc(ba, "--gpu-vsync");
   if (defs.with_opengl_backend) {
     BLI_args_print_arg_doc(ba, "--gpu-compilation-subprocesses");
@@ -994,13 +1001,14 @@ static const char arg_handle_python_set_doc_disable[] =
 
 static int arg_handle_python_set(int /*argc*/, const char ** /*argv*/, void *data)
 {
-  if (bool(data)) {
+  const bool use_autoexec = bool(data);
+  if (use_autoexec) {
     G.f |= G_FLAG_SCRIPT_AUTOEXEC;
   }
   else {
     G.f &= ~G_FLAG_SCRIPT_AUTOEXEC;
   }
-  G.f |= G_FLAG_SCRIPT_OVERRIDE_PREF;
+  G.autoexec_override = use_autoexec;
   return 0;
 }
 
@@ -1022,6 +1030,15 @@ static int arg_handle_internet_allow_set(int /*argc*/, const char ** /*argv*/, v
     G.f &= ~G_FLAG_INTERNET_ALLOW;
     G.f |= G_FLAG_INTERNET_OVERRIDE_PREF_OFFLINE;
   }
+  return 0;
+}
+
+static const char arg_handle_crash_handler_console_doc[] =
+    "\n\t"
+    "Use the console to report crashes.";
+static int arg_handle_crash_handler_console(int /*argc*/, const char ** /*argv*/, void * /*data*/)
+{
+  app_state.signal.use_console_crash_handler = true;
   return 0;
 }
 
@@ -1078,7 +1095,7 @@ static void background_mode_set()
    *
    * In general background mode should strive to match the behavior of running
    * Blender inside a graphical session, any exception to this should have a well
-   * justified reason and be noted in the doc-string. */
+   * justified reason and be noted in the docstring. */
 
   /* NOTE(@ideasman42): While there is no requirement for sound to be disabled in background-mode,
    * the use case for playing audio in background mode is enough of a special-case
@@ -1118,7 +1135,8 @@ static int arg_handle_command_set(int argc, const char **argv, void *data)
 {
   if (!main_arg_deferred_is_set()) {
     if (argc < 2) {
-      fprintf(stderr, "%s requires at least one argument\n", argv[0]);
+      fprintf(
+          stderr, "%s requires at least one argument, see 'help' for all commands.\n", argv[0]);
       exit(EXIT_FAILURE);
       BLI_assert_unreachable();
     }
@@ -1278,7 +1296,7 @@ static int arg_handle_log_file_set(int argc, const char **argv, void * /*data*/)
       fprintf(stderr, "\nError: %s '%s %s'.\n", err_msg, arg_id, argv[1]);
     }
     else {
-      if (UNLIKELY(G.log.file != nullptr)) {
+      if (G.log.file != nullptr) [[unlikely]] {
         fclose(static_cast<FILE *>(G.log.file));
       }
       G.log.file = fp;
@@ -1432,10 +1450,20 @@ static const char arg_handle_debug_mode_generic_set_doc_gpu_force_workarounds[] 
 static const char arg_handle_debug_mode_generic_set_doc_gpu_force_vulkan_local_read[] =
     "\n\t"
     "Force Vulkan dynamic rendering local read when supported by device.";
+static const char arg_handle_debug_mode_generic_set_doc_gpu_device_no_fallback[] =
+    "\n\t"
+    "Fail instead of falling back when '--gpu-device' does not match a usable Vulkan device.";
+static const char arg_handle_debug_mode_generic_set_doc_gpu_backend_no_fallback[] =
+    "\n\t"
+    "Fail instead of falling back to another GPU backend when the selected one is not supported.\n"
+    "\tSkips the GPU backend support check.";
+static const char arg_handle_debug_mode_generic_set_doc_gpu_no_hw_raytracing_set_doc[] =
+    "\n\t"
+    "Force disable hardware raytracing support (Vulkan only).";
 
 static int arg_handle_debug_mode_generic_set(int /*argc*/, const char ** /*argv*/, void *data)
 {
-  G.debug |= POINTER_AS_INT(data);
+  G.debug |= reinterpret_cast<uint64_t>(data);
   return 0;
 }
 
@@ -1697,6 +1725,110 @@ static int arg_handle_gpu_backend_set(int argc, const char **argv, void * /*data
 
   GPU_backend_type_selection_set_override(gpu_backend);
 
+  return 1;
+}
+
+static void arg_handle_gpu_device_exit(const int exit_code)
+{
+  /* `BKE_blender_atexit` expects `BKE_appdir_init` to have been called.
+   * `--gpu-device` is parsed in the environment pass, before the usual appdir initialization. */
+  BKE_appdir_init();
+  BKE_blender_atexit();
+  exit(exit_code);
+  BLI_assert_unreachable();
+}
+
+static const char arg_handle_gpu_device_set_doc[] =
+    "<device>\n"
+    "\tSelect a specific GPU device, overriding the GPU device from user preferences for this\n"
+    "\trun only. Accepted forms:\n"
+    "\n"
+    "\t* '<vendor-hex>/<device-hex>/<index-hex>' (matches the identifier used in user\n"
+    "\t  preferences, with vendor PCI ID, device PCI ID and enumeration index all hex-encoded).\n"
+    "\t* '<index>' (no slashes) picks the Nth supported device by enumeration order, decimal.\n"
+    "\t* 'help' prints supported Vulkan devices and exits.\n"
+    "\n"
+    "\tOnly used with the Vulkan backend. Other backends print a warning and ignore this option.\n"
+    "\tIf the requested Vulkan device is unavailable, Blender falls back to the saved GPU\n"
+    "\tpreference unless '--gpu-device-no-fallback' is also set.";
+static int arg_handle_gpu_device_set(int argc, const char **argv, void * /*data*/)
+{
+  const char *arg_id = "--gpu-device";
+  if (argc < 2) {
+    fprintf(stderr, "\nError: GPU device specifier must follow '%s'.\n", arg_id);
+    arg_handle_gpu_device_exit(EXIT_FAILURE);
+  }
+
+  const char *spec = argv[1];
+  if (STREQ(spec, "help")) {
+    printf("Blender GPU Device Listing (Vulkan):\n");
+    printf("Pass an Index or Device-ID to '--gpu-device'.\n");
+#  ifdef WITH_VULKAN_BACKEND
+    GPU_vulkan_supported_devices_print(stdout);
+#  else
+    printf("  (Vulkan backend not built)\n");
+#  endif
+    arg_handle_gpu_device_exit(EXIT_SUCCESS);
+  }
+
+  int device_index = 0;
+  uint32_t device_vendor_id = 0;
+  uint32_t device_device_id = 0;
+
+  if (strchr(spec, '/') == nullptr) {
+    const char *err_msg = nullptr;
+    if (!parse_int_strict_range(spec, nullptr, 0, INT_MAX, &device_index, &err_msg)) {
+      fprintf(stderr,
+              "\nError: %s '%s %s', expected '<index>' (a non-negative integer) "
+              "or '<vendor-hex>/<device-hex>/<index-hex>'.\n",
+              err_msg,
+              arg_id,
+              spec);
+      arg_handle_gpu_device_exit(EXIT_FAILURE);
+    }
+    device_vendor_id = uint32_t(-1);
+    device_device_id = uint32_t(-1);
+  }
+  else {
+    const char *p1 = strchr(spec, '/');
+    const char *p2 = strchr(p1 + 1, '/');
+    if (p2 == nullptr) {
+      fprintf(stderr,
+              "\nError: unrecognized '%s %s', expected "
+              "'<vendor-hex>/<device-hex>/<index-hex>', '<index>' or 'help'.\n",
+              arg_id,
+              spec);
+      arg_handle_gpu_device_exit(EXIT_FAILURE);
+    }
+
+    char *end = nullptr;
+    errno = 0;
+    const ulong vendor_id = strtoul(spec, &end, 16);
+    const bool vendor_ok = (errno == 0) && (end == p1) && (end != spec) &&
+                           (vendor_id <= std::numeric_limits<uint32_t>::max());
+    errno = 0;
+    const ulong device_id = strtoul(p1 + 1, &end, 16);
+    const bool device_ok = (errno == 0) && (end == p2) && (end != p1 + 1) &&
+                           (device_id <= std::numeric_limits<uint32_t>::max());
+    errno = 0;
+    const ulong index = strtoul(p2 + 1, &end, 16);
+    const bool index_ok = (errno == 0) && (*end == '\0') && (end != p2 + 1) && (index <= INT_MAX);
+
+    if (!vendor_ok || !device_ok || !index_ok) {
+      fprintf(stderr,
+              "\nError: failed to parse '%s %s', "
+              "expected '<vendor-hex>/<device-hex>/<index-hex>'.\n",
+              arg_id,
+              spec);
+      arg_handle_gpu_device_exit(EXIT_FAILURE);
+    }
+
+    device_vendor_id = uint32_t(vendor_id);
+    device_device_id = uint32_t(device_id);
+    device_index = int(index);
+  }
+
+  GPU_backend_preferred_device_set_override(device_index, device_vendor_id, device_device_id);
   return 1;
 }
 
@@ -2405,9 +2537,23 @@ static int arg_handle_render_frame(int argc, const char **argv, void *data)
         return 1;
       }
 
-      re = RE_NewSceneRender(scene);
       BKE_reports_init(&reports, RPT_STORE);
+
+      if (!RE_disable_save_output_allowed(true, *scene, &reports)) {
+        BKE_reports_free(&reports);
+        MEM_delete(frame_range_arr);
+        return 1;
+      }
+
+      if (!RE_is_rendering_allowed(*bmain, scene, nullptr, nullptr, &reports)) {
+        BKE_reports_free(&reports);
+        MEM_delete(frame_range_arr);
+        return 1;
+      }
+
+      re = RE_NewSceneRender(scene);
       RE_SetReports(re, &reports);
+
       for (int i = 0; i < frames_range_len; i++) {
         /* We could pass in frame ranges,
          * but prefer having exact behavior as passing in multiple frames. */
@@ -2442,10 +2588,23 @@ static int arg_handle_render_animation(int /*argc*/, const char ** /*argv*/, voi
     add_log_render_filter();
 
     Main *bmain = CTX_data_main(C);
-    Render *re = RE_NewSceneRender(scene);
+
     ReportList reports;
     BKE_reports_init(&reports, RPT_STORE);
+
+    if (!RE_disable_save_output_allowed(true, *scene, &reports)) {
+      BKE_reports_free(&reports);
+      return 0;
+    }
+
+    if (!RE_is_rendering_allowed(*bmain, scene, nullptr, nullptr, &reports)) {
+      BKE_reports_free(&reports);
+      return 0;
+    }
+
+    Render *re = RE_NewSceneRender(scene);
     RE_SetReports(re, &reports);
+
     RE_RenderAnim(
         re, bmain, scene, nullptr, nullptr, scene->r.sfra, scene->r.efra, scene->r.frame_step);
     RE_SetReports(re, nullptr);
@@ -2472,7 +2631,7 @@ static int arg_handle_scene_set(int argc, const char **argv, void *data)
        * otherwise scripts that run later won't get this scene back from the context. */
       wmWindow *win = CTX_wm_window(C);
       if (win == nullptr) {
-        win = static_cast<wmWindow *>(CTX_wm_manager(C)->windows.first);
+        win = CTX_wm_manager(C)->windows.first();
       }
       if (win != nullptr) {
         WM_window_set_active_scene(CTX_data_main(C), C, win, scene);
@@ -2802,6 +2961,8 @@ static bool handle_load_file(bContext *C, const char *filepath_arg, const bool l
   STRNCPY(filepath, filepath_arg);
   BLI_path_canonicalize_native(filepath, sizeof(filepath));
 
+  const bool is_directory = BLI_is_dir(filepath);
+
   /* Load the file. */
   ReportList reports;
   BKE_reports_init(&reports, RPT_PRINT | RPT_STORE);
@@ -2810,7 +2971,9 @@ static bool handle_load_file(bContext *C, const char *filepath_arg, const bool l
    * Instead, enabling auto-execution via `--enable-autoexec` causes the auto-execution
    * check to be skipped (if it's set), so it's fine to always enable the check here. */
   const bool use_scripts_autoexec_check = true;
-  const bool success = WM_file_read(C, filepath, use_scripts_autoexec_check, &reports);
+  const bool success = !is_directory ?
+                           WM_file_read(C, filepath, use_scripts_autoexec_check, &reports) :
+                           WM_file_read_project(C, filepath, &reports);
 
   wmWindowManager *wm = CTX_wm_manager(C);
   WM_reports_from_reports_move(wm, &reports);
@@ -2821,55 +2984,59 @@ static bool handle_load_file(bContext *C, const char *filepath_arg, const bool l
       /* Ensure we use 'C->data.scene' for background render. */
       CTX_wm_window_set(C, nullptr);
     }
+    return true;
   }
-  else {
-    /* Failed to load file, stop processing arguments if running in background mode. */
-    if (G.background) {
-      /* Set `is_break` if running in the background mode so
-       * blender will return non-zero exit code which then
-       * could be used in automated script to control how
-       * good or bad things are. */
-      G.is_break = true;
-      return false;
-    }
 
-    const char *error_msg_generic = "file could not be loaded";
-    const char *error_msg = nullptr;
-
-    if (load_empty_file == false) {
-      error_msg = error_msg_generic;
-    }
-    else if (!BKE_blendfile_extension_check(filepath)) {
-      /* Non-blend. Continue loading and give warning. */
-      G_MAIN->is_read_invalid = true;
-      return true;
-    }
-    else if (BLI_exists(filepath)) {
-      /* When a file is found but can't be loaded, handling it as a new file
-       * could cause it to be unintentionally overwritten (data loss).
-       * Further this is almost certainly not that a user would expect or want.
-       * If they do, they can delete the file beforehand. */
-      error_msg = error_msg_generic;
-    }
-
-    if (error_msg) {
-      fprintf(stderr, "Error: %s, exiting! %s\n", error_msg, filepath);
-      WM_exit(C, EXIT_FAILURE);
-      /* Unreachable, return for clarity. */
-      return false;
-    }
-
-    /* Behave as if a file was loaded, calling "Save" will write to the `filepath` from the CLI.
-     *
-     * WARNING: The path referenced may be incorrect, no attempt is made to validate the path
-     * here or check that writing to it will work. If the users enters the path of a directory
-     * that doesn't exist (for example) saving will fail.
-     * Attempting to create the file at this point is possible but likely to cause more
-     * trouble than it's worth (what with network drives), removable devices ... etc. */
-
-    STRNCPY(G_MAIN->filepath, filepath);
-    printf("... opened default scene instead; saving will write to: %s\n", filepath);
+  /* Failed to load file, stop processing arguments if running in background mode. */
+  if (G.background) {
+    /* Set `is_break` if running in the background mode so
+     * blender will return non-zero exit code which then
+     * could be used in automated script to control how
+     * good or bad things are. */
+    G.is_break = true;
+    return false;
   }
+
+  if (is_directory) {
+    return false;
+  }
+
+  const char *error_msg_generic = "file could not be loaded";
+  const char *error_msg = nullptr;
+
+  if (load_empty_file == false) {
+    error_msg = error_msg_generic;
+  }
+  else if (!BKE_blendfile_extension_check(filepath)) {
+    /* Non-blend. Continue loading and give warning. */
+    G_MAIN->is_read_invalid = true;
+    return true;
+  }
+  else if (BLI_exists(filepath)) {
+    /* When a file is found but can't be loaded, handling it as a new file
+     * could cause it to be unintentionally overwritten (data loss).
+     * Further this is almost certainly not that a user would expect or want.
+     * If they do, they can delete the file beforehand. */
+    error_msg = error_msg_generic;
+  }
+
+  if (error_msg) {
+    fprintf(stderr, "Error: %s, exiting! %s\n", error_msg, filepath);
+    WM_exit(C, EXIT_FAILURE);
+    /* Unreachable, return for clarity. */
+    return false;
+  }
+
+  /* Behave as if a file was loaded, calling "Save" will write to the `filepath` from the CLI.
+   *
+   * WARNING: The path referenced may be incorrect, no attempt is made to validate the path
+   * here or check that writing to it will work. If the users enters the path of a directory
+   * that doesn't exist (for example) saving will fail.
+   * Attempting to create the file at this point is possible but likely to cause more
+   * trouble than it's worth (what with network drives), removable devices ... etc. */
+
+  STRNCPY(G_MAIN->filepath, filepath);
+  printf("... opened default scene instead; saving will write to: %s\n", filepath);
 
   return true;
 }
@@ -2895,13 +3062,13 @@ static const char arg_handle_load_last_file_doc[] =
     "Open the most recently opened blend file, instead of the default startup file.";
 static int arg_handle_load_last_file(int /*argc*/, const char ** /*argv*/, void *data)
 {
-  if (BLI_listbase_is_empty(&G.recent_files)) {
+  if (G.recent_files.is_empty()) {
     fprintf(stderr, "Warning: no recent files known, opening default startup file instead.\n");
     return -1;
   }
 
   bContext *C = static_cast<bContext *>(data);
-  const RecentFile *recent_file = static_cast<const RecentFile *>(G.recent_files.first);
+  const RecentFile *recent_file = G.recent_files.first();
   if (!handle_load_file(C, recent_file->filepath, false)) {
     return -1;
   }
@@ -2910,11 +3077,11 @@ static int arg_handle_load_last_file(int /*argc*/, const char ** /*argv*/, void 
 
 void main_args_setup(bContext *C, bArgs *ba, bool all)
 {
-/** Expand the doc-string from the function. */
+/** Expand the docstring from the function. */
 #  define CB(a) a##_doc, a
 /** A version of `CB` that expands an additional suffix. */
 #  define CB_EX(a, b) a##_doc_##b, a
-/** A version of `CB` that uses `all`, needed when the doc-string depends on build options. */
+/** A version of `CB` that uses `all`, needed when the docstring depends on build options. */
 #  define CB_ALL(a) (all ? a##_doc_all : a##_doc), a
 
   BuildDefs defs;
@@ -2962,6 +3129,17 @@ void main_args_setup(bContext *C, bArgs *ba, bool all)
   /* GPU backend selection should be part of #ARG_PASS_ENVIRONMENT for correct GPU context
    * selection for animation player. */
   BLI_args_add(ba, nullptr, "--gpu-backend", CB_ALL(arg_handle_gpu_backend_set), nullptr);
+  BLI_args_add(ba, nullptr, "--gpu-device", CB(arg_handle_gpu_device_set), nullptr);
+  BLI_args_add(ba,
+               nullptr,
+               "--gpu-device-no-fallback",
+               CB_EX(arg_handle_debug_mode_generic_set, gpu_device_no_fallback),
+               reinterpret_cast<void *>(G_DEBUG_GPU_DEVICE_NO_FALLBACK));
+  BLI_args_add(ba,
+               nullptr,
+               "--debug-gpu-backend-no-fallback",
+               CB_EX(arg_handle_debug_mode_generic_set, gpu_backend_no_fallback),
+               reinterpret_cast<void *>(G_DEBUG_GPU_BACKEND_NO_FALLBACK));
   BLI_args_add(ba, nullptr, "--gpu-vsync", CB(arg_handle_gpu_vsync_set), nullptr);
   if (defs.with_opengl_backend) {
     BLI_args_add(ba,
@@ -3006,6 +3184,8 @@ void main_args_setup(bContext *C, bArgs *ba, bool all)
                CB_EX(arg_handle_internet_allow_set, online),
                reinterpret_cast<void *>(true));
 
+  BLI_args_add(
+      ba, nullptr, "--console-crash-handler", CB(arg_handle_crash_handler_console), nullptr);
   BLI_args_add(
       ba, nullptr, "--disable-crash-handler", CB(arg_handle_crash_handler_disable), nullptr);
   BLI_args_add(
@@ -3195,12 +3375,17 @@ void main_args_setup(bContext *C, bArgs *ba, bool all)
                  CB_EX(arg_handle_debug_mode_generic_set, gpu_force_vulkan_local_read),
                  reinterpret_cast<void *>(G_DEBUG_GPU_FORCE_VULKAN_LOCAL_READ));
   }
+  BLI_args_add(ba,
+               nullptr,
+               "--debug-gpu-no-hw-raytracing",
+               CB_EX(arg_handle_debug_mode_generic_set, gpu_no_hw_raytracing_set_doc),
+               reinterpret_cast<void *>(G_DEBUG_GPU_NO_HW_RAYTRACING));
   BLI_args_add(ba, nullptr, "--debug-exit-on-error", CB(arg_handle_debug_exit_on_error), nullptr);
 
   BLI_args_add(ba, nullptr, "--verbose", CB(arg_handle_verbosity_set), nullptr);
 
   BLI_args_add(ba, nullptr, "--app-template", CB(arg_handle_app_template), nullptr);
-  BLI_args_add(ba, nullptr, "--factory-startup", CB(arg_handle_factory_startup_set), nullptr);
+  BLI_args_add(ba, "-X", "--factory-startup", CB(arg_handle_factory_startup_set), nullptr);
   BLI_args_add(
       ba, nullptr, "--enable-event-simulate", CB(arg_handle_enable_event_simulate), nullptr);
 

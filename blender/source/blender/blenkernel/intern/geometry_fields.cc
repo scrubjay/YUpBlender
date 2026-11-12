@@ -2,7 +2,13 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup bke
+ */
+
 #include "BLI_array_utils.hh"
+#include "BLI_generic_array.hh"
+#include "BLI_implicit_sharing_ptr.hh"
 
 #include "BKE_attribute.hh"
 #include "BKE_curves.hh"
@@ -254,47 +260,57 @@ const Instances *GeometryFieldContext::instances() const
              nullptr;
 }
 
-GVArray GeometryFieldInput::get_varray_for_context(const fn::FieldContext &context,
-                                                   const IndexMask &mask,
-                                                   ResourceScope & /*scope*/) const
+static std::optional<GeometryFieldContext> try_get_geometry_field_context(
+    const fn::FieldContext &context)
 {
   if (const GeometryFieldContext *geometry_context = dynamic_cast<const GeometryFieldContext *>(
           &context))
   {
-    return this->get_varray_for_context(*geometry_context, mask);
+    return *geometry_context;
   }
   if (const MeshFieldContext *mesh_context = dynamic_cast<const MeshFieldContext *>(&context)) {
-    return this->get_varray_for_context({mesh_context->mesh(), mesh_context->domain()}, mask);
+    return GeometryFieldContext(mesh_context->mesh(), mesh_context->domain());
   }
   if (const CurvesFieldContext *curve_context = dynamic_cast<const CurvesFieldContext *>(&context))
   {
     if (const Curves *curves_id = curve_context->curves_id()) {
-      return this->get_varray_for_context({*curves_id, curve_context->domain()}, mask);
+      return GeometryFieldContext(*curves_id, curve_context->domain());
     }
-    return this->get_varray_for_context({curve_context->curves(), curve_context->domain()}, mask);
+    return GeometryFieldContext(curve_context->curves(), curve_context->domain());
   }
   if (const PointCloudFieldContext *point_context = dynamic_cast<const PointCloudFieldContext *>(
           &context))
   {
-    return this->get_varray_for_context({point_context->pointcloud()}, mask);
+    return GeometryFieldContext(point_context->pointcloud());
   }
   if (const GreasePencilFieldContext *grease_pencil_context =
           dynamic_cast<const GreasePencilFieldContext *>(&context))
   {
-    return this->get_varray_for_context({grease_pencil_context->grease_pencil()}, mask);
+    return GeometryFieldContext(grease_pencil_context->grease_pencil());
   }
   if (const GreasePencilLayerFieldContext *grease_pencil_context =
           dynamic_cast<const GreasePencilLayerFieldContext *>(&context))
   {
-    return this->get_varray_for_context({grease_pencil_context->grease_pencil(),
-                                         grease_pencil_context->domain(),
-                                         grease_pencil_context->layer_index()},
-                                        mask);
+    return GeometryFieldContext(grease_pencil_context->grease_pencil(),
+                                grease_pencil_context->domain(),
+                                grease_pencil_context->layer_index());
   }
   if (const InstancesFieldContext *instances_context = dynamic_cast<const InstancesFieldContext *>(
           &context))
   {
-    return this->get_varray_for_context({instances_context->instances()}, mask);
+    return GeometryFieldContext(instances_context->instances());
+  }
+  return std::nullopt;
+}
+
+GVArray GeometryFieldInput::get_varray_for_context(const fn::FieldContext &context,
+                                                   const IndexMask &mask,
+                                                   ResourceScope & /*scope*/) const
+{
+  if (const std::optional<GeometryFieldContext> geometry_context = try_get_geometry_field_context(
+          context))
+  {
+    return this->get_varray_for_context(*geometry_context, mask);
   }
   return {};
 }
@@ -303,6 +319,12 @@ std::optional<AttrDomain> GeometryFieldInput::preferred_domain(
     const GeometryComponent & /*component*/) const
 {
   return std::nullopt;
+}
+
+NativeFieldDomain GeometryFieldInput::native_domain_info(
+    const GeometryComponent & /*component*/) const
+{
+  return NativeFieldDomain::None();
 }
 
 GVArray MeshFieldInput::get_varray_for_context(const fn::FieldContext &context,
@@ -325,6 +347,11 @@ GVArray MeshFieldInput::get_varray_for_context(const fn::FieldContext &context,
 std::optional<AttrDomain> MeshFieldInput::preferred_domain(const Mesh & /*mesh*/) const
 {
   return std::nullopt;
+}
+
+NativeFieldDomain MeshFieldInput::native_domain_info(const Mesh & /*mesh*/) const
+{
+  return NativeFieldDomain::None();
 }
 
 GVArray CurvesFieldInput::get_varray_for_context(const fn::FieldContext &context,
@@ -458,6 +485,12 @@ void AttributeExistsFieldInput::hash_unique(UniqueHashBytes &hash,
   hash.data.extend(Span(name_.data(), name_.size()).cast<std::byte>());
 }
 
+NativeFieldDomain AttributeExistsFieldInput::native_domain_info(
+    const GeometryComponent & /*component*/) const
+{
+  return NativeFieldDomain::Constant();
+}
+
 std::string AttributeFieldInput::socket_inspection_name() const
 {
   if (socket_inspection_name_) {
@@ -485,6 +518,19 @@ std::optional<AttrDomain> AttributeFieldInput::preferred_domain(
     return std::nullopt;
   }
   return meta_data->domain;
+}
+
+NativeFieldDomain AttributeFieldInput::native_domain_info(const GeometryComponent &component) const
+{
+  const std::optional<AttributeAccessor> attributes = component.attributes();
+  if (!attributes.has_value()) {
+    return NativeFieldDomain::Constant();
+  }
+  const std::optional<AttributeMetaData> meta_data = attributes->lookup_meta_data(name_);
+  if (!meta_data.has_value()) {
+    return NativeFieldDomain::Constant();
+  }
+  return NativeFieldDomain(NativeFieldDomain::Domain{meta_data->domain});
 }
 
 static StringRef get_random_id_attribute_name(const AttrDomain domain)
@@ -786,6 +832,12 @@ std::optional<AttrDomain> EvaluateOnDomainInput::preferred_domain(
   return src_domain_;
 }
 
+NativeFieldDomain EvaluateOnDomainInput::native_domain_info(
+    const GeometryComponent & /*component*/) const
+{
+  return bke::NativeFieldDomain::Domain{src_domain_};
+}
+
 }  // namespace bke
 
 /* -------------------------------------------------------------------- */
@@ -819,6 +871,30 @@ void NormalFieldInput::hash_unique(UniqueHashBytes &hash,
   hash.add(&id);
   hash.add(legacy_corner_normals_);
   hash.add(true_normals_);
+}
+
+NativeFieldDomain NormalFieldInput::native_domain_info(const GeometryComponent &component) const
+{
+  switch (component.type()) {
+    case GeometryComponent::Type::Mesh: {
+      if (const Mesh *mesh = static_cast<const MeshComponent &>(component).get()) {
+        switch (mesh->normals_domain()) {
+          case MeshNormalDomain::Face:
+            return bke::NativeFieldDomain::Domain{AttrDomain::Face};
+          case MeshNormalDomain::Point:
+            return bke::NativeFieldDomain::Domain{AttrDomain::Point};
+          case MeshNormalDomain::Corner:
+            return bke::NativeFieldDomain::Domain{AttrDomain::Corner};
+        }
+      }
+      break;
+    }
+    case GeometryComponent::Type::Curve:
+      return bke::NativeFieldDomain::Domain{AttrDomain::Point};
+    default:
+      return bke::NativeFieldDomain::Constant();
+  }
+  return bke::NativeFieldDomain::Constant();
 }
 
 const fn::Field<float3> &NormalFieldInput::get_field()
@@ -871,7 +947,7 @@ static bool try_add_shared_field_attribute(MutableAttributeAccessor attributes,
   }
   const AttributeInitShared init(attribute.varray.get_internal_span().data(),
                                  *attribute.sharing_info);
-  return attributes.add(id_to_create, domain, data_type, init);
+  return attributes.add_override(id_to_create, domain, data_type, init);
 }
 
 static bool attribute_data_matches_varray(const GAttributeReader &attribute,
@@ -957,7 +1033,7 @@ bool try_capture_fields_on_geometry(MutableAttributeAccessor attributes,
       void *value;
     };
     struct Array {
-      void *data;
+      ImplicitSharingPtr<ImplicitSharedValue<GArray<>>> data;
     };
     std::variant<Single, Array> new_data;
   };
@@ -983,6 +1059,12 @@ bool try_capture_fields_on_geometry(MutableAttributeAccessor attributes,
     const AttributeValidator validator = attributes.lookup_validator(name);
     const fn::GField field = validator.validate_field_if_necessary(fields[input_index]);
 
+    if (!validator && selection_is_full) {
+      if (try_add_shared_field_attribute(attributes, name, domain, field)) {
+        continue;
+      }
+    }
+
     /* We are writing to an attribute that exists already with the correct domain and type. */
     if (const GAttributeReader dst = attributes.lookup(name)) {
       if (dst.domain == domain && dst.varray.type() == field.cpp_type()) {
@@ -992,24 +1074,18 @@ bool try_capture_fields_on_geometry(MutableAttributeAccessor attributes,
       }
     }
 
-    if (!validator && selection_is_full) {
-      if (try_add_shared_field_attribute(attributes, name, domain, field)) {
-        continue;
-      }
-    }
-
     if (field.depends_on_input() || !selection_is_full) {
       /* Could avoid allocating a new buffer if:
        * - The field does not depend on that attribute (we can't easily check for that yet). */
-      void *buffer = MEM_new_uninitialized_aligned(
-          type.size * domain_size, type.alignment, __func__);
+      auto *data = new ImplicitSharedValue<GArray<>>(type, domain_size, NoInitialization());
+      void *buffer = data->data.data();
       if (!selection_is_full) {
         initialize_new_data(attributes, domain, domain_size, name, type, data_type, buffer);
       }
 
       GMutableSpan dst(type, buffer, domain_size);
       evaluator.add_with_destination(field, dst);
-      results_to_add.append({input_index, AddResult::Array{buffer}});
+      results_to_add.append({input_index, AddResult::Array{ImplicitSharingPtr(data)}});
     }
     else {
       void *value = scope.allocate_owned(field.cpp_type());
@@ -1046,11 +1122,10 @@ bool try_capture_fields_on_geometry(MutableAttributeAccessor attributes,
     const CPPType &type = fields[result.input_index].cpp_type();
     const bke::AttrType data_type = bke::cpp_type_to_attribute_type(type);
     if (auto *array = std::get_if<AddResult::Array>(&result.new_data)) {
-      if (!attributes.add(name, domain, data_type, AttributeInitMoveArray(array->data))) {
+      const ImplicitSharedValue<GArray<>> &data = *array->data;
+      if (!attributes.add(name, domain, data_type, AttributeInitShared(data.data.data(), data))) {
         /* If the name corresponds to a builtin attribute, removing the attribute might fail if
          * it's required, adding the attribute might fail if the domain or type is incorrect. */
-        type.destruct_n(array->data, domain_size);
-        MEM_delete_void(array->data);
         success = false;
       }
     }
@@ -1122,6 +1197,46 @@ bool try_capture_fields_on_geometry(GeometryComponent &component,
 {
   const fn::Field<bool> selection = fn::Field<bool>(true);
   return try_capture_fields_on_geometry(component, names, domain, selection, fields);
+}
+
+std::optional<AttrDomain> try_detect_native_field_domain(const GeometryComponent &component,
+                                                         const fn::GField &field)
+{
+  const fn::FieldInputsPtr &field_inputs = field.field_inputs();
+  if (!field_inputs) {
+    return std::nullopt;
+  }
+  VectorSet<AttrDomain, 8> domains;
+  for (const fn::FieldInput &field_input : field_inputs->inputs) {
+    if (const auto *input = dynamic_cast<const GeometryFieldInput *>(&field_input)) {
+      const NativeFieldDomain domain_info = input->native_domain_info(component);
+      if (std::holds_alternative<NativeFieldDomain::None>(domain_info.variant)) {
+        return std::nullopt;
+      }
+      if (const auto *value = std::get_if<NativeFieldDomain::Domain>(&domain_info.variant)) {
+        domains.add(value->domain);
+      }
+    }
+    if (component.type() == GeometryComponent::Type::Mesh) {
+      if (const Mesh *mesh = static_cast<const MeshComponent &>(component).get()) {
+        if (const auto *input = dynamic_cast<const MeshFieldInput *>(&field_input)) {
+          const NativeFieldDomain domain_info = input->native_domain_info(*mesh);
+          if (std::holds_alternative<NativeFieldDomain::None>(domain_info.variant)) {
+            return std::nullopt;
+          }
+          if (const auto *value = std::get_if<NativeFieldDomain::Domain>(&domain_info.variant)) {
+            domains.add(value->domain);
+          }
+        }
+      }
+    }
+    return std::nullopt;
+  }
+  if (domains.size() != 1) {
+    /* Any combination of domains means there is no particular native domain. */
+    return std::nullopt;
+  }
+  return domains[0];
 }
 
 std::optional<AttrDomain> try_detect_field_domain(const GeometryComponent &component,

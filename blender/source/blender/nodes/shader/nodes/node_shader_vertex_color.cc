@@ -2,12 +2,18 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup shdnodes
+ */
+
 #include "node_shader_util.hh"
 #include "node_util.hh"
 
 #include "BKE_context.hh"
 
 #include "DEG_depsgraph_query.hh"
+
+#include "ED_node.hh"
 
 #include "RNA_access.hh"
 
@@ -26,8 +32,7 @@ static void node_declare(NodeDeclarationBuilder &b)
 
 static void node_shader_buts_vertex_color(ui::Layout &layout, bContext *C, PointerRNA *ptr)
 {
-  PointerRNA obptr = CTX_data_pointer_get(C, "active_object");
-  Object *object = static_cast<Object *>(obptr.data);
+  Object *object = ed::space_node::get_space_editor_object(C);
 
   if (object && object->type == OB_MESH) {
     Depsgraph *depsgraph = CTX_data_depsgraph_pointer(C);
@@ -41,7 +46,7 @@ static void node_shader_buts_vertex_color(ui::Layout &layout, bContext *C, Point
   }
 
   layout.prop(ptr, "layer_name", ui::ITEM_R_SPLIT_EMPTY_NAME, "", ICON_GROUP_VCOL);
-  layout.label(RPT_("No mesh in active object"), ICON_ERROR);
+  layout.label_multiline(RPT_("No mesh in active object"), ICON_STATUS_ERROR);
 }
 
 static void node_shader_init_vertex_color(bNodeTree * /*ntree*/, bNode *node)
@@ -70,7 +75,13 @@ static int node_shader_gpu_vertex_color(GPUMaterial *mat,
     vertexColorLink = GPU_attribute_default_color(mat);
   }
 
-  return GPU_stack_link(mat, node, "node_vertex_color", in, out, vertexColorLink);
+  GPU_stack_link(mat, node, "node_vertex_color", in, out, vertexColorLink);
+
+  for (const auto [i, sock] : node->outputs.enumerate()) {
+    node_shader_gpu_bump_tex_coord(mat, node, &out[i].link);
+  }
+
+  return 1;
 }
 
 NODE_SHADER_MATERIALX_BEGIN

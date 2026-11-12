@@ -7,12 +7,15 @@
  */
 
 #include <cstdlib>
+#include <optional>
 
 #include "DNA_scene_types.h"
 
-#include "BLI_listbase.h"
-#include "BLI_math_base.h"
-#include "BLI_utildefines.h"
+#include "MEM_guardedalloc.h"
+
+#include "BLI_listbase.hh"
+#include "BLI_math_base_c.hh"
+#include "BLI_utildefines.hh"
 
 #include "BKE_context.hh"
 #include "BKE_global.hh"
@@ -35,9 +38,6 @@
 
 namespace blender {
 
-/* ************************** view-based operators **********************************/
-/* XXX should these really be here? */
-
 /* -------------------------------------------------------------------- */
 /** \name Set Cursor
  *
@@ -45,6 +45,8 @@ namespace blender {
  * 1) Current Frame Indicator (as per #ANIM_OT_change_frame)
  * 2) Value Indicator (stored per Graph Editor instance)
  * \{ */
+
+/* XXX should these really be here? */
 
 static bool graphview_cursor_poll(bContext *C)
 {
@@ -145,7 +147,10 @@ static wmOperatorStatus graphview_cursor_invoke(bContext *C, wmOperator *op, con
 
   /* Signal that a scrubbing operating is starting */
   if (screen) {
-    screen->scrubbing = true;
+    const std::optional<PreScrubbingState> pre_scrubbing = ED_screen_scrubbing_enable(*C, *screen);
+    if (pre_scrubbing) {
+      op->customdata = MEM_new<PreScrubbingState>(__func__, *pre_scrubbing);
+    }
   }
 
   /* add temp handler */
@@ -156,44 +161,45 @@ static wmOperatorStatus graphview_cursor_invoke(bContext *C, wmOperator *op, con
 /* Modal event handling of cursor changing */
 static wmOperatorStatus graphview_cursor_modal(bContext *C, wmOperator *op, const wmEvent *event)
 {
-  bScreen *screen = CTX_wm_screen(C);
   Scene *scene = CTX_data_scene(C);
 
   /* execute the events */
   switch (event->type) {
     case EVT_ESCKEY:
-      if (screen) {
-        screen->scrubbing = false;
-      }
-
       WM_event_add_notifier(C, NC_SCENE | ND_FRAME, scene);
-      return OPERATOR_FINISHED;
+      break;
 
     case MOUSEMOVE:
       /* set the new values */
       graphview_cursor_setprops(C, op, event);
       graphview_cursor_apply(C, op);
-      break;
+      return OPERATOR_RUNNING_MODAL; /* Scrubbing continues. */
 
     case LEFTMOUSE:
     case RIGHTMOUSE:
     case MIDDLEMOUSE:
       /* We check for either mouse-button to end, to work with all user keymaps. */
       if (event->val == KM_RELEASE) {
-        if (screen) {
-          screen->scrubbing = false;
-        }
-
         WM_event_add_notifier(C, NC_SCENE | ND_FRAME, scene);
-        return OPERATOR_FINISHED;
       }
       break;
-    default: {
-      break;
-    }
+    default:
+      return OPERATOR_RUNNING_MODAL; /* Scrubbing continues. */
   }
 
-  return OPERATOR_RUNNING_MODAL;
+  /* Scrubbing ended, so return the playback state to what it was before scrubbing started. */
+  PreScrubbingState *pre_scrubbing = static_cast<PreScrubbingState *>(op->customdata);
+  bScreen *screen = CTX_wm_screen(C);
+  if (screen) {
+    std::optional<PreScrubbingState> resume = pre_scrubbing ? std::optional(*pre_scrubbing) :
+                                                              std::nullopt;
+    ED_screen_scrubbing_disable(*C, *screen, resume);
+  }
+
+  MEM_delete(pre_scrubbing);
+  op->customdata = nullptr;
+
+  return OPERATOR_FINISHED;
 }
 
 static void GRAPH_OT_cursor_set(wmOperatorType *ot)
@@ -279,7 +285,7 @@ static wmOperatorStatus graphview_curves_hide_exec(bContext *C, wmOperator *op)
 
   /* cleanup */
   ANIM_animdata_freelist(&anim_data);
-  BLI_freelistN(&all_data);
+  all_data.free_no_destruct();
 
   /* unhide selected */
   if (unselected) {
@@ -393,7 +399,7 @@ static wmOperatorStatus graphview_curves_reveal_exec(bContext *C, wmOperator *op
 
   /* cleanup */
   ANIM_animdata_freelist(&anim_data);
-  BLI_freelistN(&all_data);
+  all_data.free_no_destruct();
 
   /* send notifier that things have changed */
   WM_event_add_notifier(C, NC_ANIMATION | ND_ANIMCHAN | NA_EDITED, nullptr);
@@ -439,6 +445,7 @@ void graphedit_operatortypes()
 
   WM_operatortype_append(GRAPH_OT_hide);
   WM_operatortype_append(GRAPH_OT_reveal);
+  WM_operatortype_append(GRAPH_OT_local_view);
 
   /* keyframes */
   /* selection */
@@ -498,6 +505,7 @@ void graphedit_operatortypes()
 
   /* F-Curve Modifiers */
   WM_operatortype_append(GRAPH_OT_fmodifier_add);
+  WM_operatortype_append(GRAPH_OT_fmodifier_delete);
   WM_operatortype_append(GRAPH_OT_fmodifier_copy);
   WM_operatortype_append(GRAPH_OT_fmodifier_paste);
 

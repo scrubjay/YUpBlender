@@ -4,6 +4,13 @@
 
 #include "NOD_rna_define.hh"
 
+#include "BKE_curves.hh"
+#include "BKE_grease_pencil.hh"
+#include "BKE_instances.hh"
+
+#include "DNA_mesh_types.h"
+#include "DNA_pointcloud_types.h"
+
 #include "UI_interface_layout.hh"
 #include "UI_resources.hh"
 
@@ -78,7 +85,7 @@ static void node_declare(NodeDeclarationBuilder &b)
         total_layers.available(true);
         break;
       default:
-        BLI_assert_unreachable();
+        break;
     }
   }
 }
@@ -100,8 +107,8 @@ static void node_geo_exec(GeoNodeExecParams params)
 
   switch (component) {
     case GeometryComponent::Type::Mesh: {
-      if (const MeshComponent *component = geometry_set.get_component<MeshComponent>()) {
-        const AttributeAccessor attributes = *component->attributes();
+      if (const Mesh *mesh = geometry_set.get_mesh()) {
+        const AttributeAccessor attributes = mesh->attributes();
         params.set_output("Point Count"_ustr, attributes.domain_size(AttrDomain::Point));
         params.set_output("Edge Count"_ustr, attributes.domain_size(AttrDomain::Edge));
         params.set_output("Face Count"_ustr, attributes.domain_size(AttrDomain::Face));
@@ -113,8 +120,8 @@ static void node_geo_exec(GeoNodeExecParams params)
       break;
     }
     case GeometryComponent::Type::Curve: {
-      if (const CurveComponent *component = geometry_set.get_component<CurveComponent>()) {
-        const AttributeAccessor attributes = *component->attributes();
+      if (const Curves *curves_id = geometry_set.get_curves()) {
+        const AttributeAccessor attributes = curves_id->geometry.wrap().attributes();
         params.set_output("Point Count"_ustr, attributes.domain_size(AttrDomain::Point));
         params.set_output("Spline Count"_ustr, attributes.domain_size(AttrDomain::Curve));
       }
@@ -124,9 +131,8 @@ static void node_geo_exec(GeoNodeExecParams params)
       break;
     }
     case GeometryComponent::Type::PointCloud: {
-      if (const PointCloudComponent *component = geometry_set.get_component<PointCloudComponent>())
-      {
-        const AttributeAccessor attributes = *component->attributes();
+      if (const PointCloud *pointcloud = geometry_set.get_pointcloud()) {
+        const AttributeAccessor attributes = pointcloud->attributes();
         params.set_output("Point Count"_ustr, attributes.domain_size(AttrDomain::Point));
       }
       else {
@@ -135,8 +141,8 @@ static void node_geo_exec(GeoNodeExecParams params)
       break;
     }
     case GeometryComponent::Type::Instance: {
-      if (const InstancesComponent *component = geometry_set.get_component<InstancesComponent>()) {
-        const AttributeAccessor attributes = *component->attributes();
+      if (const bke::Instances *instances = geometry_set.get_instances()) {
+        const AttributeAccessor attributes = instances->attributes();
         params.set_output("Instance Count"_ustr, attributes.domain_size(AttrDomain::Instance));
       }
       else {
@@ -145,10 +151,8 @@ static void node_geo_exec(GeoNodeExecParams params)
       break;
     }
     case GeometryComponent::Type::GreasePencil: {
-      if (const GreasePencilComponent *component =
-              geometry_set.get_component<GreasePencilComponent>())
-      {
-        const AttributeAccessor attributes = *component->attributes();
+      if (const GreasePencil *grease_pencil = geometry_set.get_grease_pencil()) {
+        const AttributeAccessor attributes = grease_pencil->attributes();
         params.set_output("Layer Count"_ustr, attributes.domain_size(AttrDomain::Layer));
       }
       else {
@@ -157,19 +161,33 @@ static void node_geo_exec(GeoNodeExecParams params)
       break;
     }
     default:
-      BLI_assert_unreachable();
+      params.set_default_remaining_outputs();
+      break;
   }
 }
 
 static void node_rna(StructRNA *srna)
 {
-  RNA_def_node_enum(srna,
-                    "component",
-                    "Component",
-                    "",
-                    rna_enum_geometry_component_type_items,
-                    NOD_inline_enum_accessors(custom1),
-                    int(bke::GeometryComponent::Type::Mesh));
+  RNA_def_node_enum(
+      srna,
+      "component",
+      "Component",
+      "",
+      rna_enum_geometry_component_type_items,
+      NOD_inline_enum_accessors(custom1),
+      int(bke::GeometryComponent::Type::Mesh),
+      [](bContext * /*C*/, PointerRNA * /*ptr*/, PropertyRNA * /*prop*/, bool *r_free) {
+        *r_free = true;
+        return enum_items_filter(rna_enum_geometry_component_type_items,
+                                 [](const EnumPropertyItem &item) -> bool {
+                                   return ELEM(item.value,
+                                               int(GeometryComponent::Type::Mesh),
+                                               int(GeometryComponent::Type::Curve),
+                                               int(GeometryComponent::Type::PointCloud),
+                                               int(GeometryComponent::Type::Instance),
+                                               int(GeometryComponent::Type::GreasePencil));
+                                 });
+      });
 }
 
 static void node_register()

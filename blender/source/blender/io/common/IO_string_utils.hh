@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup io
+ */
+
 #pragma once
 
 #include "BLI_string_ref.hh"
@@ -28,12 +32,6 @@ namespace blender::io {
  * the input line.
  */
 StringRef read_next_line(StringRef &buffer);
-
-/**
- * Fix up OBJ line continuations by replacing backslash (\) and the
- * following newline with spaces.
- */
-void fixup_line_continuations(char *p, char *end);
 
 /**
  * Drop leading white-space from a string part.

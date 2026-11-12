@@ -6,7 +6,7 @@
  * \ingroup edinterface
  */
 
-#include "BLI_listbase.h"
+#include "BLI_listbase.hh"
 
 #include "BKE_context.hh"
 #include "BKE_grease_pencil.hh"
@@ -482,7 +482,7 @@ class LayerGroupViewItem : public AbstractTreeViewItem {
   {
     short icon = ICON_GREASEPENCIL_LAYER_GROUP;
     if (group_.color_tag != LAYERGROUP_COLOR_NONE) {
-      icon = ICON_LAYERGROUP_COLOR_01 + group_.color_tag;
+      icon = ICON_LAYERGROUP_COLOR_01 + int(group_.color_tag);
     }
 
     Button *but = uiItemL_ex(&row, group_.name(), icon, false, false);

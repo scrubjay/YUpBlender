@@ -2,12 +2,18 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup shdnodes
+ */
+
 #include "node_shader_util.hh"
 #include "node_util.hh"
 
 #include "BKE_context.hh"
 
 #include "DEG_depsgraph_query.hh"
+
+#include "ED_node.hh"
 
 #include "RNA_access.hh"
 
@@ -28,8 +34,7 @@ static void node_shader_buts_tangent(ui::Layout &layout, bContext *C, PointerRNA
   layout.prop(ptr, "direction_type", ui::ITEM_R_SPLIT_EMPTY_NAME, "", ICON_NONE);
 
   if (RNA_enum_get(ptr, "direction_type") == SHD_TANGENT_UVMAP) {
-    PointerRNA obptr = CTX_data_pointer_get(C, "active_object");
-    Object *object = static_cast<Object *>(obptr.data);
+    Object *object = ed::space_node::get_space_editor_object(C);
 
     if (object && object->type == OB_MESH) {
       Depsgraph *depsgraph = CTX_data_depsgraph_pointer(C);
@@ -82,7 +87,8 @@ static int node_shader_gpu_tangent(GPUMaterial *mat,
     GPU_link(mat, "tangent_orco_z", orco, &orco);
   }
 
-  return GPU_stack_link(mat, node, "node_tangent", in, out, orco);
+  return GPU_stack_link(
+      mat, node, "node_tangent", in, out, orco, GPU_kernel_globals(), GPU_shading_data());
 }
 
 NODE_SHADER_MATERIALX_BEGIN
@@ -110,7 +116,7 @@ void register_node_type_sh_tangent()
   ntype.nclass = NODE_CLASS_INPUT;
   ntype.declare = file_ns::node_declare;
   ntype.draw_buttons = file_ns::node_shader_buts_tangent;
-  bke::node_type_size_preset(ntype, bke::eNodeSizePreset::Middle);
+  ntype.default_width = bke::NodeWidth::_160;
   ntype.initfunc = file_ns::node_shader_init_tangent;
   ntype.gpu_fn = file_ns::node_shader_gpu_tangent;
   bke::node_type_storage(

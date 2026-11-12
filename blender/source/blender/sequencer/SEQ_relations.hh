@@ -29,16 +29,17 @@ namespace seq {
  * Check if one strip is input to the other.
  */
 bool relation_is_effect_of_strip(const Strip *effect, const Strip *input);
-/**
- * Free currently open movie strip readers.
- */
-void strip_free_movie_readers(Strip *strip);
 bool relations_check_scene_recursion(Scene *scene, ReportList *reports);
 /**
  * Check if "strip_main" (indirectly) uses strip "strip".
  */
 bool relations_render_loop_check(Strip *strip_main, Strip *strip);
 void relations_free_imbuf(Scene *scene, ListBaseT<Strip> *seqbase, bool for_render);
+
+/**
+ * Free all cached sequencer data of \a scene, including media presence and all caches.
+ */
+void relations_refresh_all(Scene *scene);
 
 /**
  * Invalidates various caches related to a given strip:
@@ -57,18 +58,40 @@ void relations_invalidate_cache(Scene *scene, Strip *strip);
  * images of the strip.
  */
 void relations_invalidate_cache_raw(Scene *scene, Strip *strip);
+
+/** Mark the current frame as potentially cached with a temporary animated property value. */
+void relations_tag_temporary_animation_frame(Scene *scene);
+
+/** Invalidate the marked frame after animation evaluation discards the temporary value. */
+void relations_invalidate_temporary_animation_frame(Scene *scene);
+
 void relations_invalidate_scene_strips(const Main *bmain, const Scene *scene_target);
+
+/**
+ * Sync sequencer scene strips that reference a view layer by name.
+ * This updates `strip->scene_view_layer_name` from \a old_name to \a new_name for any matching
+ * strip across all sequencer scenes that use \a scene as input.
+ *
+ * NOTE: If a view layer is deleted, `new_name = nullptr` should be passed to clear the strips'
+ * `scene_view_layer_name` to the default view layer. In this case, the function will also clear
+ * the caches of these matching strips to evict stale frames.
+ */
+void relations_update_view_layer_scene_strips(Main *bmain,
+                                              Scene *scene,
+                                              const char *old_name,
+                                              const char *new_name);
 
 /**
  * Invalidates the cache for all strips that uses the given compositor node tree.
  */
 void relations_invalidate_compositor_users(const Main *bmain, const bNodeTree *node_tree);
 
-void relations_invalidate_movieclip_strips(Main *bmain, MovieClip *clip_target);
 /**
- * Release FFmpeg handles of strips that are not currently displayed to minimize memory usage.
+ * Invalidates cached source images of effect strips without inputs, like color and text strips.
  */
-void relations_free_all_anim_ibufs(Scene *scene, int timeline_frame);
+void relations_invalidate_generator_strips(Scene *scene);
+
+void relations_invalidate_movieclip_strips(Main *bmain, MovieClip *clip_target);
 /**
  * A debug and development function which checks whether strips have unique UIDs.
  * Errors will be reported to the console.

@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup bke
+ */
+
 #include "BLI_task.hh"
 
 #include "DNA_curve_types.h"
@@ -314,5 +318,7 @@ std::optional<MutableAttributeAccessor> CurveComponent::attributes_for_write()
   return MutableAttributeAccessor(curves ? &curves->geometry : nullptr,
                                   curves::get_attribute_accessor_functions());
 }
+
+/** \} */
 
 }  // namespace blender::bke

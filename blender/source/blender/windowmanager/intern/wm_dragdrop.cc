@@ -22,12 +22,12 @@
 
 #include "BLT_translation.hh"
 
-#include "BLI_fileops.h"
-#include "BLI_listbase.h"
-#include "BLI_math_color.h"
+#include "BLI_fileops.hh"
+#include "BLI_listbase.hh"
+#include "BLI_math_color_c.hh"
 #include "BLI_path_utils.hh"
-#include "BLI_string.h"
-#include "BLI_string_utf8.h"
+#include "BLI_string.hh"
+#include "BLI_string_utf8.hh"
 
 #include "BIF_glutil.hh"
 
@@ -246,10 +246,10 @@ void wm_dropbox_free()
     for (wmDropBox &drop : dm.dropboxes) {
       wm_drop_item_free_data(&drop);
     }
-    BLI_freelistN(&dm.dropboxes);
+    dm.dropboxes.free_no_destruct();
   }
 
-  BLI_freelistN(&dropboxes);
+  dropboxes.free_no_destruct();
 }
 
 /* *********************************** */
@@ -482,7 +482,7 @@ void WM_drag_free(wmDrag *drag)
     WM_drag_data_free(drag->type, drag->poin);
   }
   drag->drop_state.ui_context.reset();
-  BLI_freelistN(&drag->ids);
+  drag->ids.free_no_destruct();
   for (wmDragAssetListItem &asset_item : drag->asset_items.items_mutable()) {
     if (asset_item.is_external) {
       wm_drag_free_asset_data(&asset_item.asset_data.external_info);
@@ -569,12 +569,12 @@ static bool has_single_asset_drag(const wmWindowManager &wm)
 
 static bool drag_global_poll(const bContext *C,
                              const wmDrag *drag,
-                             std::string *r_status_info,
+                             std::string * /*r_status_info*/,
                              std::string *r_disabled_info)
 {
   if (wmDragAsset *asset_data = WM_drag_get_asset_data(drag, 0)) {
-    if (asset_data->asset->is_online()) {
-      *r_status_info = RPT_("Downloading asset...");
+    if (asset_data->asset->is_online_only()) {
+      *r_disabled_info = RPT_("Asset needs downloading first");
       return false;
     }
   }
@@ -730,14 +730,8 @@ void wm_drags_handle_events(bContext *C, const wmEvent *event)
 
   bool any_active = false;
   for (wmDrag &drag : wm->runtime->drags) {
-    switch (event->type) {
-      case MOUSEMOVE:
-      case EVT_DROP:
-        wm_drop_update_active(C, &drag, event);
-        break;
-      default:
-        break;
-    }
+    /* This is to update tooltip during drag and timer events.  */
+    wm_drop_update_active(C, &drag, event);
 
     if (wmDropBox *dropbox = drag.drop_state.active_dropbox) {
       any_active = true;
@@ -749,7 +743,7 @@ void wm_drags_handle_events(bContext *C, const wmEvent *event)
 
   /* Change the cursor to display that dropping isn't possible here. But only if there is something
    * being dragged actually. Cursor will be restored in #wm_drags_exit(). */
-  if (!BLI_listbase_is_empty(&wm->runtime->drags) && ELEM(event->type, MOUSEMOVE, EVT_DROP)) {
+  if (!wm->runtime->drags.is_empty() && ELEM(event->type, MOUSEMOVE, EVT_DROP)) {
     WM_cursor_modal_set(CTX_wm_window(C), any_active ? WM_CURSOR_DEFAULT : WM_CURSOR_STOP);
   }
 }
@@ -771,10 +765,6 @@ void WM_drag_add_local_ID(wmDrag *drag, ID *id, ID *from_parent)
       }
       return;
     }
-    if (GS(drag_id.id->name) != GS(id->name)) {
-      BLI_assert_msg(0, "All dragged IDs must have the same type");
-      return;
-    }
   }
 
   /* Add to list. */
@@ -790,7 +780,7 @@ ID *WM_drag_get_local_ID(const wmDrag *drag, short idcode)
     return nullptr;
   }
 
-  wmDragID *drag_id = static_cast<wmDragID *>(drag->ids.first);
+  wmDragID *drag_id = drag->ids.first();
   if (!drag_id) {
     return nullptr;
   }
@@ -806,7 +796,7 @@ ID *WM_drag_get_local_ID_from_event(const wmEvent *event, short idcode)
   }
 
   ListBaseT<wmDrag> *lb = static_cast<ListBaseT<wmDrag> *>(event->customdata);
-  return WM_drag_get_local_ID(static_cast<const wmDrag *>(lb->first), idcode);
+  return WM_drag_get_local_ID(lb->first(), idcode);
 }
 
 bool WM_drag_is_ID_type(const wmDrag *drag, int idcode)
@@ -1004,7 +994,7 @@ std::optional<bool> wm_drag_asset_path_exists(const wmDrag *drag)
 
   if (const ListBaseT<wmDragAssetListItem> *asset_drags = WM_drag_asset_list_get(drag)) {
 
-    if (BLI_listbase_is_empty(asset_drags)) {
+    if (asset_drags->is_empty()) {
       /* #button_drag_start() will start a drag of type WM_DRAG_ASSET_LIST for dragging a
        * WM_DRAG_ID button (so we do not early out above in this case). Its #asset_items list will
        * always be empty though, so avoid returning false at the end of this function, treat this
@@ -1151,9 +1141,16 @@ static void wm_drop_redalert_draw(const StringRef redalert_str, int x, int y)
   const bTheme *btheme = ui::theme::theme_get();
   const uiWidgetColors *wcol = &btheme->tui.wcol_tooltip;
 
-  float col_fg[4], col_bg[4];
-  ui::theme::get_color_4fv(TH_REDALERT, col_fg);
+  float col_fg[4], col_bg[4], col_alert[4];
   rgba_uchar_to_float(col_bg, wcol->inner);
+  rgba_uchar_to_float(col_fg, wcol->text);
+  ui::theme::get_color_4fv(TH_REDALERT, col_alert);
+
+  /* Alert color's alpha is used to blend between the text and alert tint.
+   * This ensures the text be always readable, lighter or darker depending on the theme. */
+  col_fg[0] = (1.0f - col_alert[3]) * col_fg[0] + (col_alert[3] * col_alert[0]);
+  col_fg[1] = (1.0f - col_alert[3]) * col_fg[1] + (col_alert[3] * col_alert[1]);
+  col_fg[2] = (1.0f - col_alert[3]) * col_fg[2] + (col_alert[3] * col_alert[2]);
 
   ui::fontstyle_draw_simple_backdrop(fstyle, x, y, redalert_str, col_fg, col_bg);
 }
@@ -1163,7 +1160,7 @@ const std::string WM_drag_get_item_name(wmDrag *drag)
   switch (drag->type) {
     case WM_DRAG_ID: {
       ID *id = WM_drag_get_local_ID(drag, 0);
-      const int dragged_ids = BLI_listbase_count(&drag->ids);
+      const int dragged_ids = drag->ids.count();
 
       if (dragged_ids == 1) {
         return id->name + 2;
@@ -1221,27 +1218,24 @@ static void wm_drag_draw_icon(bContext * /*C*/, wmWindow * /*win*/, wmDrag *drag
   else if (drag->imb) {
     /* This could also get the preview image of an ID when dragging one. But the big preview icon
      * may actually not always be wanted, for example when dragging objects in the Outliner it gets
-     * in the way). So make the drag user set an image buffer explicitly (e.g. through
+     * in the way. So make the drag user set an image buffer explicitly (e.g. through
      * #button_drag_attach_image()). */
 
     x = xy[0] - (wm_drag_imbuf_icon_width_get(drag) / 2);
     y = xy[1] - (wm_drag_imbuf_icon_height_get(drag) / 2);
 
     const float col[4] = {1.0f, 1.0f, 1.0f, 0.65f}; /* This blends texture. */
-    IMMDrawPixelsTexState state = immDrawPixelsTexSetup(GPU_SHADER_3D_IMAGE_COLOR);
-    immDrawPixelsTexTiled_scaling(&state,
-                                  x,
-                                  y,
-                                  drag->imb->x,
-                                  drag->imb->y,
-                                  gpu::TextureFormat::UNORM_8_8_8_8,
-                                  false,
-                                  drag->imb->byte_data(),
-                                  drag->imbuf_scale,
-                                  drag->imbuf_scale,
-                                  1.0f,
-                                  1.0f,
-                                  col);
+    PixelBitmapDrawer drawer(GPU_SHADER_3D_IMAGE_COLOR);
+    drawer.draw(x,
+                y,
+                drag->imb->x,
+                drag->imb->y,
+                gpu::TextureFormat::UNORM_8_8_8_8,
+                false,
+                drag->imb->byte_data(),
+                drag->imbuf_scale,
+                drag->imbuf_scale,
+                col);
   }
   else if (drag->preview_icon_id) {
     const int size = wm_drag_preview_icon_size_get();

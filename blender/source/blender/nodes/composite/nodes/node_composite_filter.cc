@@ -67,7 +67,7 @@ class SocketSearchOp {
   void operator()(LinkSearchOpParams &params)
   {
     bNode &node = params.add_node("CompositorNodeFilter"_ustr);
-    bNodeSocket &type_socket = *bke::node_find_socket(node, SOCK_IN, "Type");
+    bNodeSocket &type_socket = *bke::node_find_socket(node, SOCK_IN, "Type"_ustr);
     type_socket.default_value_typed<bNodeSocketValueMenu>()->value = this->filter_type;
     params.update_and_connect_available_socket(node, "Image"_ustr);
   }
@@ -75,7 +75,7 @@ class SocketSearchOp {
 
 static void gather_link_searches(GatherLinkSearchOpParams &params)
 {
-  const eNodeSocketDatatype from_socket_type = eNodeSocketDatatype(params.other_socket().type);
+  const eNodeSocketDatatype from_socket_type = params.other_socket().type;
   if (!params.node_tree().typeinfo->validate_link(from_socket_type, SOCK_RGBA)) {
     return;
   }
@@ -124,7 +124,7 @@ class FilterOperation : public NodeOperation {
     input_image.bind_as_texture(shader, "input_tx");
 
     const Result &factor = get_input("Fac");
-    factor.bind_as_texture(shader, "factor_tx");
+    gpu::Texture *factor_texture = factor.bind_as_texture_or_single_value(shader, "factor_tx");
 
     const Domain domain = compute_domain();
 
@@ -135,7 +135,7 @@ class FilterOperation : public NodeOperation {
     compute_dispatch_threads_at_least(shader, domain.data_size);
 
     input_image.unbind_as_texture();
-    factor.unbind_as_texture();
+    factor.unbind_as_texture_or_single_value(factor_texture);
     output_image.unbind_as_image();
     GPU_shader_unbind();
   }

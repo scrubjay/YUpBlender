@@ -68,10 +68,10 @@ class Operation {
    * another operation or one that was internally computed in the operation by the last input
    * processor for that input. It is the responsibility of the evaluator to map the inputs to their
    * linked results before evaluating the operation by calling the map_input_to_result method. */
-  Map<StringRef, Result *> results_mapped_to_inputs_;
+  Map<std::string, Result *> results_mapped_to_inputs_;
   /* A mapping between each input of the operation identified by its identifier and an ordered list
    * of simple operations to process that input. */
-  Map<StringRef, ProcessorsVector> input_processors_;
+  Map<std::string, ProcessorsVector> input_processors_;
 
  public:
   Operation(Context &context);
@@ -97,6 +97,9 @@ class Operation {
    * operations will not get evaluated and thus will not free the results it consumes. */
   void free_results();
 
+  /* Returns a reference to the compositor context. */
+  Context &context() const;
+
  protected:
   /* Compute the operation domain of this operation. By default, this implements a default logic
    * that infers the operation domain from the inputs, which may be overridden for a different
@@ -114,14 +117,12 @@ class Operation {
    * output results. */
   virtual void execute() = 0;
 
-  /* Compute and set a preview of the operation if needed. This method defaults to an empty
-   * implementation and should be implemented by operations which can have previews. */
-  virtual void compute_preview();
+  /* Log the data of the operation into the context logger. */
+  virtual void log_data();
 
-  /* Add the given result to the results_ map identified by the given output identifier. This
-   * should be called during operation construction for all outputs. The provided result shouldn't
-   * be allocated or initialized, this will happen later during execution. */
-  void populate_result(StringRef identifier, Result result);
+  /* Add a new result with the given type to the results_ map identified by the given output
+   * identifier. This should be called during operation construction for all outputs. */
+  void populate_result(StringRef identifier, ResultType type);
 
   /* Declare the descriptor of the input identified by the given identifier to be the given
    * descriptor. Adds the given descriptor to the input_descriptors_ map identified by the given
@@ -133,9 +134,6 @@ class Operation {
 
   /* Allocates all needed outputs that are not yet allocated and default initialize them. */
   void allocate_default_remaining_outputs();
-
-  /* Returns a reference to the compositor context. */
-  Context &context() const;
 
  private:
   /* Given the identifier of an input of the operation and a processor operation:

@@ -25,11 +25,13 @@
 #include "DNA_space_types.h"
 #include "DNA_windowmanager_types.h"
 
-#include "BLI_listbase.h"
+#include "BLI_listbase.hh"
 #include "BLI_path_utils.hh"
 
 #include "BKE_anim_data.hh"
+#include "BKE_animsys.hh"
 #include "BKE_appdir.hh"
+#include "BKE_blender_copybuffer.hh"
 #include "BKE_blendfile.hh"
 #include "BKE_context.hh"
 #include "BKE_fcurve.hh"
@@ -231,7 +233,7 @@ static bool sequencer_write_copy_paste_file(Main *bmain_src,
    * All other indirect dependencies will then be handled automatically by the partial write
    * context code.
    */
-#define VSE_COPYBUFFER_IDTYPES ID_SO, ID_MC, ID_IM, ID_TXT, ID_VF, ID_AC, ID_NT
+#define VSE_COPYBUFFER_IDTYPES ID_SO, ID_MC, ID_IM, ID_TXT, ID_VF, ID_AC, ID_NT, ID_MSK
   auto add_scene_ids_dependencies_cb = [&copy_buffer,
                                         scene_dst](LibraryIDLinkCallbackData *cb_data) -> int {
     ID *id_src = *cb_data->id_pointer;
@@ -256,9 +258,9 @@ static bool sequencer_write_copy_paste_file(Main *bmain_src,
     }
 
     ID *id_dst = nullptr;
-    const ID_Type id_type = GS((id_src)->name);
+    const ID_Type id_type = id_src->id_type();
     /* Only add (and follow) IDs which usage is marked as 'never null', or are from following
-     * types: #bSound, #MovieClip, #Image, #Text, #VFont, #bAction, #bNodeTree. */
+     * types: #bSound, #MovieClip, #Image, #Text, #VFont, #bAction, #bNodeTree, #Mask. */
     if (ELEM(id_type, VSE_COPYBUFFER_IDTYPES) || (cb_data->cb_flag & IDWALK_CB_NEVER_NULL)) {
       /* The partial write context handle dependencies of ID added to it. This callback will tell
        * it whether a given dependency ID should be skipped/cleared, or also added in the context.
@@ -267,7 +269,7 @@ static bool sequencer_write_copy_paste_file(Main *bmain_src,
                                                      PartialWriteContext::IDAddOptions /*options*/)
           -> PartialWriteContext::IDAddOperations {
         ID *id_deps_src = *cb_deps_data->id_pointer;
-        const ID_Type id_type = GS((id_deps_src)->name);
+        const ID_Type id_type = id_deps_src->id_type();
         if (ELEM(id_type, VSE_COPYBUFFER_IDTYPES) ||
             (cb_deps_data->cb_flag & IDWALK_CB_NEVER_NULL))
         {
@@ -288,7 +290,7 @@ static bool sequencer_write_copy_paste_file(Main *bmain_src,
 
   BLI_assert(copy_buffer.is_valid());
 
-  const bool retval = copy_buffer.write(filepath, reports);
+  const bool retval = copy_buffer.write_as_copypaste_buffer(filepath, reports);
 
   return retval;
 }
@@ -307,7 +309,7 @@ wmOperatorStatus sequencer_clipboard_copy_exec(bContext *C, wmOperator *op)
 
   VectorSet<Strip *> effect_chain;
   effect_chain.add_multiple(selected);
-  seq::iterator_set_expand(ed->current_strips(), effect_chain, seq::query_strip_effect_chain);
+  seq::expand_strips(ed, effect_chain, seq::StripRelation::EffectChain);
 
   VectorSet<Strip *> expanded;
   for (Strip *strip : effect_chain) {
@@ -387,11 +389,16 @@ wmOperatorStatus sequencer_clipboard_paste_invoke(bContext *C,
 
 wmOperatorStatus sequencer_clipboard_paste_exec(bContext *C, wmOperator *op)
 {
+  Main *bmain_dst = CTX_data_main(C);
+
   char filepath[FILE_MAX];
   sequencer_copybuffer_filepath_get(filepath, sizeof(filepath));
-  const BlendFileReadParams params{};
-  BlendFileReadReport bf_reports{};
-  BlendFileData *bfd = BKE_blendfile_read(filepath, &params, &bf_reports);
+  Main *bmain_src = BKE_copybuffer_read(*bmain_dst, filepath, op->reports, FILTER_ID_SCE);
+  if (!bmain_src) {
+    BKE_report(op->reports, RPT_ERROR, "No data to paste");
+    return OPERATOR_CANCELLED;
+  }
+
   const int mval[2] = {RNA_int_get(op->ptr, "x"), RNA_int_get(op->ptr, "y")};
   float2 view_mval;
   View2D *v2d = ui::view2d_fromcontext(C);
@@ -400,15 +407,6 @@ wmOperatorStatus sequencer_clipboard_paste_exec(bContext *C, wmOperator *op)
 
   /* For checking if region type is Preview. */
   ARegion *region = CTX_wm_region(C);
-
-  if (bfd == nullptr) {
-    BKE_report(op->reports, RPT_INFO, "No data to paste");
-    return OPERATOR_CANCELLED;
-  }
-
-  Main *bmain_src = bfd->main;
-  bfd->main = nullptr;
-  BLO_blendfiledata_free(bfd);
 
   Scene *scene_src = nullptr;
   /* Find the scene we pasted that contains the strips. It should be tagged. */
@@ -425,7 +423,7 @@ wmOperatorStatus sequencer_clipboard_paste_exec(bContext *C, wmOperator *op)
     return OPERATOR_CANCELLED;
   }
 
-  const int num_strips_to_paste = BLI_listbase_count(&scene_src->ed->seqbase);
+  const int num_strips_to_paste = scene_src->ed->seqbase.count();
   if (num_strips_to_paste == 0) {
     BKE_report(op->reports, RPT_INFO, "No strips to paste");
     BKE_main_free(bmain_src);
@@ -458,10 +456,13 @@ wmOperatorStatus sequencer_clipboard_paste_exec(bContext *C, wmOperator *op)
   /* Make sure we have all data IDs we need in bmain_dst. Remap the IDs if we already have them.
    * This has to happen BEFORE we move the strip over to scene_dst. their ID mapping will not be
    * correct otherwise. */
-  Main *bmain_dst = CTX_data_main(C);
   MainMergeReport merge_reports = {};
+  /* We need to ensure that the source 'clipboard marked' main Scene is always merged into
+   * destination Main, even in case there would be a name collision with an existing ID (see also
+   * #158049). */
+  Set<ID *> force_merge_ids = {id_cast<ID *>(scene_src)};
   /* NOTE: BKE_main_merge will free bmain_src! */
-  BKE_main_merge(bmain_dst, &bmain_src, merge_reports);
+  BKE_main_merge(bmain_dst, &force_merge_ids, &bmain_src, merge_reports);
 
   /* Paste animation.
    * NOTE: Only fcurves and drivers are copied. NLA action strips are not copied.
@@ -469,7 +470,7 @@ wmOperatorStatus sequencer_clipboard_paste_exec(bContext *C, wmOperator *op)
    * when pasted strips are renamed, pasted fcurves are renamed with them. Finally restore original
    * curves from backup.
    */
-  seq::AnimationBackup animation_backup = {{nullptr}};
+  seq::AnimationBackup animation_backup = {};
   seq::animation_backup_original(scene_dst, &animation_backup);
   bool has_animation = sequencer_paste_animation(bmain_dst, scene_dst, scene_src);
 
@@ -492,10 +493,10 @@ wmOperatorStatus sequencer_clipboard_paste_exec(bContext *C, wmOperator *op)
   }
   BKE_id_delete(bmain_dst, scene_src);
 
-  Strip *iseq_first = static_cast<Strip *>(nseqbase.first);
+  Strip *iseq_first = nseqbase.first();
   BLI_movelisttolist(ed_dst->current_strips(), &nseqbase);
   /* Restore "first" pointer as BLI_movelisttolist sets it to nullptr */
-  nseqbase.first = iseq_first;
+  nseqbase.first_ = iseq_first;
 
   int2 strip_mean_pos = {0, 0};
   int image_strip_count = 0;
@@ -505,7 +506,7 @@ wmOperatorStatus sequencer_clipboard_paste_exec(bContext *C, wmOperator *op)
     }
     /* Make sure, that pasted strips have unique names. This has to be done after
      * adding strips to seqbase, for lookup cache to work correctly. */
-    seq::ensure_unique_name(&istrip, scene_dst);
+    seq::ensure_unique_name(&istrip, scene_dst, {});
 
     if (region->regiontype == RGN_TYPE_PREVIEW && istrip.type != STRIP_TYPE_SOUND &&
         seq::must_render_strip(seq::query_all_strips(&nseqbase), &istrip))
@@ -520,6 +521,7 @@ wmOperatorStatus sequencer_clipboard_paste_exec(bContext *C, wmOperator *op)
     strip_mean_pos /= image_strip_count;
   }
 
+  VectorSet<Strip *> pasted_strips;
   for (Strip &istrip : nseqbase) {
     /* Place strips that generate an image at the mouse cursor. */
     if (region->regiontype == RGN_TYPE_PREVIEW && !RNA_boolean_get(op->ptr, "keep_offset") &&
@@ -536,10 +538,19 @@ wmOperatorStatus sequencer_clipboard_paste_exec(bContext *C, wmOperator *op)
     /* Translate after name has been changed, otherwise this will affect animdata of original
      * strip. */
     seq::transform_translate_strip(scene_dst, &istrip, ofs);
-    /* Ensure, that pasted strips don't overlap. */
-    if (seq::transform_test_overlap(scene_dst, ed_dst->current_strips(), &istrip)) {
-      seq::transform_seqbase_shuffle(ed_dst->current_strips(), &istrip, scene_dst);
-    }
+    pasted_strips.add(&istrip);
+  }
+
+  /* Ensure that pasted strips don't overlap. */
+  ScrArea *area = CTX_wm_area(C);
+  const bool use_sync_markers = ((area->spacedata.first_as<SpaceSeq>())->flag &
+                                 SEQ_MARKER_TRANS) != 0;
+  if (seq::tool_settings_overlap_mode_get(scene_dst) == SEQ_OVERLAP_SHUFFLE) {
+    seq::transform_shuffle_vertical(ed_dst->current_strips(), pasted_strips, scene_dst);
+  }
+  else {
+    seq::transform_handle_overlap(
+        scene_dst, ed_dst->current_strips(), pasted_strips, use_sync_markers);
   }
 
   seq::animation_restore_original(scene_dst, &animation_backup);

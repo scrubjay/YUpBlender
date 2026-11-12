@@ -8,8 +8,8 @@
 
 #include "DNA_curve_types.h"
 
-#include "BLI_heap.h"
-#include "BLI_math_vector.h"
+#include "BLI_heap.hh"
+#include "BLI_math_vector_c.hh"
 #include "MEM_guardedalloc.h"
 
 #include "BKE_curve.hh"
@@ -22,7 +22,7 @@ extern "C" {
 
 #include <cstring>
 
-#include "BLI_strict_flags.h" /* IWYU pragma: keep. Keep last. */
+#include "BLI_strict_flags.hh" /* IWYU pragma: keep. Keep last. */
 
 struct Knot {
   Knot *next, *prev;
@@ -31,19 +31,16 @@ struct Knot {
   float tan[2][3];
   float handles[2];
 
+  /** Node in the heap if the knot can be removed. */
   HeapNode *heap_node;
+  /** New handles for the previous and next knots when this knot is removed. */
+  float removal_handles[2];
   uint can_remove : 1;
   uint is_removed : 1;
 
 #ifndef NDEBUG
   const float *co;
 #endif
-};
-
-struct Removal {
-  uint knot_index;
-  /* handles for prev/next knots */
-  float handles[2];
 };
 
 static float knot_remove_error_value(const float tan_l[3],
@@ -106,27 +103,12 @@ static void knot_remove_error_recalculate(
       k->prev->tan[1], k->next->tan[0], points_offset, points_offset_len, handles);
 
   if (cost_sq < error_sq_max) {
-    Removal *r;
-    if (k->heap_node) {
-      r = static_cast<Removal *>(BLI_heap_node_ptr(k->heap_node));
-    }
-    else {
-      r = MEM_new_uninitialized<Removal>(__func__);
-      r->knot_index = k->knot_index;
-    }
-
-    copy_v2_v2(r->handles, handles);
-
-    BLI_heap_insert_or_update(heap, &k->heap_node, cost_sq, r);
+    copy_v2_v2(k->removal_handles, handles);
+    BLI_heap_insert_or_update(heap, &k->heap_node, cost_sq, k);
   }
   else {
     if (k->heap_node) {
-      Removal *r;
-      r = static_cast<Removal *>(BLI_heap_node_ptr(k->heap_node));
       BLI_heap_remove(heap, k->heap_node);
-
-      MEM_delete(r);
-
       k->heap_node = nullptr;
     }
   }
@@ -150,16 +132,10 @@ static void curve_decimate(const float (*points)[3],
   uint knots_len_remaining = knots_len;
 
   while ((knots_len_remaining > error_target_len) && (BLI_heap_is_empty(heap) == false)) {
-    Knot *k;
-
-    {
-      Removal *r = static_cast<Removal *>(BLI_heap_pop_min(heap));
-      k = &knots[r->knot_index];
-      k->heap_node = nullptr;
-      k->prev->handles[1] = r->handles[0];
-      k->next->handles[0] = r->handles[1];
-      MEM_delete(r);
-    }
+    Knot *k = static_cast<Knot *>(BLI_heap_pop_min(heap));
+    k->heap_node = nullptr;
+    k->prev->handles[1] = k->removal_handles[0];
+    k->next->handles[0] = k->removal_handles[1];
 
     Knot *k_prev = k->prev;
     Knot *k_next = k->next;
@@ -183,15 +159,15 @@ static void curve_decimate(const float (*points)[3],
     knots_len_remaining -= 1;
   }
 
-  BLI_heap_free(heap, MEM_delete_void);
+  BLI_heap_free(heap, nullptr);
 }
 
 uint BKE_curve_decimate_bezt_array(BezTriple *bezt_array,
                                    const uint bezt_array_len,
                                    const uint resolu,
                                    const bool is_cyclic,
-                                   const char flag_test,
-                                   const char flag_set,
+                                   const eBezTriple_Flag flag_test,
+                                   const eBezTriple_Flag flag_set,
                                    const float error_sq_max,
                                    const uint error_target_len)
 {
@@ -278,7 +254,7 @@ uint BKE_curve_decimate_bezt_array(BezTriple *bezt_array,
       knots_len_decimated--;
     }
     else {
-      bezt_array[i].f2 &= char(~flag_set);
+      bezt_array[i].f2 &= ~flag_set;
       if (is_cyclic || i != 0) {
         uint i_prev = (i != 0) ? i - 1 : bezt_array_last;
         if (knots[i_prev].is_removed) {
@@ -311,13 +287,13 @@ void BKE_curve_decimate_nurb(Nurb *nu,
                              const float error_sq_max,
                              const uint error_target_len)
 {
-  const char flag_test = BEZT_FLAG_TEMP_TAG;
+  constexpr eBezTriple_Flag flag_test = BEZT_FLAG_TEMP_TAG;
 
   const uint pntsu_dst = BKE_curve_decimate_bezt_array(nu->bezt,
                                                        uint(nu->pntsu),
                                                        resolu,
                                                        (nu->flagu & CU_NURB_CYCLIC) != 0,
-                                                       SELECT,
+                                                       BEZT_FLAG_SELECT,
                                                        flag_test,
                                                        error_sq_max,
                                                        error_target_len);

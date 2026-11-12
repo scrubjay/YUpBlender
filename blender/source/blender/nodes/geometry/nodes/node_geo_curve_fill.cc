@@ -51,7 +51,7 @@ static void node_declare(NodeDeclarationBuilder &b)
       .description(
           "Curves to fill. All curves are treated as cyclic and projected to the XY plane");
   b.add_input<decl::Int>("Group ID"_ustr)
-      .field_on_all()
+      .evaluated_geometry_field()
       .hide_value()
       .description(
           "An index used to group curves together. Filling is done separately for each group");
@@ -64,7 +64,7 @@ static void node_declare(NodeDeclarationBuilder &b)
       .default_value(GEO_NODE_CURVE_FILL_RULE_EVEN_ODD)
       .optional_label()
       .description("Rule used to determine which regions are inside or outside");
-  b.add_output<decl::Geometry>("Mesh"_ustr).propagate_all_instance_attributes();
+  b.add_output<decl::Geometry>("Mesh"_ustr).propagate_all_geometry();
 }
 
 static void node_init(bNodeTree * /*tree*/, bNode *node)
@@ -74,12 +74,11 @@ static void node_init(bNodeTree * /*tree*/, bNode *node)
 }
 
 static void fill_curve_vert_indices(const OffsetIndices<int> offsets,
-                                    MutableSpan<Vector<int>> faces)
+                                    MutableSpan<int> face_vert_indices)
 {
-  threading::parallel_for(faces.index_range(), 1024, [&](const IndexRange range) {
+  threading::parallel_for(offsets.index_range(), 1024, [&](const IndexRange range) {
     for (const int i : range) {
-      faces[i].resize(offsets[i].size());
-      array_utils::fill_index_range<int>(faces[i], offsets[i].start());
+      array_utils::fill_index_range<int>(face_vert_indices.slice(offsets[i]), offsets[i].start());
     }
   });
 }
@@ -97,14 +96,14 @@ static meshintersect::CDT_result<double> do_cdt(const bke::CurvesGeometry &curve
     }
   });
 
-  Array<Vector<int>> faces(curves.curves_num());
-  fill_curve_vert_indices(points_by_curve, faces);
+  Array<int> face_vert_indices(positions.size());
+  fill_curve_vert_indices(points_by_curve, face_vert_indices);
 
   meshintersect::CDT_input<double> input;
-  input.need_ids = false;
-  input.vert = std::move(positions_2d);
-  input.face = std::move(faces);
-
+  input.vert = positions_2d;
+  input.face_offsets = points_by_curve;
+  input.face_vert_indices = face_vert_indices;
+  input.needed_ids = CDT_NO_ORIG_IDS;
   return delaunay_2d_calc(input, output_type);
 }
 
@@ -132,13 +131,14 @@ static meshintersect::CDT_result<double> do_cdt_with_mask(const bke::CurvesGeome
       },
       exec_mode::grain_size(1024));
 
-  Array<Vector<int>> faces(points_by_curve_masked.size());
-  fill_curve_vert_indices(points_by_curve_masked, faces);
+  Array<int> face_vert_indices(positions_2d.size());
+  fill_curve_vert_indices(points_by_curve_masked, face_vert_indices);
 
   meshintersect::CDT_input<double> input;
-  input.need_ids = false;
-  input.vert = std::move(positions_2d);
-  input.face = std::move(faces);
+  input.vert = positions_2d;
+  input.face_offsets = points_by_curve_masked;
+  input.face_vert_indices = face_vert_indices;
+  input.needed_ids = CDT_NO_ORIG_IDS;
 
   return delaunay_2d_calc(input, output_type);
 }
@@ -158,10 +158,8 @@ static Array<meshintersect::CDT_result<double>> do_group_aware_cdt(
     return {do_cdt(curves, output_type)};
   }
 
-  VectorSet<int> group_indexing;
   IndexMaskMemory mask_memory;
-  const Vector<IndexMask> group_masks = IndexMask::from_group_ids(
-      curve_group_ids, mask_memory, group_indexing);
+  const Vector<IndexMask> group_masks = IndexMask::from_group_ids(curve_group_ids, mask_memory);
   const int groups_num = group_masks.size();
 
   Array<meshintersect::CDT_result<double>> cdt_results(groups_num);
@@ -241,8 +239,7 @@ static Mesh *cdts_to_mesh(const Span<meshintersect::CDT_result<double>> results)
 
       MutableSpan<int2> edges = all_edges.slice(edges_range);
       for (const int i : result.edge.index_range()) {
-        edges[i] = int2(result.edge[i].first + verts_range.start(),
-                        result.edge[i].second + verts_range.start());
+        edges[i] = result.edge[i] + int(verts_range.start());
       }
 
       MutableSpan<int> face_offsets = all_face_offsets.slice(faces_range);

@@ -16,6 +16,7 @@ from ...io.exp.user_extensions import export_user_extensions
 from ..com import json_util
 from . import gather as gltf2_blender_gather
 from .exporter import GlTF2Exporter
+from .cache import clear_all_caches
 
 
 def save(context, export_settings):
@@ -34,12 +35,15 @@ def save(context, export_settings):
     for callback in pre_export_callbacks:
         callback(export_settings)
 
-    json, buffer = __export(export_settings)
+    try:
+        json, buffer = __export(export_settings)
 
-    post_export_callbacks = export_settings["post_export_callbacks"]
-    for callback in post_export_callbacks:
-        callback(export_settings)
-    __write_file(json, buffer, export_settings)
+        post_export_callbacks = export_settings["post_export_callbacks"]
+        for callback in post_export_callbacks:
+            callback(export_settings)
+        __write_file(json, buffer, export_settings)
+    finally:
+        clear_all_caches()
 
     end_time = time.time()
     __notify_end(context, end_time - start_time, export_settings)
@@ -132,7 +136,7 @@ def __check_iridescence(json, export_settings):
         factor_animated = False
         if 'KHR_materials_iridescence' in export_settings['gltf_animated_extensions'].keys() and \
                 'iridescenceFactor' in export_settings['gltf_animated_extensions']['KHR_materials_iridescence']:
-            # We need to chec for this specific material, as it seems that some material can have animated factor
+            # We need to check for this specific material, as it seems that some material can have animated factor
             for anim in json['animations']:
                 for channel in anim['channels']:
                     if not channel['target']['path'] == "pointer":
@@ -150,7 +154,7 @@ def __check_iridescence(json, export_settings):
         thickness_animated = False
         if 'KHR_materials_iridescence' in export_settings['gltf_animated_extensions'].keys(
         ) and 'iridescenceThicknessMaximum' in export_settings['gltf_animated_extensions']['KHR_materials_iridescence']:
-            # We need to chec for this specific material, as it seems that some material can have animated thickness
+            # We need to check for this specific material, as it seems that some material can have animated thickness
             for anim in json['animations']:
                 for channel in anim['channels']:
                     if not channel['target']['path'] == "pointer":
@@ -185,7 +189,7 @@ def __check_iridescence(json, export_settings):
                         animation_pointer_deleted = True
                     else:
                         channels_to_keep.append(channel)
-                        samplers_to_keep.append(anim['samplers'][channel_idx])
+                        samplers_to_keep.append(anim['samplers'][channel['sampler']])
                 anim['channels'] = channels_to_keep
                 anim['samplers'] = samplers_to_keep
             # If no more channel in this animation, we can remove the entire animation
@@ -394,6 +398,9 @@ def __gather_gltf(exporter, export_settings):
         gltf2_io_draco_compression_extension.encode_scene_primitives(scenes, export_settings)
         exporter.add_draco_extension()
 
+    if export_settings['gltf_meshopt_compression']:
+        exporter.add_meshopt_extension()
+
     export_user_extensions('gather_gltf_hook', export_settings, active_scene_idx, scenes, animations)
 
     for idx, scene in enumerate(scenes):
@@ -525,7 +532,6 @@ def __should_include_json_value(key, value, export_settings):
             "KHR_materials_ior",
             "KHR_materials_iridescence",
             "KHR_materials_sheen",
-            "KHR_materials_specular",
             "KHR_materials_transmission",
             "KHR_materials_volume",
             "KHR_lights_punctual",

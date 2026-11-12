@@ -29,16 +29,18 @@ static void node_declare(NodeDeclarationBuilder &b)
       .description("Geometry to sample a value on");
   if (node != nullptr) {
     const eCustomDataType data_type = eCustomDataType(node_storage(*node).data_type);
-    b.add_input(data_type, "Value"_ustr).hide_value().field_on_all();
+    b.add_input(data_type, "Value"_ustr).hide_value().evaluated_geometry_field();
   }
-  b.add_input<decl::Int>("Index"_ustr)
-      .supports_field()
-      .description("Which element to retrieve a value from on the geometry")
-      .structure_type(StructureType::Dynamic);
+  auto &index = b.add_input<decl::Int>("Index"_ustr)
+                    .description("Which element to retrieve a value from on the geometry")
+                    .structure_type(StructureType::Dynamic);
 
   if (node != nullptr) {
     const eCustomDataType data_type = eCustomDataType(node_storage(*node).data_type);
-    b.add_output(data_type, "Value"_ustr).dependent_field({2});
+    std::array<int, 1> dynamic_inputs = {index.index()};
+    b.add_output(data_type, "Value"_ustr)
+        .inferred_structure_type(dynamic_inputs)
+        .propagate_references(dynamic_inputs);
   }
 }
 
@@ -64,7 +66,7 @@ static void node_gather_link_searches(GatherLinkSearchOpParams &params)
   search_link_ops_for_declarations(params, declaration.inputs);
 
   const std::optional<eCustomDataType> type = bke::socket_type_to_custom_data_type(
-      eNodeSocketDatatype(params.other_socket().type));
+      params.other_socket().type);
   if (type && *type != CD_PROP_STRING) {
     /* The input and output sockets have the same name. */
     params.add_item(IFACE_("Value"), [type](LinkSearchOpParams &params) {
@@ -101,8 +103,9 @@ static void node_geo_exec(GeoNodeExecParams params)
       index = std::clamp(index, 0, domain_size - 1);
     }
     const eNodeSocketDatatype socket_type = params.node().output_socket(0).typeinfo->type;
+    const CPPType &output_cpp_type = *bke::socket_type_to_geo_nodes_base_cpp_type(socket_type);
     SocketValueVariant output_value;
-    void *buffer = output_value.allocate_single(socket_type);
+    void *buffer = output_value.allocate_single(output_cpp_type);
     if (index >= 0 && index < domain_size) {
       const IndexMask mask = IndexRange(index, 1);
       const bke::GeometryFieldContext geometry_context(*component, domain);
@@ -128,8 +131,8 @@ static void node_geo_exec(GeoNodeExecParams params)
         [](int value, int min, int max) { return std::clamp(value, min, max); },
         mf::build::exec_presets::SomeSpanOrSingle<0>());
     const int domain_size = component->attribute_domain_size(domain);
-    bke::SocketValueVariant min_value = bke::SocketValueVariant::From(0);
-    bke::SocketValueVariant max_value = bke::SocketValueVariant::From(domain_size - 1);
+    bke::SocketValueVariant min_value = bke::SocketValueVariant::from(0);
+    bke::SocketValueVariant max_value = bke::SocketValueVariant::from(domain_size - 1);
     if (!execute_multi_function_on_value_variant(
             clamp_fn,
             {&index_value_variant_copy, &min_value, &max_value},

@@ -12,22 +12,22 @@
 #include <cmath>
 #include <cstdio>
 
-#include "BLI_assert.h"
-#include "BLI_fileops.h"
+#include "BLI_assert.hh"
+#include "BLI_fileops.hh"
 #include "BLI_kdtree.hh"
-#include "BLI_listbase.h"
-#include "BLI_math_color.h"
-#include "BLI_math_geom.h"
-#include "BLI_math_matrix.h"
-#include "BLI_math_vector.h"
+#include "BLI_listbase.hh"
+#include "BLI_math_color_c.hh"
+#include "BLI_math_geom_c.hh"
+#include "BLI_math_matrix_c.hh"
+#include "BLI_math_vector_c.hh"
 #include "BLI_mutex.hh"
 #include "BLI_path_utils.hh"
-#include "BLI_string.h"
-#include "BLI_string_utf8.h"
+#include "BLI_string.hh"
+#include "BLI_string_utf8.hh"
 #include "BLI_string_utils.hh"
-#include "BLI_task.h"
-#include "BLI_threads.h"
-#include "BLI_utildefines.h"
+#include "BLI_task_c.hh"
+#include "BLI_threads.hh"
+#include "BLI_utildefines.hh"
 
 #include "BLT_translation.hh"
 
@@ -368,7 +368,7 @@ bool dynamicPaint_outputLayerExists(DynamicPaintSurface *surface, Object *ob, in
 static bool surface_duplicateOutputExists(DynamicPaintSurface *t_surface, const StringRefNull name)
 {
   DynamicPaintSurface *surface = static_cast<DynamicPaintSurface *>(
-      t_surface->canvas->surfaces.first);
+      t_surface->canvas->surfaces.first());
 
   for (; surface; surface = surface->next) {
     if (surface != t_surface && surface->type == t_surface->type &&
@@ -404,7 +404,7 @@ static void surface_setUniqueOutputName(DynamicPaintSurface *surface, char *base
 static bool surface_duplicateNameExists(DynamicPaintSurface *t_surface, const StringRefNull name)
 {
   DynamicPaintSurface *surface = static_cast<DynamicPaintSurface *>(
-      t_surface->canvas->surfaces.first);
+      t_surface->canvas->surfaces.first());
 
   for (; surface; surface = surface->next) {
     if (surface != t_surface && STREQ(name.c_str(), surface->name)) {
@@ -632,7 +632,8 @@ static void boundInsert(Bounds3D *b, const float point[3])
 static float getSurfaceDimension(PaintSurfaceData *sData)
 {
   Bounds3D *mb = &sData->bData->mesh_bounds;
-  return max_fff((mb->max[0] - mb->min[0]), (mb->max[1] - mb->min[1]), (mb->max[2] - mb->min[2]));
+  return std::max(
+      {(mb->max[0] - mb->min[0]), (mb->max[1] - mb->min[1]), (mb->max[2] - mb->min[2])});
 }
 
 static void freeGrid(PaintSurfaceData *data)
@@ -778,7 +779,7 @@ static void surfaceGenerateGrid(DynamicPaintSurface *surface)
     sub_v3_v3v3(dim, grid->grid_bounds.max, grid->grid_bounds.min);
     copy_v3_v3(td, dim);
     copy_v3_v3(bData->dim, dim);
-    min_dim = max_fff(td[0], td[1], td[2]) / 1000.0f;
+    min_dim = std::max({td[0], td[1], td[2]}) / 1000.0f;
 
     /* deactivate zero axes */
     for (i = 0; i < 3; i++) {
@@ -788,7 +789,7 @@ static void surfaceGenerateGrid(DynamicPaintSurface *surface)
       }
     }
 
-    if (axis == 0 || max_fff(td[0], td[1], td[2]) < 0.0001f) {
+    if (axis == 0 || std::max({td[0], td[1], td[2]}) < 0.0001f) {
       MEM_delete(bData->grid);
       bData->grid = nullptr;
       return;
@@ -1025,7 +1026,7 @@ void dynamicPaint_freeCanvas(DynamicPaintModifierData *pmd)
 {
   if (pmd->canvas) {
     /* Free surface data */
-    DynamicPaintSurface *surface = static_cast<DynamicPaintSurface *>(pmd->canvas->surfaces.first);
+    DynamicPaintSurface *surface = pmd->canvas->surfaces.first();
     DynamicPaintSurface *next_surface = nullptr;
 
     while (surface) {
@@ -1072,7 +1073,7 @@ DynamicPaintSurface *dynamicPaint_createNewSurface(DynamicPaintCanvasSettings *c
   surface->flags = MOD_DPAINT_ANTIALIAS | MOD_DPAINT_MULALPHA | MOD_DPAINT_DRY_LOG |
                    MOD_DPAINT_DISSOLVE_LOG | MOD_DPAINT_ACTIVE | MOD_DPAINT_OUT1 |
                    MOD_DPAINT_USE_DRYING;
-  surface->effect = 0;
+  surface->effect = eDynamicPaint_EffectFlags{};
   surface->effect_ui = 1;
 
   surface->diss_speed = 250;
@@ -1240,17 +1241,14 @@ void dynamicPaint_Modifier_copy(const DynamicPaintModifierData *pmd,
     DynamicPaintSurface *surface;
     tpmd->canvas->pmd = tpmd;
     /* free default surface */
-    if (tpmd->canvas->surfaces.first) {
-      dynamicPaint_freeSurface(tpmd,
-                               static_cast<DynamicPaintSurface *>(tpmd->canvas->surfaces.first));
+    if (tpmd->canvas->surfaces.first()) {
+      dynamicPaint_freeSurface(tpmd, tpmd->canvas->surfaces.first());
     }
 
     tpmd->canvas->active_sur = pmd->canvas->active_sur;
 
     /* copy existing surfaces */
-    for (surface = static_cast<DynamicPaintSurface *>(pmd->canvas->surfaces.first); surface;
-         surface = surface->next)
-    {
+    for (surface = pmd->canvas->surfaces.first(); surface; surface = surface->next) {
       DynamicPaintSurface *t_surface = dynamicPaint_createNewSurface(tpmd->canvas, nullptr);
       if (flag & LIB_ID_COPY_SET_COPIED_ON_WRITE) {
         /* TODO(sergey): Consider passing some tips to the surface
@@ -1939,9 +1937,7 @@ static Mesh *dynamicPaint_Modifier_apply(DynamicPaintModifierData *pmd, Object *
     DynamicPaintSurface *surface;
 
     /* loop through surfaces */
-    for (surface = static_cast<DynamicPaintSurface *>(pmd->canvas->surfaces.first); surface;
-         surface = surface->next)
-    {
+    for (surface = pmd->canvas->surfaces.first(); surface; surface = surface->next) {
       PaintSurfaceData *sData = surface->data;
 
       if (surface->format != MOD_DPAINT_SURFACE_F_IMAGESEQ && sData) {
@@ -2112,7 +2108,7 @@ static void dynamicPaint_frameUpdate(
 {
   if (pmd->canvas) {
     DynamicPaintCanvasSettings *canvas = pmd->canvas;
-    DynamicPaintSurface *surface = static_cast<DynamicPaintSurface *>(canvas->surfaces.first);
+    DynamicPaintSurface *surface = canvas->surfaces.first();
 
     /* update evaluated-mesh copy */
     canvas_copyMesh(canvas, mesh);
@@ -2484,7 +2480,7 @@ static int dynamic_paint_find_neighbor_pixel(const DynamicPaintCreateUVSurfaceDa
 {
   /* NOTE: Current method only uses face edges to detect neighboring pixels.
    *       -> It doesn't always lead to the optimum pixel but is accurate enough
-   *          and faster/simpler than including possible face tip point links)
+   *          and faster/simpler than including possible face tip point links.
    */
 
   /* shift position by given n_index */
@@ -3341,7 +3337,8 @@ void dynamicPaint_outputSurfaceImage(DynamicPaintSurface *surface,
   BLI_file_ensure_parent_dir_exists(output_file);
 
   /* Init image buffer */
-  ibuf = IMB_allocImBuf(surface->image_resolution, surface->image_resolution, 32, IB_float_data);
+  ibuf = IMB_allocImBuf(
+      surface->image_resolution, surface->image_resolution, ImBufFlags::FloatData);
   if (ibuf == nullptr) {
     setError(surface->canvas, N_("Image save failed: not enough free memory"));
     return;
@@ -3436,78 +3433,13 @@ void dynamicPaint_outputSurfaceImage(DynamicPaintSurface *surface,
   }
 
   /* Save image */
-  IMB_save_image(ibuf, output_file, IB_float_data);
+  IMB_save_image(ibuf, output_file, ImBufFlags::FloatData);
   IMB_freeImBuf(ibuf);
 }
 
 /** \} */
 
 /***************************** Ray / Nearest Point Utils ******************************/
-
-/* A modified callback to bvh tree ray-cast.
- * The tree must have been built using bvhtree_from_mesh_corner_tri.
- * userdata must be a BVHMeshCallbackUserdata built from the same mesh as the tree.
- *
- * To optimize brush detection speed this doesn't calculate hit coordinates or normal.
- */
-static void mesh_tris_spherecast_dp(void *userdata,
-                                    int index,
-                                    const BVHTreeRay *ray,
-                                    BVHTreeRayHit *hit)
-{
-  const bke::BVHTreeFromMesh *data = static_cast<bke::BVHTreeFromMesh *>(userdata);
-  const Span<float3> positions = data->vert_positions;
-  const int3 *corner_tris = data->corner_tris.data();
-  const int *corner_verts = data->corner_verts.data();
-
-  const float *t0, *t1, *t2;
-  float dist;
-
-  t0 = positions[corner_verts[corner_tris[index][0]]];
-  t1 = positions[corner_verts[corner_tris[index][1]]];
-  t2 = positions[corner_verts[corner_tris[index][2]]];
-
-  dist = bke::bvhtree_ray_tri_intersection(ray, hit->dist, t0, t1, t2);
-
-  if (dist >= 0 && dist < hit->dist) {
-    hit->index = index;
-    hit->dist = dist;
-    hit->no[0] = 0.0f;
-  }
-}
-
-/* A modified callback to bvh tree nearest point.
- * The tree must have been built using bvhtree_from_mesh_corner_tri.
- * userdata must be a BVHMeshCallbackUserdata built from the same mesh as the tree.
- *
- * To optimize brush detection speed this doesn't calculate hit normal.
- */
-static void mesh_tris_nearest_point_dp(void *userdata,
-                                       int index,
-                                       const float co[3],
-                                       BVHTreeNearest *nearest)
-{
-  const bke::BVHTreeFromMesh *data = static_cast<bke::BVHTreeFromMesh *>(userdata);
-  const Span<float3> positions = data->vert_positions;
-  const int3 *corner_tris = data->corner_tris.data();
-  const int *corner_verts = data->corner_verts.data();
-  float nearest_tmp[3], dist_sq;
-
-  const float *t0, *t1, *t2;
-  t0 = positions[corner_verts[corner_tris[index][0]]];
-  t1 = positions[corner_verts[corner_tris[index][1]]];
-  t2 = positions[corner_verts[corner_tris[index][2]]];
-
-  closest_on_tri_to_point_v3(nearest_tmp, co, t0, t1, t2);
-  dist_sq = len_squared_v3v3(co, nearest_tmp);
-
-  if (dist_sq < nearest->dist_sq) {
-    nearest->index = index;
-    nearest->dist_sq = dist_sq;
-    copy_v3_v3(nearest->co, nearest_tmp);
-    nearest->no[0] = 0.0f;
-  }
-}
 
 /***************************** Brush Painting Calls ******************************/
 
@@ -3517,7 +3449,7 @@ static void mesh_tris_nearest_point_dp(void *userdata,
  * \param surface: Canvas surface
  * \param index: Surface point index
  * \param paintFlags: paint object flags
- * \param paintColor,paintAlpha,paintWetness: To be mixed paint values
+ * \param paintColor, paintAlpha, paintWetness: To be mixed paint values
  * \param timescale: Value used to adjust time dependent
  * operations when using substeps
  */
@@ -3989,7 +3921,7 @@ static void dynamic_paint_paint_mesh_cell_point_cb_ex(void *__restrict userdata,
   const float *avg_brushNor = data->avg_brushNor;
   const Vec3f *brushVelocity = data->brushVelocity;
 
-  bke::BVHTreeFromMesh *treeData = static_cast<bke::BVHTreeFromMesh *>(data->treeData);
+  const auto &treeData = *static_cast<bke::bvh::Tree *>(data->treeData);
 
   const int index = grid->t_index[grid->s_pos[c_index] + id];
   const int samples = bData->s_num[index];
@@ -4009,11 +3941,9 @@ static void dynamic_paint_paint_mesh_cell_point_cb_ex(void *__restrict userdata,
 
   /* Super-sampling */
   for (ss = 0; ss < samples; ss++) {
-    float ray_start[3], ray_dir[3];
+    float3 ray_start, ray_dir;
     float sample_factor = 0.0f;
     float sampleStrength = 0.0f;
-    BVHTreeRayHit hit;
-    BVHTreeNearest nearest;
     short hit_found = 0;
 
     /* volume sample */
@@ -4043,45 +3973,25 @@ static void dynamic_paint_paint_mesh_cell_point_cb_ex(void *__restrict userdata,
     /* a simple hack to minimize chance of ray leaks at identical ray <-> edge locations */
     add_v3_fl(ray_start, 0.001f);
 
-    hit.index = -1;
-    hit.dist = BVH_RAYCAST_DIST_MAX;
-    nearest.index = -1;
-    nearest.dist_sq = brush_radius * brush_radius; /* find_nearest uses squared distance */
-
     /* Check volume collision */
     if (ELEM(brush->collision, MOD_DPAINT_COL_VOLUME, MOD_DPAINT_COL_VOLDIST)) {
-      BLI_bvhtree_ray_cast(
-          treeData->tree, ray_start, ray_dir, 0.0f, &hit, mesh_tris_spherecast_dp, treeData);
-      if (hit.index != -1) {
+      const bke::bvh::Ray ray(ray_start, ray_dir);
+      if (const std::optional<bke::bvh::RayHit> hit = treeData.ray_intersect(ray)) {
         /* We hit a triangle, now check if collision point normal is facing the point */
-
-        /* For optimization sake, hit point normal isn't calculated in ray cast loop */
-        const int vtri[3] = {
-            corner_verts[corner_tris[hit.index][0]],
-            corner_verts[corner_tris[hit.index][1]],
-            corner_verts[corner_tris[hit.index][2]],
-        };
-        float dot;
-
-        normal_tri_v3(hit.no, positions[vtri[0]], positions[vtri[1]], positions[vtri[2]]);
-        dot = dot_v3v3(ray_dir, hit.no);
+        float dot = dot_v3v3(ray_dir, math::normalize(hit->normal));
 
         /* If ray and hit face normal are facing same direction
          * hit point is inside a closed mesh. */
         if (dot >= 0.0f) {
-          const float dist = hit.dist;
-          const int f_index = hit.index;
+          const float dist = hit->distance;
+          const int f_index = hit->index;
 
           /* Also cast a ray in opposite direction to make sure
            * point is at least surrounded by two brush faces */
           negate_v3(ray_dir);
-          hit.index = -1;
-          hit.dist = BVH_RAYCAST_DIST_MAX;
-
-          BLI_bvhtree_ray_cast(
-              treeData->tree, ray_start, ray_dir, 0.0f, &hit, mesh_tris_spherecast_dp, treeData);
-
-          if (hit.index != -1) {
+          const bke::bvh::Ray other_ray(ray_start, ray_dir);
+          if (const std::optional<bke::bvh::RayHit> hit_other = treeData.ray_intersect(other_ray))
+          {
             /* Add factor on super-sample filter. */
             volume_factor = 1.0f;
             hit_found = HIT_VOLUME;
@@ -4089,7 +3999,7 @@ static void dynamic_paint_paint_mesh_cell_point_cb_ex(void *__restrict userdata,
             /* Mark hit info */
 
             /* Calculate final hit coordinates */
-            madd_v3_v3v3fl(hitCoord, ray_start, ray_dir, hit.dist);
+            madd_v3_v3v3fl(hitCoord, ray_start, ray_dir, hit_other->distance);
 
             depth += dist * sample_factor;
             hitTri = f_index;
@@ -4113,12 +4023,12 @@ static void dynamic_paint_paint_mesh_cell_point_cb_ex(void *__restrict userdata,
 
       /* If pure distance proximity, find the nearest point on the mesh */
       if (!(brush->flags & MOD_DPAINT_PROX_PROJECT)) {
-        BLI_bvhtree_find_nearest(
-            treeData->tree, ray_start, &nearest, mesh_tris_nearest_point_dp, treeData);
-        if (nearest.index != -1) {
-          proxDist = sqrtf(nearest.dist_sq);
-          copy_v3_v3(hitCo, nearest.co);
-          tri = nearest.index;
+        if (const std::optional<bke::bvh::ClosestPointResult> nearest = treeData.closest_point(
+                ray_start, brush_radius))
+        {
+          proxDist = math::distance(nearest->position, ray_start);
+          copy_v3_v3(hitCo, nearest->position);
+          tri = nearest->index;
         }
       }
       else { /* else cast a ray in defined projection direction */
@@ -4134,19 +4044,16 @@ static void dynamic_paint_paint_mesh_cell_point_cb_ex(void *__restrict userdata,
         else { /* MOD_DPAINT_RAY_ZPLUS */
           proj_ray[2] = 1.0f;
         }
-        hit.index = -1;
-        hit.dist = brush_radius;
 
         /* Do a face normal directional ray-cast, and use that distance. */
-        BLI_bvhtree_ray_cast(
-            treeData->tree, ray_start, proj_ray, 0.0f, &hit, mesh_tris_spherecast_dp, treeData);
-        if (hit.index != -1) {
-          proxDist = hit.dist;
+        const bke::bvh::Ray ray(ray_start, proj_ray, brush_radius);
+        if (const std::optional<bke::bvh::RayHit> hit = treeData.ray_intersect(ray)) {
+          proxDist = hit->distance;
 
           /* Calculate final hit coordinates */
-          madd_v3_v3v3fl(hitCo, ray_start, proj_ray, hit.dist);
+          madd_v3_v3v3fl(hitCo, ray_start, proj_ray, hit->distance);
 
-          tri = hit.index;
+          tri = hit->index;
         }
       }
 
@@ -4365,7 +4272,7 @@ static bool dynamicPaint_paintMesh(Depsgraph *depsgraph,
     if (brush->flags & MOD_DPAINT_PROX_PROJECT && brush->collision != MOD_DPAINT_COL_VOLUME) {
       mul_v3_fl(avg_brushNor, 1.0f / float(numOfVerts));
       /* instead of null vector use positive z */
-      if (UNLIKELY(normalize_v3(avg_brushNor) == 0.0f)) {
+      if (normalize_v3(avg_brushNor) == 0.0f) [[unlikely]] {
         avg_brushNor[2] = 1.0f;
       }
     }
@@ -4373,8 +4280,9 @@ static bool dynamicPaint_paintMesh(Depsgraph *depsgraph,
     /* check bounding box collision */
     if (grid && meshBrush_boundsIntersect(&grid->grid_bounds, &mesh_bb, brush, brush_radius)) {
       /* Build a bvh tree from transformed vertices */
-      bke::BVHTreeFromMesh treeData = mesh->bvh_corner_tris();
-      if (treeData.tree != nullptr) {
+      if (mesh->faces_num != 0) {
+        const bke::bvh::Tree &tree = mesh->bvh_tris();
+
         int c_index;
         int total_cells = grid->dim[0] * grid->dim[1] * grid->dim[2];
 
@@ -4402,7 +4310,7 @@ static bool dynamicPaint_paintMesh(Depsgraph *depsgraph,
           data.brush_radius = brush_radius;
           data.avg_brushNor = avg_brushNor;
           data.brushVelocity = brushVelocity;
-          data.treeData = &treeData;
+          data.treeData = &const_cast<bke::bvh::Tree &>(tree);
 
           TaskParallelSettings settings;
           BLI_parallel_range_settings_defaults(&settings);
@@ -4446,7 +4354,7 @@ static void dynamic_paint_paint_particle_cell_point_cb_ex(
   const float timescale = data->timescale;
   const int c_index = data->c_index;
 
-  KDTree_3d *tree = static_cast<KDTree_3d *>(data->treeData);
+  KDTree<float3> *tree = static_cast<KDTree<float3> *>(data->treeData);
 
   const float solidradius = data->solidradius;
   const float smooth = brush->particle_smooth * surface->radius_scale;
@@ -4464,11 +4372,11 @@ static void dynamic_paint_paint_particle_cell_point_cb_ex(
    * It's enough to just find the nearest one.
    */
   {
-    KDTreeNearest_3d nearest;
+    KDTreeNearest<float3> nearest;
     float smooth_range, part_solidradius;
 
     /* Find nearest particle and get distance to it */
-    kdtree_3d_find_nearest(tree, bData->realCoord[bData->s_pos[index]].v, &nearest);
+    kdtree_find_nearest<float3>(tree, bData->realCoord[bData->s_pos[index]].v, &nearest);
     /* if outside maximum range, no other particle can influence either */
     if (nearest.dist > range) {
       return;
@@ -4502,7 +4410,7 @@ static void dynamic_paint_paint_particle_cell_point_cb_ex(
      * If we use per particle radius, we have to sample all particles
      * within max radius range
      */
-    KDTreeNearest_3d *nearest;
+    KDTreeNearest<float3> *nearest;
 
     float smooth_range = smooth * (1.0f - strength), dist;
     /* calculate max range that can have particles with higher influence than the nearest one */
@@ -4510,7 +4418,7 @@ static void dynamic_paint_paint_particle_cell_point_cb_ex(
     /* Make gcc happy! */
     dist = max_range;
 
-    const int particles = kdtree_3d_range_search(
+    const int particles = kdtree_range_search<float3>(
         tree, bData->realCoord[bData->s_pos[index]].v, &nearest, max_range);
 
     /* Find particle that produces highest influence */
@@ -4614,7 +4522,7 @@ static bool dynamicPaint_paintParticles(DynamicPaintSurface *surface,
   PaintBakeData *bData = sData->bData;
   DynamicPaintVolumeGrid *grid = bData->grid;
 
-  KDTree_3d *tree;
+  KDTree<float3> *tree;
   int particlesAdded = 0;
   int invalidParticles = 0;
   int p = 0;
@@ -4635,7 +4543,7 @@ static bool dynamicPaint_paintParticles(DynamicPaintSurface *surface,
   /*
    * Build a KD-tree to optimize distance search
    */
-  tree = kdtree_3d_new(psys->totpart);
+  tree = kdtree_new<float3>(psys->totpart);
 
   /* loop through particles and insert valid ones to the tree */
   p = 0;
@@ -4659,7 +4567,7 @@ static bool dynamicPaint_paintParticles(DynamicPaintSurface *surface,
       continue;
     }
 
-    kdtree_3d_insert(tree, p, pa->state.co);
+    kdtree_insert<float3>(tree, p, pa->state.co);
 
     /* calc particle system bounds */
     boundInsert(&part_bb, pa->state.co);
@@ -4672,7 +4580,7 @@ static bool dynamicPaint_paintParticles(DynamicPaintSurface *surface,
 
   /* If no suitable particles were found, exit */
   if (particlesAdded < 1) {
-    kdtree_3d_free(tree);
+    kdtree_free<float3>(tree);
     return true;
   }
 
@@ -4682,7 +4590,7 @@ static bool dynamicPaint_paintParticles(DynamicPaintSurface *surface,
     int total_cells = grid->dim[0] * grid->dim[1] * grid->dim[2];
 
     /* balance tree */
-    kdtree_3d_balance(tree);
+    kdtree_balance<float3>(tree);
 
     /* loop through space partitioning grid */
     for (c_index = 0; c_index < total_cells; c_index++) {
@@ -4711,7 +4619,7 @@ static bool dynamicPaint_paintParticles(DynamicPaintSurface *surface,
                               &settings);
     }
   }
-  kdtree_3d_free(tree);
+  kdtree_free<float3>(tree);
 
   return true;
 }
@@ -5233,7 +5141,7 @@ static int dynamicPaint_prepareEffectStep(Depsgraph *depsgraph,
     shrink_speed = surface->shrink_speed;
   }
 
-  fastest_effect = max_fff(spread_speed, shrink_speed, average_force);
+  fastest_effect = std::max({spread_speed, shrink_speed, float(average_force)});
   avg_dist = bData->average_dist * double(CANVAS_REL_SIZE) / double(getSurfaceDimension(sData));
 
   steps = int(ceilf(1.5f * EFF_MOVEMENT_PER_FRAME * fastest_effect / avg_dist * timescale));
@@ -5274,7 +5182,7 @@ static void dynamic_paint_effect_spread_cb(void *__restrict userdata,
     const PaintPoint *pPoint_prev = &prevPoint[n_target[n_idx]];
     const float speed_scale = (bNeighs[n_idx].dist < eff_scale) ? 1.0f :
                                                                   eff_scale / bNeighs[n_idx].dist;
-    const float color_mix = min_fff(pPoint_prev->wetness, pPoint->wetness, 1.0f) * 0.25f *
+    const float color_mix = std::min({pPoint_prev->wetness, pPoint->wetness, 1.0f}) * 0.25f *
                             surface->color_spread_speed;
 
     /* do color mixing */

@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup fn
+ */
+
 #include "BLI_array_utils.hh"
 #include "BLI_map.hh"
 #include "BLI_multi_value_map.hh"
@@ -30,7 +34,7 @@ struct FieldTreeInfo {
    * allows traversal of fields in the opposite direction. So for every field it stores the other
    * fields that depend on it directly.
    */
-  MultiValueMap<GFieldRef, GFieldRef> field_users;
+  MultiValueMap<UniqueHash, UniqueHash> field_users;
   /**
    * The same field input may exist in the field tree as separate nodes due to the way
    * the tree is constructed. This set contains every different input only once.
@@ -44,6 +48,7 @@ struct FieldTreeInfo {
  */
 static FieldTreeInfo preprocess_field_tree(Span<GFieldRef> entry_fields)
 {
+  PRF_scope(ProfileCategory::Default);
   FieldTreeInfo field_tree_info;
 
   Stack<GFieldRef> fields_to_check;
@@ -68,7 +73,8 @@ static FieldTreeInfo preprocess_field_tree(Span<GFieldRef> entry_fields)
           }
           else if constexpr (std::is_same_v<T, GFieldRef::MultiFn>) {
             for (const GField &input_field : v.node->inputs()) {
-              field_tree_info.field_users.add(input_field, field);
+              const UniqueHash input_hash = field_tree_info.deep_hashes.lookup(input_field);
+              field_tree_info.field_users.add(input_hash, hash);
               if (handled_fields.add(input_field)) {
                 fields_to_check.push(input_field);
               }
@@ -78,8 +84,7 @@ static FieldTreeInfo preprocess_field_tree(Span<GFieldRef> entry_fields)
             /* Nothing to do. */
           }
           else {
-            /* Ensure all cases handled. */
-            static_assert(sizeof(T) == 0);
+            BLI_assert_unreachable_static_t(T);
           }
         },
         field_variant);
@@ -112,11 +117,11 @@ static Vector<GVArray> get_field_context_inputs(ResourceScope &scope,
  * \return A set that contains all fields from the field tree that depend on an input that varies
  * for different indices.
  */
-static Set<GFieldRef> find_varying_fields(const FieldTreeInfo &field_tree_info,
-                                          const Span<GVArray> field_context_inputs)
+static Set<UniqueHash> find_varying_fields(const FieldTreeInfo &field_tree_info,
+                                           const Span<GVArray> field_context_inputs)
 {
-  Set<GFieldRef> found_fields;
-  Stack<GFieldRef> fields_to_check;
+  Set<UniqueHash> found_fields;
+  Stack<UniqueHash> fields_to_check;
 
   /* The varying fields are the ones that depend on inputs that are not constant. Therefore we
    * start the tree search at the non-constant input fields and traverse through all fields that
@@ -126,20 +131,18 @@ static Set<GFieldRef> find_varying_fields(const FieldTreeInfo &field_tree_info,
     if (varray.is_single()) {
       continue;
     }
-    const GFieldRef &field = field_tree_info.deduplicated_inputs[input_i];
-    const Span<GFieldRef> users = field_tree_info.field_users.lookup(field);
-    for (const GFieldRef &field : users) {
-      if (found_fields.add(field)) {
-        fields_to_check.push(field);
+    const UniqueHash &field = field_tree_info.deduplicated_input_hashes[input_i];
+    for (const UniqueHash &user : field_tree_info.field_users.lookup(field)) {
+      if (found_fields.add(user)) {
+        fields_to_check.push(user);
       }
     }
   }
   while (!fields_to_check.is_empty()) {
-    GFieldRef field = fields_to_check.pop();
-    const Span<GFieldRef> users = field_tree_info.field_users.lookup(field);
-    for (GFieldRef field : users) {
-      if (found_fields.add(field)) {
-        fields_to_check.push(field);
+    const UniqueHash &field = fields_to_check.pop();
+    for (const UniqueHash &user : field_tree_info.field_users.lookup(field)) {
+      if (found_fields.add(user)) {
+        fields_to_check.push(user);
       }
     }
   }
@@ -154,6 +157,7 @@ static void build_multi_function_procedure_for_fields(mf::Procedure &procedure,
                                                       const FieldTreeInfo &field_tree_info,
                                                       Span<GFieldRef> output_fields)
 {
+  PRF_scope(ProfileCategory::Default);
   mf::ProcedureBuilder builder{procedure};
   /* Every input, intermediate and output field corresponds to a variable in the procedure. */
   Map<UniqueHash, mf::Variable *> variable_by_field;
@@ -222,10 +226,10 @@ static void build_multi_function_procedure_for_fields(mf::Procedure &procedure,
                   }
                   else if (interface_type == mf::ParamType::Output) {
                     const GFieldRef output_field{field_multi_fn, param_output_index};
-                    const bool output_is_ignored =
-                        field_tree_info.field_users.lookup(output_field).is_empty() &&
-                        !output_fields.contains(output_field);
-                    if (output_is_ignored) {
+                    /* NOTE: This abuses the deep hash cache as a set of the fields in the tree. At
+                     * the cost of either hashing this output field or building a separate set of
+                     * visited GFieldRefs, we wouldn't have to use the cache in this way. */
+                    if (!field_tree_info.deep_hashes.contains(output_field)) {
                       /* Ignored outputs don't need a variable. */
                       variables[param_index] = nullptr;
                     }
@@ -254,8 +258,7 @@ static void build_multi_function_procedure_for_fields(mf::Procedure &procedure,
               variable_by_field.add_new(field_hash, &new_variable);
             }
             else {
-              /* Ensure all cases handled. */
-              static_assert(sizeof(T) == 0);
+              BLI_assert_unreachable_static_t(T);
             }
           },
           field_variant);
@@ -300,6 +303,7 @@ Vector<GVArray> evaluate_fields(ResourceScope &scope,
                                 const FieldContext &context,
                                 Span<GVMutableArray> dst_varrays)
 {
+  PRF_scope(ProfileCategory::Default);
   Vector<GVArray> varrays(fields_to_evaluate.size());
   Array<bool> is_output_written_to_dst(fields_to_evaluate.size(), false);
   const int array_size = mask.min_array_size();
@@ -332,54 +336,45 @@ Vector<GVArray> evaluate_fields(ResourceScope &scope,
   Vector<GVArray> field_context_inputs = get_field_context_inputs(
       scope, mask, context, field_tree_info.deduplicated_inputs);
 
-  /* Finish fields that don't need any processing directly. */
+  Set<UniqueHash> varying_fields = find_varying_fields(field_tree_info, field_context_inputs);
+
+  /* Process fields that can output a VArray directly, and separate the rest of the fields into
+   * two categories: those that are constant and need to be evaluated only once, and those that
+   * need to be evaluated for every index. */
+  Vector<GFieldRef> varying_fields_to_evaluate;
+  Vector<int> varying_field_indices;
+  Vector<GFieldRef> constant_fields_to_evaluate;
+  Vector<int> constant_field_indices;
   for (const int out_index : fields_to_evaluate.index_range()) {
     const GFieldRef &field = fields_to_evaluate[out_index];
     const GFieldRef::Variant &field_variant = field.variant();
     std::visit(
         [&]<typename T>(const T &v) {
           if constexpr (std::is_same_v<T, GFieldRef::Input>) {
-            const UniqueHash input_hash = field_tree_info.deep_hashes.lookup(field);
-            const int input_i = field_tree_info.deduplicated_input_hashes.index_of(input_hash);
+            const UniqueHash hash = field_tree_info.deep_hashes.lookup(field);
+            const int input_i = field_tree_info.deduplicated_input_hashes.index_of(hash);
             const GVArray &varray = field_context_inputs[input_i];
             varrays[out_index] = varray;
           }
           else if constexpr (std::is_same_v<T, GFieldRef::MultiFn>) {
-            /* This always needs processing. */
+            const UniqueHash hash = field_tree_info.deep_hashes.lookup(field);
+            if (varying_fields.contains(hash)) {
+              varying_fields_to_evaluate.append(field);
+              varying_field_indices.append(out_index);
+            }
+            else {
+              constant_fields_to_evaluate.append(field);
+              constant_field_indices.append(out_index);
+            }
           }
           else if constexpr (std::is_same_v<T, GFieldRef::Value>) {
             varrays[out_index] = GVArray::from_single_ref(*v.type, mask.min_array_size(), v.value);
           }
           else {
-            /* Ensure all cases handled. */
-            static_assert(sizeof(T) == 0);
+            BLI_assert_unreachable_static_t(T);
           }
         },
         field_variant);
-  }
-
-  Set<GFieldRef> varying_fields = find_varying_fields(field_tree_info, field_context_inputs);
-
-  /* Separate fields into two categories. Those that are constant and need to be evaluated only
-   * once, and those that need to be evaluated for every index. */
-  Vector<GFieldRef> varying_fields_to_evaluate;
-  Vector<int> varying_field_indices;
-  Vector<GFieldRef> constant_fields_to_evaluate;
-  Vector<int> constant_field_indices;
-  for (const int i : fields_to_evaluate.index_range()) {
-    if (varrays[i]) {
-      /* Already done. */
-      continue;
-    }
-    GFieldRef field = fields_to_evaluate[i];
-    if (varying_fields.contains(field)) {
-      varying_fields_to_evaluate.append(field);
-      varying_field_indices.append(i);
-    }
-    else {
-      constant_fields_to_evaluate.append(field);
-      constant_field_indices.append(i);
-    }
   }
 
   /* Evaluate varying fields if necessary. */
@@ -484,6 +479,8 @@ Vector<GVArray> evaluate_fields(ResourceScope &scope,
       }
       /* Still have to copy over the data in the destination provided by the caller. */
       if (dst_varray.is_span()) {
+        computed_varray.type().default_construct_indices(dst_varray.get_internal_span().data(),
+                                                         mask);
         array_utils::copy(computed_varray,
                           mask,
                           dst_varray.get_internal_span().take_front(mask.min_array_size()));
@@ -545,7 +542,7 @@ static IndexMask index_mask_from_selection(const IndexMask full_mask,
                                            const VArray<bool> &selection,
                                            ResourceScope &scope)
 {
-  return IndexMask::from_bools(full_mask, selection, scope.construct<IndexMaskMemory>());
+  return IndexMask::from_bools(full_mask, selection, scope.allocator());
 }
 
 int FieldEvaluator::add_with_destination(GField field, GVMutableArray dst)
@@ -600,8 +597,16 @@ void FieldEvaluator::evaluate()
 
   Vector<GFieldRef> fields;
   fields.reserve(fields_to_evaluate_.size());
+  static constexpr bool true_value = true;
   for (const int i : fields_to_evaluate_.index_range()) {
-    fields.append(fields_to_evaluate_[i]);
+    const GField &field = fields_to_evaluate_[i];
+    if (field == selection_field_) {
+      /* Avoid evaluating the selection field again. */
+      fields.append(GFieldRef::from_constant(CPPType::get<bool>(), &true_value));
+    }
+    else {
+      fields.append(field);
+    }
   }
   evaluated_varrays_ = evaluate_fields(scope_, fields, selection_mask_, context_, dst_varrays_);
   BLI_assert(fields_to_evaluate_.size() == evaluated_varrays_.size());

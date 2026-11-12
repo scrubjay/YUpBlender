@@ -38,8 +38,14 @@ static void node_declare(NodeDeclarationBuilder &b)
 
   if (node != nullptr) {
     const eCustomDataType data_type = eCustomDataType(node->custom1);
-    b.add_input(data_type, "Value"_ustr).supports_field().hide_value().is_default_link_socket();
-    b.add_output(data_type, "Value"_ustr).field_source_reference_all().align_with_previous();
+    b.add_input(data_type, "Value"_ustr)
+        .structure_type(StructureType::Field)
+        .hide_value()
+        .is_default_link_socket();
+    b.add_output(data_type, "Value"_ustr)
+        .structure_type(StructureType::Field)
+        .propagate_references()
+        .align_with_previous();
   }
   b.add_input<decl::Int>("Iterations"_ustr)
       .default_value(1)
@@ -50,7 +56,7 @@ static void node_declare(NodeDeclarationBuilder &b)
       .subtype(PROP_FACTOR)
       .min(0.0f)
       .max(1.0f)
-      .supports_field()
+      .structure_type(StructureType::Field)
       .description("Relative mix weight of neighboring elements");
 }
 
@@ -73,7 +79,7 @@ static void node_gather_link_searches(GatherLinkSearchOpParams &params)
   search_link_ops_for_declarations(params, declaration.inputs);
 
   const std::optional<eCustomDataType> new_node_type = bke::socket_type_to_custom_data_type(
-      eNodeSocketDatatype(params.other_socket().type));
+      params.other_socket().type);
   if (!new_node_type.has_value()) {
     return;
   }
@@ -198,6 +204,49 @@ static void build_face_to_face_by_edge_map(const OffsetIndices<int> faces,
   });
 }
 
+static void build_corner_to_corner_by_vert_map(const GroupedSpan<int> vert_to_corner_map,
+                                               const OffsetIndices<int> faces,
+                                               const Span<int> corner_verts,
+                                               const int corners_num,
+                                               Array<int> &r_offsets,
+                                               Array<int> &r_indices)
+{
+  r_offsets = Array<int>(corners_num + 1, 0);
+  threading::parallel_for(faces.index_range(), 4096, [&](const IndexRange range) {
+    for (const int face : range) {
+      for (const int corner : faces[face]) {
+        const int vert = corner_verts[corner];
+        constexpr int self_corner = -1;
+        constexpr int prev_and_next_corners = 2;
+        r_offsets[corner] += vert_to_corner_map.offsets[vert].size() + self_corner +
+                             prev_and_next_corners;
+      }
+    }
+  });
+  const OffsetIndices<int> offsets = offset_indices::accumulate_counts_to_offsets(r_offsets);
+  r_indices.reinitialize(offsets.total_size());
+
+  threading::parallel_for(faces.index_range(), 4096, [&](IndexRange range) {
+    for (const int face : range) {
+      for (const int corner : faces[face]) {
+        const int vert = corner_verts[corner];
+        const int prev_corner = bke::mesh::face_corner_prev(faces[face], corner);
+        const int next_corner = bke::mesh::face_corner_next(faces[face], corner);
+
+        MutableSpan<int> neighbors = r_indices.as_mutable_span().slice(offsets[corner]);
+
+        MutableSpan<int> vert_neighbors = neighbors.drop_back(1);
+        vert_neighbors.copy_from(vert_to_corner_map[vert]);
+
+        int *self_corner = std::find(vert_neighbors.begin(), vert_neighbors.end(), corner);
+        *self_corner = prev_corner;
+
+        neighbors.last() = next_corner;
+      }
+    }
+  });
+}
+
 static GroupedSpan<int> create_mesh_map(const Mesh &mesh,
                                         const AttrDomain domain,
                                         Array<int> &r_offsets,
@@ -213,6 +262,14 @@ static GroupedSpan<int> create_mesh_map(const Mesh &mesh,
     case AttrDomain::Face:
       build_face_to_face_by_edge_map(
           mesh.faces(), mesh.corner_edges(), mesh.edges_num, r_offsets, r_indices);
+      break;
+    case AttrDomain::Corner:
+      build_corner_to_corner_by_vert_map(mesh.vert_to_corner_map(),
+                                         mesh.faces(),
+                                         mesh.corner_verts(),
+                                         mesh.corners_num,
+                                         r_offsets,
+                                         r_indices);
       break;
     default:
       BLI_assert_unreachable();
@@ -394,7 +451,12 @@ class BlurAttributeFieldInput final : public bke::GeometryFieldInput {
     GSpan result_buffer = buffer_a.as_span();
     switch (context.type()) {
       case GeometryComponent::Type::Mesh:
-        if (ELEM(context.domain(), AttrDomain::Point, AttrDomain::Edge, AttrDomain::Face)) {
+        if (ELEM(context.domain(),
+                 AttrDomain::Point,
+                 AttrDomain::Edge,
+                 AttrDomain::Face,
+                 AttrDomain::Corner))
+        {
           if (const Mesh *mesh = context.mesh()) {
             result_buffer = blur_on_mesh(
                 *mesh, context.domain(), iterations_, neighbor_weights, buffer_a, buffer_b);
@@ -438,11 +500,7 @@ class BlurAttributeFieldInput final : public bke::GeometryFieldInput {
 
   std::optional<AttrDomain> preferred_domain(const GeometryComponent &component) const override
   {
-    const std::optional<AttrDomain> domain = bke::try_detect_field_domain(component, value_field_);
-    if (domain.has_value() && *domain == AttrDomain::Corner) {
-      return AttrDomain::Point;
-    }
-    return domain;
+    return bke::try_detect_field_domain(component, value_field_);
   }
 };
 

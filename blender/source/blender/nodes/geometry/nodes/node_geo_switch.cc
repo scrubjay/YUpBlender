@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
 #include "node_geometry_util.hh"
+#include "shader/node_shader_util.hh"
 
 #include "BKE_node_tree_reference_lifetimes.hh"
 
@@ -15,6 +16,9 @@
 
 #include "RNA_enum_types.hh"
 
+#include "COM_node_operation.hh"
+#include "COM_utilities.hh"
+
 #include "FN_multi_function_builder.hh"
 
 namespace blender {
@@ -26,34 +30,45 @@ NODE_STORAGE_FUNCS(NodeSwitch)
 static void node_declare(NodeDeclarationBuilder &b)
 {
   auto &switch_decl = b.add_input<decl::Bool>("Switch"_ustr);
+  const bNodeTree *node_tree = b.tree_or_null();
   const bNode *node = b.node_or_null();
-  if (!node) {
+  if (!node_tree || !node) {
     return;
   }
   const NodeSwitch &storage = node_storage(*node);
-  const eNodeSocketDatatype socket_type = eNodeSocketDatatype(storage.input_type);
+  const eNodeSocketDatatype socket_type = storage.input_type;
 
   auto &false_decl = b.add_input(socket_type, "False"_ustr);
   auto &true_decl = b.add_input(socket_type, "True"_ustr);
-  auto &output_decl = b.add_output(socket_type, "Output"_ustr);
+  auto &output_decl = b.add_output(socket_type, "Output"_ustr).propagate_all();
 
-  if (socket_type_supports_attributes(socket_type)) {
-    switch_decl.supports_field();
-    false_decl.supports_field();
-    true_decl.supports_field();
-    output_decl.dependent_field().reference_pass_all();
+  StructureType value_structure_type = StructureType::Dynamic;
+  StructureType condition_structure_type = StructureType::Dynamic;
+
+  if (node_tree->type == NTREE_COMPOSIT) {
+    const bool is_single_compositor_type = compositor::Result::is_single_value_only_type(
+        compositor::socket_data_type_to_result_type(socket_type));
+    if (is_single_compositor_type) {
+      value_structure_type = StructureType::Single;
+    }
+    condition_structure_type = StructureType::Single;
+
+    false_decl.compositor_realization_mode(CompositorInputRealizationMode::None);
+    true_decl.compositor_realization_mode(CompositorInputRealizationMode::None);
   }
-  if (bke::node_tree_reference_lifetimes::can_contain_referenced_data(socket_type)) {
-    output_decl.propagate_all();
-  }
-  if (bke::node_tree_reference_lifetimes::can_contain_reference(socket_type)) {
-    output_decl.reference_pass_all();
+  if (node_tree->type == NTREE_GEOMETRY) {
+    if (socket_type_supports_fields(socket_type)) {
+      output_decl.inferred_structure_type();
+    }
+    else {
+      output_decl.inferred_structure_type({false_decl.index(), true_decl.index()});
+    }
   }
 
-  switch_decl.structure_type(StructureType::Dynamic);
-  false_decl.structure_type(StructureType::Dynamic);
-  true_decl.structure_type(StructureType::Dynamic);
-  output_decl.structure_type(StructureType::Dynamic);
+  switch_decl.structure_type(condition_structure_type);
+  false_decl.structure_type(value_structure_type);
+  true_decl.structure_type(value_structure_type);
+  output_decl.structure_type(value_structure_type);
 }
 
 static void node_layout(ui::Layout &layout, bContext * /*C*/, PointerRNA *ptr)
@@ -61,10 +76,10 @@ static void node_layout(ui::Layout &layout, bContext * /*C*/, PointerRNA *ptr)
   layout.prop(ptr, "input_type", UI_ITEM_NONE, "", ICON_NONE);
 }
 
-static void node_init(bNodeTree * /*tree*/, bNode *node)
+static void node_init(bNodeTree *tree, bNode *node)
 {
   NodeSwitch *data = MEM_new<NodeSwitch>(__func__);
-  data->input_type = SOCK_FLOAT;
+  data->input_type = tree->type == NTREE_GEOMETRY ? SOCK_FLOAT : SOCK_RGBA;
   node->storage = data;
 }
 
@@ -117,7 +132,7 @@ class LazyFunctionForSwitchNode : public LazyFunction {
   LazyFunctionForSwitchNode(const bNode &node) : node_id_(node.identifier)
   {
     const NodeSwitch &storage = node_storage(node);
-    const eNodeSocketDatatype data_type = eNodeSocketDatatype(storage.input_type);
+    const eNodeSocketDatatype data_type = storage.input_type;
     can_be_field_ = socket_type_supports_fields(data_type);
 
     const bke::bNodeSocketType *socket_type = nullptr;
@@ -142,12 +157,12 @@ class LazyFunctionForSwitchNode : public LazyFunction {
   {
     SocketValueVariant condition_variant = params.get_input<SocketValueVariant>(0);
     if (!condition_variant.is_context_dependent_field()) {
-      this->execute_single(condition_variant.get<bool>(), params);
+      this->execute_single(condition_variant.ensure_type<bool>(), params);
       return;
     }
 
     if (can_be_field_) {
-      this->execute_field(condition_variant.get<Field<bool>>(), params);
+      this->execute_field(condition_variant.ensure_type<Field<bool>>(), params);
       return;
     }
 
@@ -159,7 +174,7 @@ class LazyFunctionForSwitchNode : public LazyFunction {
           {node_id_, {NodeWarningType::Error, N_("Type cannot be switched by a field")}});
     }
 
-    this->execute_single(condition_variant.get<bool>(), params);
+    this->execute_single(condition_variant.ensure_type<bool>(), params);
   }
 
   static constexpr int false_input_index = 1;
@@ -197,15 +212,15 @@ class LazyFunctionForSwitchNode : public LazyFunction {
 
     const MultiFunction &switch_multi_function = this->get_switch_multi_function();
 
-    GField false_field = false_value_variant->extract<GField>();
-    GField true_field = true_value_variant->extract<GField>();
+    GField false_field = std::move(false_value_variant->ensure_type<GField>());
+    GField true_field = std::move(true_value_variant->ensure_type<GField>());
 
     GField output_field{FieldOperation::from(
         switch_multi_function,
         {std::move(condition), std::move(false_field), std::move(true_field)})};
 
     void *output_ptr = params.get_output_data_ptr(0);
-    SocketValueVariant::ConstructIn(output_ptr, std::move(output_field));
+    new (output_ptr) SocketValueVariant(SocketValueVariant::from(std::move(output_field)));
     params.output_set(0);
   }
 
@@ -231,6 +246,30 @@ class LazyFunctionForSwitchNode : public LazyFunction {
     return *switch_multi_function;
   }
 };
+
+using namespace blender::compositor;
+
+class SwitchOperation : public NodeOperation {
+ public:
+  using NodeOperation::NodeOperation;
+
+  void execute() override
+  {
+    const Result &input = this->get_input(this->get_condition() ? "True" : "False");
+    Result &output = this->get_result("Output");
+    output.share_data(input);
+  }
+
+  bool get_condition()
+  {
+    return this->get_input("Switch").get_single_value_default<bool>();
+  }
+};
+
+static NodeOperation *get_compositor_operation(Context &context, const bNode &node)
+{
+  return new SwitchOperation(context, node);
+}
 
 static const bNodeSocket *node_internally_linked_input(const bNodeTree & /*tree*/,
                                                        const bNode &node,
@@ -265,7 +304,7 @@ static void register_node()
 {
   static bke::bNodeType ntype;
 
-  geo_node_type_base(&ntype, "GeometryNodeSwitch"_ustr, GEO_NODE_SWITCH);
+  common_node_type_base(&ntype, "GeometryNodeSwitch"_ustr, GEO_NODE_SWITCH);
   ntype.ui_name = "Switch";
   ntype.ui_description = "Switch between two inputs";
   ntype.enum_name_legacy = "SWITCH";
@@ -278,6 +317,8 @@ static void register_node()
   ntype.draw_buttons = node_layout;
   ntype.ignore_inferred_input_socket_visibility = true;
   ntype.internally_linked_input = node_internally_linked_input;
+  ntype.get_compositor_operation = get_compositor_operation;
+
   bke::node_register_type(ntype);
 
   node_rna(ntype.rna_ext.srna);

@@ -12,6 +12,8 @@
 
 #include "BLI_string_ref.hh"
 
+#include "DNA_outliner_types.h"
+
 #include "tree_element.hh"
 
 namespace blender {
@@ -40,7 +42,16 @@ class TreeElementOverridesBase final : public AbstractTreeElement {
  public:
   ID &id;
 
+  static constexpr eTreeStoreElemType element_type = TSE_LIBRARY_OVERRIDE_BASE;
+
   TreeElementOverridesBase(TreeElement &legacy_te, ID &id);
+
+  /** The ID identifying this element in the tree-store, see #AbstractTreeDisplay::add_element().
+   */
+  static ID *owner_id(ID &id)
+  {
+    return &id;
+  }
 
   void expand(SpaceOutliner & /*soops*/) const override;
 
@@ -60,9 +71,23 @@ class TreeElementOverridesProperty : public AbstractTreeElement {
   StringRefNull rna_path;
   bool is_rna_path_valid;
 
+  static constexpr eTreeStoreElemType element_type = TSE_LIBRARY_OVERRIDE;
+
   TreeElementOverridesProperty(TreeElement &legacy_te, TreeElementOverridesData &override_data);
 
+  /** The ID identifying this element in the tree-store, see #AbstractTreeDisplay::add_element().
+   */
+  static ID *owner_id(TreeElementOverridesData &override_data);
+
   StringRefNull get_warning() const override;
+
+  std::optional<BIFIconID> get_icon() const override
+  {
+    return ICON_LIBRARY_DATA_OVERRIDE;
+  }
+
+  /** Return the liboverride property matching this tree element, for the given ID. */
+  IDOverrideLibraryProperty *get_override_property_from_id(ID &id) const;
 };
 
 /**
@@ -78,13 +103,39 @@ class TreeElementOverridesPropertyOperation final : public TreeElementOverridesP
   std::unique_ptr<IDOverrideLibraryPropertyOperation> operation_;
 
  public:
+  static constexpr eTreeStoreElemType element_type = TSE_LIBRARY_OVERRIDE_OPERATION;
+
+  /** The ID identifying this element in the tree-store, see #AbstractTreeDisplay::add_element().
+   */
+  static ID *owner_id(TreeElementOverridesData &override_data);
+
   TreeElementOverridesPropertyOperation(TreeElement &legacy_te,
                                         TreeElementOverridesData &override_data);
 
-  /** Return a short string to display in the right column of the properties mode, indicating what
-   * the override operation did (e.g. added or removed a collection item). */
+  /**
+   * Return a short string to display in the right column of the properties mode, indicating what
+   * the override operation did (e.g. added or removed a collection item).
+   *
+   * \note: When returning an empty string, the outliner drawing code assumes that it can draw an
+   * editing widget based on the affected RNA property instead.
+   */
   StringRefNull get_override_operation_label() const;
+  /**
+   * Return a longer string to display as tooltip in the right column of the properties mode.
+   */
+  StringRefNull get_override_operation_tooltip() const;
+
   std::optional<BIFIconID> get_icon() const override;
+
+  /** Return liboverride operation type (#eID_OverrideLib_Op). */
+  short get_operation_type() const;
+
+  /**
+   * Return the liboverride operation matching this tree element, for the given ID and library
+   * override property.
+   */
+  IDOverrideLibraryPropertyOperation *get_override_operation_from_id(
+      ID &id, IDOverrideLibraryProperty &override_property) const;
 
  private:
   std::optional<PointerRNA> get_collection_ptr() const;

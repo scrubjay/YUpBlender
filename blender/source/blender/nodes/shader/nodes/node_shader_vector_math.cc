@@ -31,18 +31,21 @@ namespace nodes::node_shader_vector_math_cc {
 static void sh_node_vector_math_declare(NodeDeclarationBuilder &b)
 {
   b.is_function_node();
-  b.add_input<decl::Vector>("Vector"_ustr).min(-10000.0f).max(10000.0f).label_fn([](bNode node) {
-    switch (node.custom1) {
-      case NODE_VECTOR_MATH_POWER:
-        return IFACE_("Base");
-      default:
-        return IFACE_("Vector");
-    }
-  });
+  b.add_input<decl::Vector>("Vector"_ustr)
+      .min(-10000.0f)
+      .max(10000.0f)
+      .label_fn([](const bNode &node) {
+        switch (node.custom1) {
+          case NODE_VECTOR_MATH_POWER:
+            return IFACE_("Base");
+          default:
+            return IFACE_("Vector");
+        }
+      });
   b.add_input<decl::Vector>("Vector"_ustr, "Vector_001"_ustr)
       .min(-10000.0f)
       .max(10000.0f)
-      .label_fn([](bNode node) {
+      .label_fn([](const bNode &node) {
         switch (node.custom1) {
           case NODE_VECTOR_MATH_POWER:
             return IFACE_("Exponent");
@@ -61,7 +64,7 @@ static void sh_node_vector_math_declare(NodeDeclarationBuilder &b)
   b.add_input<decl::Vector>("Vector"_ustr, "Vector_002"_ustr)
       .min(-10000.0f)
       .max(10000.0f)
-      .label_fn([](bNode node) {
+      .label_fn([](const bNode &node) {
         switch (node.custom1) {
           case NODE_VECTOR_MATH_MULTIPLY_ADD:
             return IFACE_("Addend");
@@ -77,7 +80,7 @@ static void sh_node_vector_math_declare(NodeDeclarationBuilder &b)
       .default_value(1.0f)
       .min(-10000.0f)
       .max(10000.0f)
-      .label_fn([](bNode node) {
+      .label_fn([](const bNode &node) {
         switch (node.custom1) {
           case NODE_VECTOR_MATH_SCALE:
           default:
@@ -97,11 +100,11 @@ static void node_shader_buts_vect_math(ui::Layout &layout, bContext * /*C*/, Poi
 
 static void vector_math_input_defaults(bNode &node, const NodeVectorMathOperation mode)
 {
-  bNodeSocket *socket_2 = bke::node_find_socket(node, SOCK_IN, "Vector_001");
+  bNodeSocket *socket_2 = bke::node_find_socket(node, SOCK_IN, "Vector_001"_ustr);
   BLI_assert(socket_2 != nullptr);
   bNodeSocketValueVector *in_vector_2 = socket_2->default_value_typed<bNodeSocketValueVector>();
 
-  bNodeSocket *socket_3 = bke::node_find_socket(node, SOCK_IN, "Vector_002");
+  bNodeSocket *socket_3 = bke::node_find_socket(node, SOCK_IN, "Vector_002"_ustr);
   BLI_assert(socket_3 != nullptr);
   bNodeSocketValueVector *in_vector_3 = socket_3->default_value_typed<bNodeSocketValueVector>();
 
@@ -145,9 +148,7 @@ class SocketSearchOp {
 
 static void sh_node_vector_math_gather_link_searches(GatherLinkSearchOpParams &params)
 {
-  if (!params.node_tree().typeinfo->validate_link(eNodeSocketDatatype(params.other_socket().type),
-                                                  SOCK_VECTOR))
-  {
+  if (!params.node_tree().typeinfo->validate_link(params.other_socket().type, SOCK_VECTOR)) {
     return;
   }
 
@@ -252,6 +253,18 @@ static int gpu_shader_vector_math(GPUMaterial *mat,
                                   GPUNodeStack *in,
                                   GPUNodeStack *out)
 {
+  /* Can't emit 'a / a' (see #162948). So we have to fold it. */
+  if (in[0].link != nullptr && in[0].link == in[1].link) {
+    switch (node->custom1) {
+      case NODE_VECTOR_MATH_DIVIDE:
+        return GPU_stack_link(mat, node, "vector_math_divide_self", in, out);
+      case NODE_VECTOR_MATH_SNAP:
+        return GPU_stack_link(mat, node, "vector_math_snap_self", in, out);
+      default:
+        break;
+    }
+  }
+
   const char *name = gpu_shader_get_name(node->custom1);
   if (name != nullptr) {
     return GPU_stack_link(mat, node, name, in, out);
@@ -264,10 +277,10 @@ static void node_shader_update_vector_math(bNodeTree *ntree, bNode *node)
 {
   bNodeSocket *sockB = static_cast<bNodeSocket *>(BLI_findlink(&node->inputs, 1));
   bNodeSocket *sockC = static_cast<bNodeSocket *>(BLI_findlink(&node->inputs, 2));
-  bNodeSocket *sockScale = bke::node_find_socket(*node, SOCK_IN, "Scale");
+  bNodeSocket *sockScale = bke::node_find_socket(*node, SOCK_IN, "Scale"_ustr);
 
-  bNodeSocket *sockVector = bke::node_find_socket(*node, SOCK_OUT, "Vector");
-  bNodeSocket *sockValue = bke::node_find_socket(*node, SOCK_OUT, "Value");
+  bNodeSocket *sockVector = bke::node_find_socket(*node, SOCK_OUT, "Vector"_ustr);
+  bNodeSocket *sockValue = bke::node_find_socket(*node, SOCK_OUT, "Value"_ustr);
 
   bke::node_set_socket_availability(*ntree,
                                     *sockB,

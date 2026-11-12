@@ -96,17 +96,6 @@ bool ShaderCreateInfo::is_vulkan_compatible() const
   return true;
 }
 
-std::string ShaderCreateInfo::buffer_typename(StringRefNull type_name, bool uniform_buffer) const
-{
-  if (bool(this->builtins_ & BuiltinBits::NO_BUFFER_TYPE_LINTING) || type_name.startswith("int") ||
-      type_name.startswith("uint") || type_name.startswith("float") ||
-      type_name.startswith("packed_"))
-  {
-    return type_name;
-  }
-  return type_name + "_host_shared_" + (uniform_buffer ? "uniform_" : "");
-}
-
 /** \} */
 
 ShaderCreateInfo::ShaderCreateInfo(const char *name) : name_(name)
@@ -140,6 +129,15 @@ std::string ShaderCreateInfo::resource_guard_defines(Span<CompilationConstant> c
   return defines;
 }
 
+std::string ShaderCreateInfo::iface_guard_defines() const
+{
+  std::string defines;
+  for (const StageInterfaceInfo *interface : this->vertex_out_interfaces_) {
+    defines += "#define IFACE_INFO_" + interface->name + "\n";
+  }
+  return defines;
+}
+
 void ShaderCreateInfo::finalize(const bool recursive)
 {
   if (finalized_) {
@@ -147,7 +145,7 @@ void ShaderCreateInfo::finalize(const bool recursive)
   }
   finalized_ = true;
 
-  Set<StringRefNull> deps_merged;
+  auto deps_merged = std::make_unique<Set<StringRefNull>>();
 
   validate_vertex_attributes();
 
@@ -183,17 +181,12 @@ void ShaderCreateInfo::finalize(const bool recursive)
     validate_vertex_attributes(&info);
 
     /* Insert with duplicate check. */
-    push_constants_.extend_non_duplicates(info.push_constants_);
     defines_.extend_non_duplicates(info.defines_);
     typedef_sources_.extend_non_duplicates(info.typedef_sources_);
 
-    auto extend_predicate = [&](Vector<Resource, 0> &resource_vector,
-                                ShaderCreateInfo::Resource res_copy,
-                                Span<ConditionFn> additional_conditions) {
-      res_copy.conditions.extend(additional_conditions);
-      /** IMPORTANT: We keep duplicates until we evaluate the conditions. */
-      resource_vector.append(res_copy);
-    };
+    for (const auto &res : info.push_constants_) {
+      extend_predicate(push_constants_, res, additional_info.conditions);
+    }
     for (const auto &res : info.pass_resources_) {
       extend_predicate(pass_resources_, res, additional_info.conditions);
     }
@@ -223,102 +216,119 @@ void ShaderCreateInfo::finalize(const bool recursive)
     }
 
     /* Inherit builtin bits from additional info. */
-    builtins_ |= info.builtins_;
+    builtins_.extend(info.builtins_);
 
     /* TODO(fclem): We need to reintroduce this check before compiling.
      * The issue is that the new SRT paradigm allows for conflicting resources if they are not
      * defined at the same time (using compilation constants). */
     // validate_merge(info);
 
-    auto assert_no_overlap = [&](const bool test, const StringRefNull error) {
-      if (!test) {
-        std::cout << name_ << ": Validation failed while merging " << info.name_ << " : ";
-        std::cout << error << std::endl;
-        BLI_assert(0);
-      }
-    };
-
-    if (!deps_merged.add(info.name_)) {
-      assert_no_overlap(false, "additional info already merged via another info");
+    if (!deps_merged->add(info.name_)) {
+      assert_no_overlap(info, false, "additional info already merged via another info");
     }
 
     if (info.compute_layout_.local_size_x != -1) {
-      assert_no_overlap(compute_layout_.local_size_x == -1, "Compute layout already defined");
+      assert_no_overlap(
+          info, compute_layout_.local_size_x == -1, "Compute layout already defined");
       compute_layout_ = info.compute_layout_;
     }
 
     if (!info.vertex_source_.is_empty()) {
-      assert_no_overlap(vertex_source_.is_empty(), "Vertex source already existing");
+      assert_no_overlap(info, vertex_source_.is_empty(), "Vertex source already existing");
       vertex_source_ = info.vertex_source_;
     }
     if (!info.geometry_source_.is_empty()) {
-      assert_no_overlap(geometry_source_.is_empty(), "Geometry source already existing");
+      assert_no_overlap(info, geometry_source_.is_empty(), "Geometry source already existing");
       geometry_source_ = info.geometry_source_;
       geometry_layout_ = info.geometry_layout_;
     }
     if (!info.fragment_source_.is_empty()) {
-      assert_no_overlap(fragment_source_.is_empty(), "Fragment source already existing");
+      assert_no_overlap(info, fragment_source_.is_empty(), "Fragment source already existing");
       fragment_source_ = info.fragment_source_;
     }
     if (!info.compute_source_.is_empty()) {
-      assert_no_overlap(compute_source_.is_empty(), "Compute source already existing");
+      assert_no_overlap(info, compute_source_.is_empty(), "Compute source already existing");
       compute_source_ = info.compute_source_;
     }
 
     if (info.vertex_entry_fn_ != "main") {
-      assert_no_overlap(vertex_entry_fn_ == "main", "Vertex function already existing");
+      assert_no_overlap(info, vertex_entry_fn_ == "main", "Vertex function already existing");
       vertex_entry_fn_ = info.vertex_entry_fn_;
     }
     if (info.geometry_entry_fn_ != "main") {
-      assert_no_overlap(geometry_entry_fn_ == "main", "Geometry function already existing");
+      assert_no_overlap(info, geometry_entry_fn_ == "main", "Geometry function already existing");
       geometry_entry_fn_ = info.geometry_entry_fn_;
     }
     if (info.fragment_entry_fn_ != "main") {
-      assert_no_overlap(fragment_entry_fn_ == "main", "Fragment function already existing");
+      assert_no_overlap(info, fragment_entry_fn_ == "main", "Fragment function already existing");
       fragment_entry_fn_ = info.fragment_entry_fn_;
     }
     if (info.compute_entry_fn_ != "main") {
-      assert_no_overlap(compute_entry_fn_ == "main", "Compute function already existing");
+      assert_no_overlap(info, compute_entry_fn_ == "main", "Compute function already existing");
       compute_entry_fn_ = info.compute_entry_fn_;
     }
   }
 
-  if (!geometry_source_.is_empty() && bool(builtins_ & BuiltinBits::LAYER)) {
+  if (!geometry_source_.is_empty() && flag_is_set(this->builtins_combined(), BuiltinBits::LAYER)) {
     std::cout << name_
               << ": Validation failed. BuiltinBits::LAYER shouldn't be used with geometry shaders."
               << std::endl;
     BLI_assert(0);
   }
+}
 
-  if (auto_resource_location_) {
-    int images = 0, samplers = 0, ubos = 0, ssbos = 0;
+void ShaderCreateInfo::extend_predicate(Vector<Resource, 0> &resource_vector,
+                                        ShaderCreateInfo::Resource res_copy,
+                                        Span<ConditionFn> additional_conditions) const
+{
+  res_copy.conditions.extend(additional_conditions);
+  /** IMPORTANT: We keep duplicates until we evaluate the conditions. */
+  resource_vector.append(res_copy);
+};
 
-    auto set_resource_slot = [&](Resource &res) {
-      switch (res.bind_type) {
-        case Resource::BindType::UNIFORM_BUFFER:
-          res.slot = ubos++;
-          break;
-        case Resource::BindType::STORAGE_BUFFER:
-          res.slot = ssbos++;
-          break;
-        case Resource::BindType::SAMPLER:
-          res.slot = samplers++;
-          break;
-        case Resource::BindType::IMAGE:
-          res.slot = images++;
-          break;
-      }
-    };
+void ShaderCreateInfo::extend_predicate(Vector<ShaderCreateInfo::PushConst, 0> &resource_vector,
+                                        ShaderCreateInfo::PushConst res_copy,
+                                        Span<ConditionFn> additional_conditions) const
+{
+  res_copy.conditions.extend(additional_conditions);
+  /** IMPORTANT: We keep duplicates until we evaluate the conditions. */
+  resource_vector.append(res_copy);
+};
 
-    for (auto &res : batch_resources_) {
-      set_resource_slot(res);
-    }
-    for (auto &res : pass_resources_) {
-      set_resource_slot(res);
-    }
-    for (auto &res : geometry_resources_) {
-      set_resource_slot(res);
-    }
+void ShaderCreateInfo::assert_no_overlap(const ShaderCreateInfo &info,
+                                         const bool test,
+                                         const StringRefNull error) const
+{
+  if (!test) {
+    std::cout << name_ << ": Validation failed while merging " << info.name_ << " : ";
+    std::cout << error << std::endl;
+    BLI_assert(0);
+  }
+}
+
+void ShaderCreateInfo::set_resource_slot(Resource &res,
+                                         int &images,
+                                         int &samplers,
+                                         int &ubos,
+                                         int &ssbos,
+                                         int &acceleration_structures) const
+{
+  switch (res.bind_type) {
+    case Resource::BindType::UNIFORM_BUFFER:
+      res.slot = ubos++;
+      break;
+    case Resource::BindType::STORAGE_BUFFER:
+      res.slot = ssbos++;
+      break;
+    case Resource::BindType::SAMPLER:
+      res.slot = samplers++;
+      break;
+    case Resource::BindType::IMAGE:
+      res.slot = images++;
+      break;
+    case Resource::BindType::ACCELERATION_STRUCTURE:
+      res.slot = acceleration_structures++;
+      break;
   }
 }
 
@@ -348,17 +358,17 @@ std::string ShaderCreateInfo::check_error() const
   }
 
   if (!this->geometry_source_.is_empty()) {
-    if (flag_is_set(this->builtins_, BuiltinBits::BARYCENTRIC_COORD)) {
+    if (flag_is_set(this->builtins_combined(), BuiltinBits::BARYCENTRIC_COORD)) {
       error += "Shader " + this->name_ +
                " has geometry stage and uses barycentric coordinates. This is not allowed as "
                "fallback injects a geometry stage.\n";
     }
-    if (flag_is_set(this->builtins_, BuiltinBits::VIEWPORT_INDEX)) {
+    if (flag_is_set(this->builtins_combined(), BuiltinBits::VIEWPORT_INDEX)) {
       error += "Shader " + this->name_ +
                " has geometry stage and uses multi-viewport. This is not allowed as "
                "fallback injects a geometry stage.\n";
     }
-    if (flag_is_set(this->builtins_, BuiltinBits::LAYER)) {
+    if (flag_is_set(this->builtins_combined(), BuiltinBits::LAYER)) {
       error += "Shader " + this->name_ +
                " has geometry stage and uses layer output. This is not allowed as "
                "fallback injects a geometry stage.\n";
@@ -369,7 +379,8 @@ std::string ShaderCreateInfo::check_error() const
     return error;
   }
 
-  if (flag_is_set(this->builtins_,
+#if 0 /* TODO(fclem): See if this is still needed without any named interface. */
+  if (flag_is_set(this->builtins_combined(),
                   BuiltinBits::BARYCENTRIC_COORD | BuiltinBits::VIEWPORT_INDEX |
                       BuiltinBits::LAYER))
   {
@@ -381,6 +392,7 @@ std::string ShaderCreateInfo::check_error() const
       }
     }
   }
+#endif
 
   for (const StageInterfaceInfo *interface : this->vertex_out_interfaces_) {
     for (const StageInterfaceInfo::InOut &inout : interface->inouts) {
@@ -432,7 +444,7 @@ std::string ShaderCreateInfo::check_error() const
   }
 
   /* Check same bind-points usage. */
-  Set<int> images, samplers, ubos, ssbos;
+  Set<int> images, samplers, ubos, ssbos, acceleration_structures;
 
   auto register_resource = [&](const Resource &res) -> bool {
     switch (res.bind_type) {
@@ -444,6 +456,8 @@ std::string ShaderCreateInfo::check_error() const
         return samplers.add(res.slot);
       case Resource::BindType::IMAGE:
         return images.add(res.slot);
+      case Resource::BindType::ACCELERATION_STRUCTURE:
+        return acceleration_structures.add(res.slot);
       default:
         return false;
     }
@@ -463,6 +477,9 @@ std::string ShaderCreateInfo::check_error() const
           break;
         case Resource::BindType::IMAGE:
           error += "Image " + res.image.name;
+          break;
+        case Resource::BindType::ACCELERATION_STRUCTURE:
+          error += "Acceleration Structure " + res.acceleration_structure.name;
           break;
         default:
           error += "Unknown Type";
@@ -504,73 +521,76 @@ std::string ShaderCreateInfo::check_error() const
 
 void ShaderCreateInfo::validate_merge(const ShaderCreateInfo &other_info)
 {
-  if (!auto_resource_location_) {
-    /* Check same bind-points usage in OGL. */
-    Set<int> images, samplers, ubos, ssbos;
+  /* Check same bind-points usage in OGL. */
+  Set<int> images, samplers, ubos, ssbos, acceleration_structures;
 
-    auto register_resource = [&](const Resource &res) -> bool {
+  auto register_resource = [&](const Resource &res) -> bool {
+    switch (res.bind_type) {
+      case Resource::BindType::UNIFORM_BUFFER:
+        return images.add(res.slot);
+      case Resource::BindType::STORAGE_BUFFER:
+        return samplers.add(res.slot);
+      case Resource::BindType::SAMPLER:
+        return ubos.add(res.slot);
+      case Resource::BindType::IMAGE:
+        return ssbos.add(res.slot);
+      case Resource::BindType::ACCELERATION_STRUCTURE:
+        return acceleration_structures.add(res.slot);
+      default:
+        return false;
+    }
+  };
+
+  auto print_error_msg = [&](const Resource &res, const Vector<Resource> &resources) {
+    auto print_resource_name = [&](const Resource &res) {
       switch (res.bind_type) {
         case Resource::BindType::UNIFORM_BUFFER:
-          return images.add(res.slot);
+          std::cout << "Uniform Buffer " << res.uniformbuf.name;
+          break;
         case Resource::BindType::STORAGE_BUFFER:
-          return samplers.add(res.slot);
+          std::cout << "Storage Buffer " << res.storagebuf.name;
+          break;
         case Resource::BindType::SAMPLER:
-          return ubos.add(res.slot);
+          std::cout << "Sampler " << res.sampler.name;
+          break;
         case Resource::BindType::IMAGE:
-          return ssbos.add(res.slot);
+          std::cout << "Image " << res.image.name;
+          break;
+        case Resource::BindType::ACCELERATION_STRUCTURE:
+          std::cout << "Acceleration Structure " << res.acceleration_structure.name;
+          break;
         default:
-          return false;
+          std::cout << "Unknown Type";
+          break;
       }
     };
 
-    auto print_error_msg = [&](const Resource &res, const Vector<Resource> &resources) {
-      auto print_resource_name = [&](const Resource &res) {
-        switch (res.bind_type) {
-          case Resource::BindType::UNIFORM_BUFFER:
-            std::cout << "Uniform Buffer " << res.uniformbuf.name;
-            break;
-          case Resource::BindType::STORAGE_BUFFER:
-            std::cout << "Storage Buffer " << res.storagebuf.name;
-            break;
-          case Resource::BindType::SAMPLER:
-            std::cout << "Sampler " << res.sampler.name;
-            break;
-          case Resource::BindType::IMAGE:
-            std::cout << "Image " << res.image.name;
-            break;
-          default:
-            std::cout << "Unknown Type";
-            break;
-        }
-      };
-
-      for (const Resource &_res : resources) {
-        if (&res != &_res && res.bind_type == _res.bind_type && res.slot == _res.slot) {
-          std::cout << name_ << ": Validation failed : Overlapping ";
-          print_resource_name(res);
-          std::cout << " and ";
-          print_resource_name(_res);
-          std::cout << " at (" << res.slot << ") while merging " << other_info.name_ << std::endl;
-        }
-      }
-    };
-
-    for (auto &res : batch_resources_) {
-      if (register_resource(res) == false) {
-        print_error_msg(res, resources_get_all_());
+    for (const Resource &_res : resources) {
+      if (&res != &_res && res.bind_type == _res.bind_type && res.slot == _res.slot) {
+        std::cout << name_ << ": Validation failed : Overlapping ";
+        print_resource_name(res);
+        std::cout << " and ";
+        print_resource_name(_res);
+        std::cout << " at (" << res.slot << ") while merging " << other_info.name_ << std::endl;
       }
     }
+  };
 
-    for (auto &res : pass_resources_) {
-      if (register_resource(res) == false) {
-        print_error_msg(res, resources_get_all_());
-      }
+  for (auto &res : batch_resources_) {
+    if (register_resource(res) == false) {
+      print_error_msg(res, resources_get_all_());
     }
+  }
 
-    for (auto &res : geometry_resources_) {
-      if (register_resource(res) == false) {
-        print_error_msg(res, resources_get_all_());
-      }
+  for (auto &res : pass_resources_) {
+    if (register_resource(res) == false) {
+      print_error_msg(res, resources_get_all_());
+    }
+  }
+
+  for (auto &res : geometry_resources_) {
+    if (register_resource(res) == false) {
+      print_error_msg(res, resources_get_all_());
     }
   }
 }
@@ -626,20 +646,6 @@ void ShaderCreateInfo::validate_vertex_attributes(const ShaderCreateInfo *other_
 
 using namespace blender::gpu::shader;
 
-#ifdef _MSC_VER
-/* Disable optimization for this function with MSVC. It does not like the fact
- * shaders info are declared in the same function (same basic block or not does
- * not change anything).
- * Since it is just a function called to register shaders (once),
- * the fact it's optimized or not does not matter, it's not on any hot
- * code path. */
-#  pragma optimize("", off)
-#endif
-void gpu_shader_create_info_init()
-{
-  g_create_infos = new CreateInfoDictionary();
-  g_interfaces = new InterfaceDictionary();
-
 #define GPU_SHADER_NAMED_INTERFACE_INFO(_interface, _inst_name) \
   StageInterfaceInfo *ptr_##_interface = new StageInterfaceInfo(#_interface, #_inst_name); \
   StageInterfaceInfo &_interface = *ptr_##_interface; \
@@ -662,28 +668,142 @@ void gpu_shader_create_info_init()
 #define GPU_SHADER_INTERFACE_END() ;
 #define GPU_SHADER_CREATE_END() ;
 
-/* Declare, register and construct the infos. */
-#include "glsl_compositor_infos_list.hh"
-#include "glsl_draw_infos_list.hh"
-#include "glsl_gpu_infos_list.hh"
-#include "glsl_ocio_infos_list.hh"
-#ifdef WITH_OPENSUBDIV
-#  include "glsl_osd_infos_list.hh"
+/* WORKAROUND(@fclem): Undefine constants defined by system headers to fix warnings.
+ * This is caused by the macros copy system made for compatibility of the Create info system before
+ * BSL 5.3. Can be phased out after BSL 5.3 is default everywhere. */
+#undef M_PI
+#undef M_TAU
+#undef M_PI_2
+#undef M_PI_4
+#undef M_SQRT2
+#undef M_SQRT1_2
+#undef M_SQRT3
+#undef M_SQRT1_3
+#undef M_1_PI
+#undef M_E
+#undef M_LOG2E
+#undef M_LOG10E
+#undef M_LN2
+#undef M_LN10
+#undef NAN_FLT
+#undef UNPACK2
+#undef UNPACK3
+#undef UNPACK4
+#undef SHRT_MAX
+#undef INT_MAX
+#undef USHRT_MAX
+#undef UINT_MAX
+#undef FLT_MAX
+#undef FLT_MIN
+#undef FLT_EPSILON
+
+#ifdef _MSC_VER
+/* Disable optimization for this function with MSVC. It does not like the fact
+ * shaders info are declared in the same function (same basic block or not does
+ * not change anything).
+ * Since it is just a function called to register shaders (once),
+ * the fact it's optimized or not does not matter, it's not on any hot
+ * code path. */
+#  pragma optimize("", off)
 #endif
 
-  if (GPU_stencil_clasify_buffer_workaround()) {
+/* Split functions to avoid stack overflow on windows. */
+static void init_compositor_infos()
+{
+/* Declare, register and construct the infos. */
+#include "glsl_compositor_infos_list.hh"
+}
+
+static void init_draw_infos()
+{
+/* Declare, register and construct the infos. */
+#include "glsl_draw_infos_list.hh"
+}
+
+static void init_eevee_infos()
+{
+/* Declare, register and construct the infos. */
+#include "glsl_eevee_infos_list.hh"
+
+  if (GPU_stencil_classify_buffer_workaround()) {
     /* WORKAROUND: Adding a dummy buffer that isn't used fixes a bug inside the Qualcomm driver. */
     eevee_deferred_tile_classify.storage_buf(
         12, Qualifier::read_write, "uint", "dummy_workaround_buf[]");
   }
+}
+
+static void init_overlay_infos()
+{
+/* Declare, register and construct the infos. */
+#include "glsl_select_id_infos_list.hh"
+/* Requires select id infos. */
+#include "glsl_overlay_infos_list.hh"
+}
+
+static void init_image_infos()
+{
+/* Declare, register and construct the infos. */
+#include "glsl_image_infos_list.hh"
+}
+
+static void init_gpencil_infos()
+{
+/* Declare, register and construct the infos. */
+#include "glsl_gpencil_infos_list.hh"
+}
+
+static void init_workbench_infos()
+{
+/* Declare, register and construct the infos. */
+#include "glsl_workbench_infos_list.hh"
+}
+
+static void init_gpu_infos()
+{
+/* Declare, register and construct the infos. */
+#include "glsl_gpu_infos_list.hh"
+}
+
+static void init_ocio_infos()
+{
+/* Declare, register and construct the infos. */
+#include "glsl_ocio_infos_list.hh"
+}
+
+static void init_osd_infos()
+{
+/* Declare, register and construct the infos. */
+#ifdef WITH_OPENSUBDIV
+#  include "glsl_osd_infos_list.hh"
+#endif
+}
+
+void gpu_shader_create_info_init()
+{
+  g_create_infos = new CreateInfoDictionary();
+  g_interfaces = new InterfaceDictionary();
+
+  init_compositor_infos();
+  init_draw_infos();
+  init_eevee_infos();
+  init_overlay_infos();
+  init_image_infos();
+  init_gpencil_infos();
+  init_workbench_infos();
+  init_gpu_infos();
+  init_ocio_infos();
+  init_osd_infos();
 
   for (ShaderCreateInfo *info : g_create_infos->values()) {
     info->is_generated_ = false;
 
-    info->builtins_ |= gpu_shader_dependency_get_builtins(info->vertex_source_);
-    info->builtins_ |= gpu_shader_dependency_get_builtins(info->fragment_source_);
-    info->builtins_ |= gpu_shader_dependency_get_builtins(info->geometry_source_);
-    info->builtins_ |= gpu_shader_dependency_get_builtins(info->compute_source_);
+    gpu::shader::BuiltinBits builtins = gpu::shader::BuiltinBits::NONE;
+    builtins = builtins | gpu_shader_dependency_get_builtins(info->vertex_source_);
+    builtins = builtins | gpu_shader_dependency_get_builtins(info->fragment_source_);
+    builtins = builtins | gpu_shader_dependency_get_builtins(info->geometry_source_);
+    builtins = builtins | gpu_shader_dependency_get_builtins(info->compute_source_);
+
+    info->builtins(builtins);
 
     if (!info->compute_source_.is_empty()) {
       info->shared_variables_.extend(
@@ -692,7 +812,7 @@ void gpu_shader_create_info_init()
 
 #if GPU_SHADER_PRINTF_ENABLE
     const bool is_material_shader = StringRefNull(info->name_).startswith("eevee_surf_");
-    if (flag_is_set(info->builtins_, BuiltinBits::USE_PRINTF) ||
+    if (flag_is_set(info->builtins_combined(), BuiltinBits::USE_PRINTF) ||
         (gpu_shader_dependency_force_gpu_print_injection() && is_material_shader))
     {
       info->additional_info("gpu_print");
@@ -701,8 +821,8 @@ void gpu_shader_create_info_init()
 
 #ifndef NDEBUG
     /* Automatically amend the create info for ease of use of the debug feature. */
-    if (flag_is_set(info->builtins_, BuiltinBits::USE_DEBUG_DRAW)) {
-      info->additional_info("draw_debug_draw");
+    if (flag_is_set(info->builtins_combined(), BuiltinBits::USE_DEBUG_DRAW)) {
+      info->additional_info("DebugDraw");
     }
 #endif
   }
@@ -756,6 +876,12 @@ bool gpu_shader_create_info_compile_all(const char *name_starts_with_filter)
         skipped++;
         continue;
       }
+      if (flag_is_set(info->builtins_combined(), BuiltinBits::RAY_QUERY) &&
+          !GPU_ray_query_support())
+      {
+        skipped++;
+        continue;
+      }
       total++;
 
       handles.append(
@@ -795,6 +921,10 @@ bool gpu_shader_create_info_compile_all(const char *name_starts_with_filter)
             case ShaderCreateInfo::Resource::BindType::IMAGE:
               input = interface->texture_get(res.slot);
               name = res.image.name;
+              break;
+            case ShaderCreateInfo::Resource::BindType::ACCELERATION_STRUCTURE:
+              input = interface->acceleration_structure_get(res.slot);
+              name = res.acceleration_structure.name;
               break;
           }
 

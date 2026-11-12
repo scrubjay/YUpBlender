@@ -19,13 +19,13 @@ static void node_declare(NodeDeclarationBuilder &b)
   b.add_input<decl::Vector>("Position"_ustr)
       .subtype(PROP_TRANSLATION)
       .default_value(float3(0.0f))
-      .supports_field()
+      .structure_type(StructureType::Field)
       .description("The positions of the new points");
   b.add_input<decl::Float>("Radius"_ustr)
       .min(0.0f)
       .default_value(0.1f)
       .subtype(PROP_DISTANCE)
-      .supports_field()
+      .structure_type(StructureType::Field)
       .description("The radii of the new points");
   b.add_output<decl::Geometry>("Points"_ustr, "Geometry"_ustr);
 }
@@ -71,7 +71,7 @@ static void node_geo_exec(GeoNodeExecParams params)
   Field<float3> position_field = params.extract_input<Field<float3>>("Position"_ustr);
   Field<float> radius_field = params.extract_input<Field<float>>("Radius"_ustr);
 
-  PointCloud *points = BKE_pointcloud_new_nomain(count);
+  PointCloud *points = BKE_pointcloud_new_nomain(PointCloudType::Points, count);
   MutableAttributeAccessor attributes = points->attributes_for_write();
 
   PointsFieldContext context{count};

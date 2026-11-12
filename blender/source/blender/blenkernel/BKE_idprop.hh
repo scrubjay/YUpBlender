@@ -14,11 +14,11 @@
 #include "DNA_ID.h"
 #include "DNA_ID_enums.h"
 
-#include "BLI_compiler_attrs.h"
+#include "BLI_compiler_attrs.hh"
 #include "BLI_function_ref.hh"
 #include "BLI_span.hh"
 #include "BLI_string_ref.hh"
-#include "BLI_sys_types.h"
+#include "BLI_sys_types.hh"
 #include "BLI_vector_set.hh"
 
 namespace blender {
@@ -59,7 +59,7 @@ union IDPropertyTemplate {
  * \note as a start to move away from the stupid #IDP_New function,
  * this type has its own allocation function.
  */
-IDProperty *IDP_NewIDPArray(StringRef name) ATTR_WARN_UNUSED_RESULT ATTR_NONNULL();
+IDProperty *IDP_NewIDPArray(StringRef name) ATTR_WARN_UNUSED_RESULT;
 /**
  * \param flag: the ID creation/copying flags (`LIB_ID_CREATE_...`), same as passed to
  * #BKE_id_copy_ex.
@@ -81,15 +81,14 @@ void IDP_ResizeIDPArray(IDProperty *prop, int newlen);
  * This function works for strings too!
  */
 void IDP_ResizeArray(IDProperty *prop, int newlen);
-void IDP_FreeArray(IDProperty *prop);
 
 /* ---------- String Type ------------ */
 /**
  * \param st: The string to assign.
  * Doesn't need to be null terminated when clamped by `maxncpy`.
- * \param name: The property name.
- * \param maxncpy: The maximum size of the string (including the `\0` terminator).
+ * \param st_maxncpy: The maximum size of the string (including the `\0` terminator).
  * When zero, this is the equivalent of passing in `strlen(st) + 1`
+ * \param name: The property name.
  * \return The new string property.
  */
 IDProperty *IDP_NewStringMaxSize(const char *st,
@@ -105,7 +104,7 @@ IDProperty *IDP_NewString(blender::StringRef value,
 /**
  * \param st: The string to assign.
  * Doesn't need to be null terminated when clamped by `maxncpy`.
- * \param maxncpy: The maximum size of the string (including the `\0` terminator).
+ * \param st_maxncpy: The maximum size of the string (including the `\0` terminator).
  * When zero, this is the equivalent of passing in `strlen(st) + 1`
  */
 void IDP_AssignStringMaxSize(IDProperty *prop, const char *st, size_t st_maxncpy) ATTR_NONNULL();
@@ -119,6 +118,9 @@ const IDPropertyUIDataEnumItem *IDP_EnumItemFind(const IDProperty *prop);
 bool IDP_EnumItemsValidate(const IDPropertyUIDataEnumItem *items,
                            int items_num,
                            void (*error_fn)(const char *));
+
+/** Free the items and their allocated strings. */
+void IDP_EnumItemsFree(IDPropertyUIDataEnumItem *items, int items_num);
 
 /*-------- ID Type -------*/
 
@@ -288,8 +290,6 @@ IDProperty *IDP_New(char type,
  * \note This will free allocated data, all child properties of arrays and groups, and unlink IDs!
  * But it does not free the actual #IDProperty struct itself.
  */
-void IDP_FreePropertyContent_ex(IDProperty *prop, bool do_id_user);
-void IDP_FreePropertyContent(IDProperty *prop);
 void IDP_FreeProperty_ex(IDProperty *prop, bool do_id_user);
 void IDP_FreeProperty(IDProperty *prop);
 

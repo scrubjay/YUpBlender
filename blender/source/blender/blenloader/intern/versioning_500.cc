@@ -35,19 +35,19 @@
 #include "DNA_world_types.h"
 
 #include "BLI_function_ref.hh"
-#include "BLI_listbase.h"
-#include "BLI_math_color.h"
-#include "BLI_math_vector.h"
+#include "BLI_listbase.hh"
+#include "BLI_math_color_c.hh"
 #include "BLI_math_vector.hh"
+#include "BLI_math_vector_c.hh"
 #include "BLI_math_vector_types.hh"
 #include "BLI_set.hh"
 #include "BLI_string_ref.hh"
-#include "BLI_string_utf8.h"
+#include "BLI_string_utf8.hh"
 #include "BLI_string_utils.hh"
-#include "BLI_sys_types.h"
+#include "BLI_sys_types.hh"
 
 #include "BKE_anim_data.hh"
-#include "BKE_animsys.h"
+#include "BKE_animsys.hh"
 #include "BKE_armature.hh"
 #include "BKE_attribute_legacy_convert.hh"
 #include "BKE_colortools.hh"
@@ -64,6 +64,8 @@
 #include "BKE_paint.hh"
 #include "BKE_pointcache.h"
 #include "BKE_report.hh"
+
+#include "RNA_path.hh"
 
 #include "BLT_translation.hh"
 
@@ -282,14 +284,14 @@ static void initialize_closure_input_structure_types(bNodeTree &ntree)
       }
       for (const int i : IndexRange(storage->input_items.items_num)) {
         NodeEvaluateClosureInputItem &item = storage->input_items.items[i];
-        if (item.structure_type == NODE_INTERFACE_SOCKET_STRUCTURE_TYPE_AUTO) {
-          item.structure_type = NODE_INTERFACE_SOCKET_STRUCTURE_TYPE_DYNAMIC;
+        if (item.structure_type == NodeSocketInterfaceStructureType::Auto) {
+          item.structure_type = NodeSocketInterfaceStructureType::Dynamic;
         }
       }
       for (const int i : IndexRange(storage->output_items.items_num)) {
         NodeEvaluateClosureOutputItem &item = storage->output_items.items[i];
-        if (item.structure_type == NODE_INTERFACE_SOCKET_STRUCTURE_TYPE_AUTO) {
-          item.structure_type = NODE_INTERFACE_SOCKET_STRUCTURE_TYPE_DYNAMIC;
+        if (item.structure_type == NodeSocketInterfaceStructureType::Auto) {
+          item.structure_type = NodeSocketInterfaceStructureType::Dynamic;
         }
       }
     }
@@ -547,9 +549,9 @@ static void do_version_scene_remove_use_nodes(Scene *scene)
  * node vector with the input. */
 static void do_version_normal_node_dot_product(bNodeTree *node_tree, bNode *node)
 {
-  bNodeSocket *normal_input = bke::node_find_socket(*node, SOCK_IN, "Normal");
-  bNodeSocket *normal_output = bke::node_find_socket(*node, SOCK_OUT, "Normal");
-  bNodeSocket *dot_output = bke::node_find_socket(*node, SOCK_OUT, "Dot");
+  bNodeSocket *normal_input = bke::node_find_socket(*node, SOCK_IN, "Normal"_ustr);
+  bNodeSocket *normal_output = bke::node_find_socket(*node, SOCK_OUT, "Normal"_ustr);
+  bNodeSocket *dot_output = bke::node_find_socket(*node, SOCK_OUT, "Dot"_ustr);
 
   /* Find the links going into and out from the node. */
   bNodeLink *normal_input_link = nullptr;
@@ -582,10 +584,12 @@ static void do_version_normal_node_dot_product(bNodeTree *node_tree, bNode *node
   dot_product_node->location[0] = node->location[0];
   dot_product_node->location[1] = node->location[1];
 
-  bNodeSocket *dot_product_a_input = bke::node_find_socket(*dot_product_node, SOCK_IN, "Vector");
+  bNodeSocket *dot_product_a_input = bke::node_find_socket(
+      *dot_product_node, SOCK_IN, "Vector"_ustr);
   bNodeSocket *dot_product_b_input = bke::node_find_socket(
-      *dot_product_node, SOCK_IN, "Vector_001");
-  bNodeSocket *dot_product_output = bke::node_find_socket(*dot_product_node, SOCK_OUT, "Value");
+      *dot_product_node, SOCK_IN, "Vector_001"_ustr);
+  bNodeSocket *dot_product_output = bke::node_find_socket(
+      *dot_product_node, SOCK_OUT, "Value"_ustr);
 
   copy_v3_v3(static_cast<bNodeSocketValueVector *>(dot_product_a_input->default_value)->value,
              static_cast<bNodeSocketValueVector *>(normal_input->default_value)->value);
@@ -626,7 +630,7 @@ static void do_version_normal_node_dot_product(bNodeTree *node_tree, bNode *node
 
 static void do_version_transform_geometry_options_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Mode")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Mode"_ustr)) {
     return;
   }
   bNodeSocket &socket = version_node_add_socket(ntree, node, SOCK_IN, "NodeSocketMenu", "Mode");
@@ -635,7 +639,7 @@ static void do_version_transform_geometry_options_to_inputs(bNodeTree &ntree, bN
 
 static void do_version_points_to_volume_options_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Resolution Mode")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Resolution Mode"_ustr)) {
     return;
   }
   if (!version_node_ensure_storage_or_invalidate(node)) {
@@ -650,12 +654,12 @@ static void do_version_points_to_volume_options_to_inputs(bNodeTree &ntree, bNod
 
 static void do_version_triangulate_options_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (!bke::node_find_socket(node, SOCK_IN, "Quad Method")) {
+  if (!bke::node_find_socket(node, SOCK_IN, "Quad Method"_ustr)) {
     bNodeSocket &socket = version_node_add_socket(
         ntree, node, SOCK_IN, "NodeSocketMenu", "Quad Method");
     socket.default_value_typed<bNodeSocketValueMenu>()->value = node.custom1;
   }
-  if (!bke::node_find_socket(node, SOCK_IN, "N-gon Method")) {
+  if (!bke::node_find_socket(node, SOCK_IN, "N-gon Method"_ustr)) {
     bNodeSocket &socket = version_node_add_socket(
         ntree, node, SOCK_IN, "NodeSocketMenu", "N-gon Method");
     socket.default_value_typed<bNodeSocketValueMenu>()->value = node.custom2;
@@ -664,7 +668,7 @@ static void do_version_triangulate_options_to_inputs(bNodeTree &ntree, bNode &no
 
 static void do_version_volume_to_mesh_options_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Resolution Mode")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Resolution Mode"_ustr)) {
     return;
   }
   if (!version_node_ensure_storage_or_invalidate(node)) {
@@ -678,7 +682,7 @@ static void do_version_volume_to_mesh_options_to_inputs(bNodeTree &ntree, bNode 
 
 static void do_version_match_string_options_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Operation")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Operation"_ustr)) {
     return;
   }
   bNodeSocket &socket = version_node_add_socket(
@@ -688,7 +692,7 @@ static void do_version_match_string_options_to_inputs(bNodeTree &ntree, bNode &n
 
 static void do_version_fill_curve_options_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Mode")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Mode"_ustr)) {
     return;
   }
   if (!version_node_ensure_storage_or_invalidate(node)) {
@@ -701,7 +705,7 @@ static void do_version_fill_curve_options_to_inputs(bNodeTree &ntree, bNode &nod
 
 static void do_version_fillet_curve_options_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Mode")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Mode"_ustr)) {
     return;
   }
   if (!version_node_ensure_storage_or_invalidate(node)) {
@@ -714,7 +718,7 @@ static void do_version_fillet_curve_options_to_inputs(bNodeTree &ntree, bNode &n
 
 static void do_version_resample_curve_options_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Mode")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Mode"_ustr)) {
     return;
   }
   if (!version_node_ensure_storage_or_invalidate(node)) {
@@ -727,7 +731,7 @@ static void do_version_resample_curve_options_to_inputs(bNodeTree &ntree, bNode 
 
 static void do_version_distribute_points_in_volume_options_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Mode")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Mode"_ustr)) {
     return;
   }
   if (!version_node_ensure_storage_or_invalidate(node)) {
@@ -740,7 +744,7 @@ static void do_version_distribute_points_in_volume_options_to_inputs(bNodeTree &
 
 static void do_version_merge_by_distance_options_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Mode")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Mode"_ustr)) {
     return;
   }
   if (!version_node_ensure_storage_or_invalidate(node)) {
@@ -753,7 +757,7 @@ static void do_version_merge_by_distance_options_to_inputs(bNodeTree &ntree, bNo
 
 static void do_version_mesh_to_volume_options_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Resolution Mode")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Resolution Mode"_ustr)) {
     return;
   }
   if (!version_node_ensure_storage_or_invalidate(node)) {
@@ -767,7 +771,7 @@ static void do_version_mesh_to_volume_options_to_inputs(bNodeTree &ntree, bNode 
 
 static void do_version_raycast_options_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Interpolation")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Interpolation"_ustr)) {
     return;
   }
   if (!version_node_ensure_storage_or_invalidate(node)) {
@@ -781,7 +785,7 @@ static void do_version_raycast_options_to_inputs(bNodeTree &ntree, bNode &node)
 
 static void do_version_remove_attribute_options_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Pattern Mode")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Pattern Mode"_ustr)) {
     return;
   }
   bNodeSocket &socket = version_node_add_socket(
@@ -791,7 +795,7 @@ static void do_version_remove_attribute_options_to_inputs(bNodeTree &ntree, bNod
 
 static void do_version_sample_grid_options_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Interpolation")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Interpolation"_ustr)) {
     return;
   }
   bNodeSocket &socket = version_node_add_socket(
@@ -801,7 +805,7 @@ static void do_version_sample_grid_options_to_inputs(bNodeTree &ntree, bNode &no
 
 static void do_version_scale_elements_options_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Scale Mode")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Scale Mode"_ustr)) {
     return;
   }
   bNodeSocket &socket = version_node_add_socket(
@@ -811,7 +815,7 @@ static void do_version_scale_elements_options_to_inputs(bNodeTree &ntree, bNode 
 
 static void do_version_set_curve_normal_options_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Mode")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Mode"_ustr)) {
     return;
   }
   bNodeSocket &socket = version_node_add_socket(ntree, node, SOCK_IN, "NodeSocketMenu", "Mode");
@@ -824,12 +828,12 @@ static void do_version_subdivision_surface_options_to_inputs(bNodeTree &ntree, b
     return;
   }
   auto &storage = *static_cast<NodeGeometrySubdivisionSurface *>(node.storage);
-  if (!bke::node_find_socket(node, SOCK_IN, "UV Smooth")) {
+  if (!bke::node_find_socket(node, SOCK_IN, "UV Smooth"_ustr)) {
     bNodeSocket &socket = version_node_add_socket(
         ntree, node, SOCK_IN, "NodeSocketMenu", "UV Smooth");
     socket.default_value_typed<bNodeSocketValueMenu>()->value = storage.uv_smooth;
   }
-  if (!bke::node_find_socket(node, SOCK_IN, "Boundary Smooth")) {
+  if (!bke::node_find_socket(node, SOCK_IN, "Boundary Smooth"_ustr)) {
     bNodeSocket &socket = version_node_add_socket(
         ntree, node, SOCK_IN, "NodeSocketMenu", "Boundary Smooth");
     socket.default_value_typed<bNodeSocketValueMenu>()->value = storage.boundary_smooth;
@@ -838,7 +842,7 @@ static void do_version_subdivision_surface_options_to_inputs(bNodeTree &ntree, b
 
 static void do_version_uv_pack_islands_options_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Method")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Method"_ustr)) {
     return;
   }
   bNodeSocket &socket = version_node_add_socket(ntree, node, SOCK_IN, "NodeSocketMenu", "Method");
@@ -847,7 +851,7 @@ static void do_version_uv_pack_islands_options_to_inputs(bNodeTree &ntree, bNode
 
 static void do_version_uv_unwrap_options_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Method")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Method"_ustr)) {
     return;
   }
   if (!version_node_ensure_storage_or_invalidate(node)) {
@@ -929,8 +933,8 @@ static void do_version_mix_color_use_alpha(bNodeTree *node_tree, bNode *node)
 
   bke::node_tree_set_type(*node_tree);
 
-  bNodeSocket *factor_input = bke::node_find_socket(*node, SOCK_IN, "Factor_Float");
-  bNodeSocket *b_input = bke::node_find_socket(*node, SOCK_IN, "B_Color");
+  bNodeSocket *factor_input = bke::node_find_socket(*node, SOCK_IN, "Factor_Float"_ustr);
+  bNodeSocket *b_input = bke::node_find_socket(*node, SOCK_IN, "B_Color"_ustr);
 
   /* Find the links going into the factor and B input of the Mix node. */
   bNodeLink *factor_link = nullptr;
@@ -963,7 +967,7 @@ static void do_version_mix_color_use_alpha(bNodeTree *node_tree, bNode *node)
       BLI_findlink(&multiply_node->inputs, 0));
   bNodeSocket *multiply_input_b = static_cast<bNodeSocket *>(
       BLI_findlink(&multiply_node->inputs, 1));
-  bNodeSocket *multiply_output = bke::node_find_socket(*multiply_node, SOCK_OUT, "Value");
+  bNodeSocket *multiply_output = bke::node_find_socket(*multiply_node, SOCK_OUT, "Value"_ustr);
 
   /* Connect the output of the multiply node to the math node. */
   version_node_add_link(*node_tree, *multiply_node, *multiply_output, *node, *factor_input);
@@ -995,8 +999,9 @@ static void do_version_mix_color_use_alpha(bNodeTree *node_tree, bNode *node)
     separate_color_node->location[1] = multiply_node->location[1];
     separate_color_node->flag |= NODE_COLLAPSED;
 
-    bNodeSocket *image_input = bke::node_find_socket(*separate_color_node, SOCK_IN, "Image");
-    bNodeSocket *alpha_output = bke::node_find_socket(*separate_color_node, SOCK_OUT, "Alpha");
+    bNodeSocket *image_input = bke::node_find_socket(*separate_color_node, SOCK_IN, "Image"_ustr);
+    bNodeSocket *alpha_output = bke::node_find_socket(
+        *separate_color_node, SOCK_OUT, "Alpha"_ustr);
 
     version_node_add_link(
         *node_tree, *b_link->fromnode, *b_link->fromsock, *separate_color_node, *image_input);
@@ -1030,7 +1035,7 @@ static void do_version_map_value_node(bNodeTree *node_tree, bNode *node)
   const float min = texture_mapping.min[0];
   const float max = texture_mapping.max[0];
 
-  bNodeSocket *value_input = bke::node_find_socket(*node, SOCK_IN, "Value");
+  bNodeSocket *value_input = bke::node_find_socket(*node, SOCK_IN, "Value"_ustr);
 
   /* Find the link going into the value input Map Value node. */
   bNodeLink *value_link = nullptr;
@@ -1239,7 +1244,7 @@ static void do_version_convert_to_generic_nodes(bNodeTree *node_tree)
 
         /* Compositor node uses "Image" as the output name while the shader node uses "Color" as
          * the output name. */
-        bNodeSocket *image_output = bke::node_find_socket(node, SOCK_OUT, "Image");
+        bNodeSocket *image_output = bke::node_find_socket(node, SOCK_OUT, "Image"_ustr);
         version_node_socket_identifier_set(*image_output, "Color");
         STRNCPY_UTF8(image_output->name, "Color");
 
@@ -1258,7 +1263,7 @@ static void do_version_convert_to_generic_nodes(bNodeTree *node_tree)
 
         /* Compositor node uses "Value" as the output name while the shader node uses "Result" as
          * the output name. */
-        bNodeSocket *value_output = bke::node_find_socket(node, SOCK_OUT, "Value");
+        bNodeSocket *value_output = bke::node_find_socket(node, SOCK_OUT, "Value"_ustr);
         version_node_socket_identifier_set(*value_output, "Result");
         STRNCPY_UTF8(value_output->name, "Result");
 
@@ -1280,16 +1285,16 @@ static void do_version_convert_to_generic_nodes(bNodeTree *node_tree)
         /* Compositor node uses "Fac", "Image", and ("Image" "Image_001") as socket names and
          * identifiers while the shader node uses ("Factor", "Factor_Float"), ("A", "A_Color"),
          * ("B", "B_Color"), and ("Result", "Result_Color") as socket names and identifiers. */
-        bNodeSocket *factor_input = bke::node_find_socket(node, SOCK_IN, "Fac");
+        bNodeSocket *factor_input = bke::node_find_socket(node, SOCK_IN, "Fac"_ustr);
         version_node_socket_identifier_set(*factor_input, "Factor_Float");
         STRNCPY_UTF8(factor_input->name, "Factor");
-        bNodeSocket *first_input = bke::node_find_socket(node, SOCK_IN, "Image");
+        bNodeSocket *first_input = bke::node_find_socket(node, SOCK_IN, "Image"_ustr);
         version_node_socket_identifier_set(*first_input, "A_Color");
         STRNCPY_UTF8(first_input->name, "A");
-        bNodeSocket *second_input = bke::node_find_socket(node, SOCK_IN, "Image_001");
+        bNodeSocket *second_input = bke::node_find_socket(node, SOCK_IN, "Image_001"_ustr);
         version_node_socket_identifier_set(*second_input, "B_Color");
         STRNCPY_UTF8(second_input->name, "B");
-        bNodeSocket *image_output = bke::node_find_socket(node, SOCK_OUT, "Image");
+        bNodeSocket *image_output = bke::node_find_socket(node, SOCK_OUT, "Image"_ustr);
         version_node_socket_identifier_set(*image_output, "Result_Color");
         STRNCPY_UTF8(image_output->name, "Result");
 
@@ -1309,10 +1314,9 @@ static void do_version_convert_to_generic_nodes(bNodeTree *node_tree)
 
 /* Equivalent to do_version_convert_to_generic_nodes but performed after linking for handing things
  * like animation or node construction. */
-static void do_version_convert_to_generic_nodes_after_linking(Main *bmain,
-                                                              bNodeTree *node_tree,
-                                                              ID *id)
+static void do_version_convert_to_generic_nodes_after_linking(Main *bmain, bNodeTree *node_tree)
 {
+  const DriverMap driver_map = BKE_animdata_build_driver_target_map(*bmain);
   for (bNode &node : node_tree->nodes.items_mutable()) {
     char escaped_node_name[sizeof(node.name) * 2 + 1];
     BLI_str_escape(escaped_node_name, node.name, sizeof(escaped_node_name));
@@ -1324,15 +1328,12 @@ static void do_version_convert_to_generic_nodes_after_linking(Main *bmain,
       case SH_NODE_CURVE_VEC: {
         /* The node gained a new Factor input as a first socket, so the vector socket moved to be
          * the second socket and we need to transfer its animation as well. */
-        BKE_animdata_fix_paths_rename_all_ex(bmain,
-                                             id,
-                                             rna_path_prefix.c_str(),
-                                             nullptr,
-                                             nullptr,
-                                             0,
-                                             1,
-                                             /*verify_paths=*/false,
-                                             /*infix_is_name=*/true);
+        BKE_animdata_fix_paths(node_tree->id,
+                               rna_path_prefix,
+                               RNA_path_number_to_infix(0),
+                               RNA_path_number_to_infix(1),
+                               /*verify_paths=*/false,
+                               driver_map);
         break;
       }
       /* Notice that we use the shader type because the node is already converted in versioning
@@ -1340,24 +1341,18 @@ static void do_version_convert_to_generic_nodes_after_linking(Main *bmain,
       case SH_NODE_MIX: {
         /* The node gained multiple new sockets after the factor socket, so the second and third
          * sockets moved to be the 7th and 8th sockets. */
-        BKE_animdata_fix_paths_rename_all_ex(bmain,
-                                             id,
-                                             rna_path_prefix.c_str(),
-                                             nullptr,
-                                             nullptr,
-                                             1,
-                                             6,
-                                             /*verify_paths=*/false,
-                                             /*infix_is_name=*/true);
-        BKE_animdata_fix_paths_rename_all_ex(bmain,
-                                             id,
-                                             rna_path_prefix.c_str(),
-                                             nullptr,
-                                             nullptr,
-                                             2,
-                                             7,
-                                             /*verify_paths=*/false,
-                                             /*infix_is_name=*/true);
+        BKE_animdata_fix_paths(node_tree->id,
+                               rna_path_prefix,
+                               RNA_path_number_to_infix(1),
+                               RNA_path_number_to_infix(6),
+                               /*verify_paths=*/false,
+                               driver_map);
+        BKE_animdata_fix_paths(node_tree->id,
+                               rna_path_prefix,
+                               RNA_path_number_to_infix(2),
+                               RNA_path_number_to_infix(7),
+                               /*verify_paths=*/false,
+                               driver_map);
         break;
       }
       default:
@@ -1368,16 +1363,16 @@ static void do_version_convert_to_generic_nodes_after_linking(Main *bmain,
 
 static void do_version_split_node_rotation(bNodeTree *node_tree, bNode *node)
 {
-  bNodeSocket *factor_input = bke::node_find_socket(*node, SOCK_IN, "Factor");
+  bNodeSocket *factor_input = bke::node_find_socket(*node, SOCK_IN, "Factor"_ustr);
   float factor = factor_input->default_value_typed<bNodeSocketValueFloat>()->value;
 
-  bNodeSocket *rotation_input = bke::node_find_socket(*node, SOCK_IN, "Rotation");
+  bNodeSocket *rotation_input = bke::node_find_socket(*node, SOCK_IN, "Rotation"_ustr);
   if (!rotation_input) {
     rotation_input = bke::node_add_static_socket(
         *node_tree, *node, SOCK_IN, SOCK_FLOAT, PROP_ANGLE, "Rotation", "Rotation");
   }
 
-  bNodeSocket *position_input = bke::node_find_socket(*node, SOCK_IN, "Position");
+  bNodeSocket *position_input = bke::node_find_socket(*node, SOCK_IN, "Position"_ustr);
   if (!position_input) {
     position_input = bke::node_add_static_socket(
         *node_tree, *node, SOCK_IN, SOCK_VECTOR, PROP_FACTOR, "Position", "Position");
@@ -1463,7 +1458,7 @@ static void do_version_remove_lzo_and_lzma_compression(FileData *fd, Object *obj
         pid.owner_id->name + 2);
   }
 
-  BLI_freelistN(&pidlist);
+  pidlist.free_no_destruct();
 }
 
 static void do_version_convert_gp_jitter_values(Brush *brush)
@@ -1514,24 +1509,24 @@ static void do_version_sun_beams(bNodeTree &node_tree, bNode &node)
 {
   bke::node_tree_set_type(node_tree);
 
-  bNodeSocket *old_image_input = bke::node_find_socket(node, SOCK_IN, "Image");
-  bNodeSocket *old_source_input = bke::node_find_socket(node, SOCK_IN, "Source");
-  bNodeSocket *old_length_input = bke::node_find_socket(node, SOCK_IN, "Length");
-  bNodeSocket *old_image_output = bke::node_find_socket(node, SOCK_OUT, "Image");
+  bNodeSocket *old_image_input = bke::node_find_socket(node, SOCK_IN, "Image"_ustr);
+  bNodeSocket *old_source_input = bke::node_find_socket(node, SOCK_IN, "Source"_ustr);
+  bNodeSocket *old_length_input = bke::node_find_socket(node, SOCK_IN, "Length"_ustr);
+  bNodeSocket *old_image_output = bke::node_find_socket(node, SOCK_OUT, "Image"_ustr);
 
   bNode *glare_node = bke::node_add_node(nullptr, node_tree, "CompositorNodeGlare"_ustr);
   glare_node->parent = node.parent;
   glare_node->location[0] = node.location[0];
   glare_node->location[1] = node.location[1];
 
-  bNodeSocket *image_input = bke::node_find_socket(*glare_node, SOCK_IN, "Image");
-  bNodeSocket *type_input = bke::node_find_socket(*glare_node, SOCK_IN, "Type");
-  bNodeSocket *quality_input = bke::node_find_socket(*glare_node, SOCK_IN, "Quality");
+  bNodeSocket *image_input = bke::node_find_socket(*glare_node, SOCK_IN, "Image"_ustr);
+  bNodeSocket *type_input = bke::node_find_socket(*glare_node, SOCK_IN, "Type"_ustr);
+  bNodeSocket *quality_input = bke::node_find_socket(*glare_node, SOCK_IN, "Quality"_ustr);
   bNodeSocket *threshold_input = bke::node_find_socket(
-      *glare_node, SOCK_IN, "Highlights Threshold");
-  bNodeSocket *size_input = bke::node_find_socket(*glare_node, SOCK_IN, "Size");
-  bNodeSocket *source_input = bke::node_find_socket(*glare_node, SOCK_IN, "Sun Position");
-  bNodeSocket *glare_output = bke::node_find_socket(*glare_node, SOCK_OUT, "Glare");
+      *glare_node, SOCK_IN, "Highlights Threshold"_ustr);
+  bNodeSocket *size_input = bke::node_find_socket(*glare_node, SOCK_IN, "Size"_ustr);
+  bNodeSocket *source_input = bke::node_find_socket(*glare_node, SOCK_IN, "Sun Position"_ustr);
+  bNodeSocket *glare_output = bke::node_find_socket(*glare_node, SOCK_OUT, "Glare"_ustr);
 
   type_input->default_value_typed<bNodeSocketValueMenu>()->value = CMP_NODE_GLARE_SUN_BEAMS;
   quality_input->default_value_typed<bNodeSocketValueMenu>()->value = CMP_NODE_GLARE_QUALITY_HIGH;
@@ -1586,7 +1581,7 @@ static bNode *do_version_composite_node_in_scene_tree(bNodeTree &node_tree, bNod
     return nullptr;
   }
 
-  bNodeSocket *old_image_input = bke::node_find_socket(node, SOCK_IN, "Image");
+  bNodeSocket *old_image_input = bke::node_find_socket(node, SOCK_IN, "Image"_ustr);
 
   /* Find the link going into the Image input of the Composite node. */
   bNodeLink *image_link = nullptr;
@@ -1601,7 +1596,7 @@ static bNode *do_version_composite_node_in_scene_tree(bNodeTree &node_tree, bNod
   group_output_node->location[0] = node.location[0];
   group_output_node->location[1] = node.location[1];
 
-  bNodeSocket *image_input = static_cast<bNodeSocket *>(group_output_node->inputs.first);
+  bNodeSocket *image_input = group_output_node->inputs.first();
   BLI_assert(StringRef(image_input->name) == "Image");
   copy_v4_v4(image_input->default_value_typed<bNodeSocketValueRGBA>()->value,
              old_image_input->default_value_typed<bNodeSocketValueRGBA>()->value);
@@ -1635,7 +1630,7 @@ static void do_version_file_output_node(bNode &node)
   STRNCPY(data->directory, directory);
   data->file_name = BLI_strdup_null(file_name);
 
-  data->items_count = BLI_listbase_count(&node.inputs);
+  data->items_count = node.inputs.count();
   data->items = MEM_new_array<NodeCompositorFileOutputItem>(data->items_count, __func__);
 
   for (const auto [i, input] : node.inputs.enumerate()) {
@@ -1755,7 +1750,7 @@ static void do_version_world_remove_use_nodes(Main *bmain, World *world)
 
 static void do_version_blur_menus_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Type")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Type"_ustr)) {
     return;
   }
   if (!version_node_ensure_storage_or_invalidate(node)) {
@@ -1768,7 +1763,7 @@ static void do_version_blur_menus_to_inputs(bNodeTree &ntree, bNode &node)
 
 static void do_version_filter_menus_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Type")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Type"_ustr)) {
     return;
   }
   bNodeSocket &socket = version_node_add_socket(ntree, node, SOCK_IN, "NodeSocketMenu", "Type");
@@ -1777,7 +1772,7 @@ static void do_version_filter_menus_to_inputs(bNodeTree &ntree, bNode &node)
 
 static void do_version_levels_menus_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Channel")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Channel"_ustr)) {
     return;
   }
   bNodeSocket &socket = version_node_add_socket(ntree, node, SOCK_IN, "NodeSocketMenu", "Channel");
@@ -1786,7 +1781,7 @@ static void do_version_levels_menus_to_inputs(bNodeTree &ntree, bNode &node)
 
 static void do_version_dilate_menus_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Type")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Type"_ustr)) {
     return;
   }
   if (!version_node_ensure_storage_or_invalidate(node)) {
@@ -1804,7 +1799,7 @@ static void do_version_dilate_menus_to_inputs(bNodeTree &ntree, bNode &node)
 
 static void do_version_tone_map_menus_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Type")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Type"_ustr)) {
     return;
   }
   if (!version_node_ensure_storage_or_invalidate(node)) {
@@ -1818,7 +1813,7 @@ static void do_version_tone_map_menus_to_inputs(bNodeTree &ntree, bNode &node)
 
 static void do_version_lens_distortion_menus_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Type")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Type"_ustr)) {
     return;
   }
   if (!version_node_ensure_storage_or_invalidate(node)) {
@@ -1832,7 +1827,7 @@ static void do_version_lens_distortion_menus_to_inputs(bNodeTree &ntree, bNode &
 
 static void do_version_kuwahara_menus_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Type")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Type"_ustr)) {
     return;
   }
   if (!version_node_ensure_storage_or_invalidate(node)) {
@@ -1846,7 +1841,7 @@ static void do_version_kuwahara_menus_to_inputs(bNodeTree &ntree, bNode &node)
 
 static void do_version_denoise_menus_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Prefilter")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Prefilter"_ustr)) {
     return;
   }
   if (!version_node_ensure_storage_or_invalidate(node)) {
@@ -1864,7 +1859,7 @@ static void do_version_denoise_menus_to_inputs(bNodeTree &ntree, bNode &node)
 
 static void do_version_translate_menus_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Interpolation")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Interpolation"_ustr)) {
     return;
   }
   if (!version_node_ensure_storage_or_invalidate(node)) {
@@ -1885,7 +1880,7 @@ static void do_version_translate_menus_to_inputs(bNodeTree &ntree, bNode &node)
 
 static void do_version_transform_menus_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Interpolation")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Interpolation"_ustr)) {
     return;
   }
   if (!version_node_ensure_storage_or_invalidate(node)) {
@@ -1906,7 +1901,7 @@ static void do_version_transform_menus_to_inputs(bNodeTree &ntree, bNode &node)
 
 static void do_version_corner_pin_menus_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Interpolation")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Interpolation"_ustr)) {
     return;
   }
   if (!version_node_ensure_storage_or_invalidate(node)) {
@@ -1927,7 +1922,7 @@ static void do_version_corner_pin_menus_to_inputs(bNodeTree &ntree, bNode &node)
 
 static void do_version_map_uv_menus_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Interpolation")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Interpolation"_ustr)) {
     return;
   }
   if (!version_node_ensure_storage_or_invalidate(node)) {
@@ -1948,7 +1943,7 @@ static void do_version_map_uv_menus_to_inputs(bNodeTree &ntree, bNode &node)
 
 static void do_version_scale_menus_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Interpolation")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Interpolation"_ustr)) {
     return;
   }
   if (!version_node_ensure_storage_or_invalidate(node)) {
@@ -1976,7 +1971,7 @@ static void do_version_scale_menus_to_inputs(bNodeTree &ntree, bNode &node)
 
 static void do_version_rotate_menus_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Interpolation")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Interpolation"_ustr)) {
     return;
   }
   if (!version_node_ensure_storage_or_invalidate(node)) {
@@ -1997,7 +1992,7 @@ static void do_version_rotate_menus_to_inputs(bNodeTree &ntree, bNode &node)
 
 static void do_version_displace_menus_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Interpolation")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Interpolation"_ustr)) {
     return;
   }
   if (!version_node_ensure_storage_or_invalidate(node)) {
@@ -2018,7 +2013,7 @@ static void do_version_displace_menus_to_inputs(bNodeTree &ntree, bNode &node)
 
 static void do_version_stabilize_2d_menus_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Interpolation")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Interpolation"_ustr)) {
     return;
   }
 
@@ -2029,7 +2024,7 @@ static void do_version_stabilize_2d_menus_to_inputs(bNodeTree &ntree, bNode &nod
 
 static void do_version_box_mask_menus_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Operation")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Operation"_ustr)) {
     return;
   }
 
@@ -2040,7 +2035,7 @@ static void do_version_box_mask_menus_to_inputs(bNodeTree &ntree, bNode &node)
 
 static void do_version_ellipse_mask_menus_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Operation")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Operation"_ustr)) {
     return;
   }
 
@@ -2051,7 +2046,7 @@ static void do_version_ellipse_mask_menus_to_inputs(bNodeTree &ntree, bNode &nod
 
 static void do_version_track_position_menus_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Mode")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Mode"_ustr)) {
     return;
   }
 
@@ -2065,7 +2060,7 @@ static void do_version_track_position_menus_to_inputs(bNodeTree &ntree, bNode &n
 
 static void do_version_keying_menus_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Feather Falloff")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Feather Falloff"_ustr)) {
     return;
   }
   if (!version_node_ensure_storage_or_invalidate(node)) {
@@ -2081,7 +2076,7 @@ static void do_version_keying_menus_to_inputs(bNodeTree &ntree, bNode &node)
 
 static void do_version_mask_menus_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Size Source")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Size Source"_ustr)) {
     return;
   }
 
@@ -2092,7 +2087,7 @@ static void do_version_mask_menus_to_inputs(bNodeTree &ntree, bNode &node)
 
 static void do_version_movie_distortion_menus_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Type")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Type"_ustr)) {
     return;
   }
 
@@ -2103,7 +2098,7 @@ static void do_version_movie_distortion_menus_to_inputs(bNodeTree &ntree, bNode 
 
 static void do_version_glare_menus_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Type")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Type"_ustr)) {
     return;
   }
   if (!version_node_ensure_storage_or_invalidate(node)) {
@@ -2195,12 +2190,13 @@ static void do_version_material_remove_use_nodes(Main *bmain, Material *material
     new_output_eevee.custom1 = SHD_OUTPUT_EEVEE;
 
     bNode &shader_eevee = *bke::node_add_static_node(nullptr, *ntree, SH_NODE_BSDF_PRINCIPLED);
-    bNodeSocket &shader_bsdf_output = *bke::node_find_socket(shader_eevee, SOCK_OUT, "BSDF");
-    bNodeSocket &shader_color_input = *bke::node_find_socket(shader_eevee, SOCK_IN, "Base Color");
+    bNodeSocket &shader_bsdf_output = *bke::node_find_socket(shader_eevee, SOCK_OUT, "BSDF"_ustr);
+    bNodeSocket &shader_color_input = *bke::node_find_socket(
+        shader_eevee, SOCK_IN, "Base Color"_ustr);
     bNodeSocket &specular_input = *bke::node_find_socket(
-        shader_eevee, SOCK_IN, "Specular IOR Level");
-    bNodeSocket &metallic_input = *bke::node_find_socket(shader_eevee, SOCK_IN, "Metallic");
-    bNodeSocket &roughness_input = *bke::node_find_socket(shader_eevee, SOCK_IN, "Roughness");
+        shader_eevee, SOCK_IN, "Specular IOR Level"_ustr);
+    bNodeSocket &metallic_input = *bke::node_find_socket(shader_eevee, SOCK_IN, "Metallic"_ustr);
+    bNodeSocket &roughness_input = *bke::node_find_socket(shader_eevee, SOCK_IN, "Roughness"_ustr);
 
     version_node_add_link(
         *ntree, shader_eevee, shader_bsdf_output, new_output_eevee, output_surface_input);
@@ -2242,8 +2238,8 @@ static void do_version_material_remove_use_nodes(Main *bmain, Material *material
     new_output_cycles.custom1 = SHD_OUTPUT_CYCLES;
 
     bNode &shader_cycles = *bke::node_add_static_node(nullptr, *ntree, SH_NODE_BSDF_DIFFUSE);
-    bNodeSocket &shader_bsdf_output = *bke::node_find_socket(shader_cycles, SOCK_OUT, "BSDF");
-    bNodeSocket &shader_color_input = *bke::node_find_socket(shader_cycles, SOCK_IN, "Color");
+    bNodeSocket &shader_bsdf_output = *bke::node_find_socket(shader_cycles, SOCK_OUT, "BSDF"_ustr);
+    bNodeSocket &shader_color_input = *bke::node_find_socket(shader_cycles, SOCK_IN, "Color"_ustr);
 
     version_node_add_link(
         *ntree, shader_cycles, shader_bsdf_output, new_output_cycles, output_surface_input);
@@ -2269,7 +2265,7 @@ static void do_version_material_remove_use_nodes(Main *bmain, Material *material
 
 static void do_version_set_alpha_menus_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Type")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Type"_ustr)) {
     return;
   }
   if (!version_node_ensure_storage_or_invalidate(node)) {
@@ -2283,7 +2279,7 @@ static void do_version_set_alpha_menus_to_inputs(bNodeTree &ntree, bNode &node)
 
 static void do_version_channel_matte_menus_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Color Space")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Color Space"_ustr)) {
     return;
   }
   if (!version_node_ensure_storage_or_invalidate(node)) {
@@ -2330,7 +2326,7 @@ static void do_version_channel_matte_menus_to_inputs(bNodeTree &ntree, bNode &no
 
 static void do_version_color_balance_menus_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Type")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Type"_ustr)) {
     return;
   }
 
@@ -2340,7 +2336,7 @@ static void do_version_color_balance_menus_to_inputs(bNodeTree &ntree, bNode &no
 
 static void do_version_convert_alpha_menus_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Type")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Type"_ustr)) {
     return;
   }
 
@@ -2350,7 +2346,7 @@ static void do_version_convert_alpha_menus_to_inputs(bNodeTree &ntree, bNode &no
 
 static void do_version_distance_matte_menus_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Color Space")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Color Space"_ustr)) {
     return;
   }
   if (!version_node_ensure_storage_or_invalidate(node)) {
@@ -2365,7 +2361,7 @@ static void do_version_distance_matte_menus_to_inputs(bNodeTree &ntree, bNode &n
 
 static void do_version_color_spill_menus_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Spill Channel")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Spill Channel"_ustr)) {
     return;
   }
   if (!version_node_ensure_storage_or_invalidate(node)) {
@@ -2387,7 +2383,7 @@ static void do_version_color_spill_menus_to_inputs(bNodeTree &ntree, bNode &node
 
 static void do_version_double_edge_mask_options_to_inputs(bNodeTree &ntree, bNode &node)
 {
-  if (bke::node_find_socket(node, SOCK_IN, "Image Edges")) {
+  if (bke::node_find_socket(node, SOCK_IN, "Image Edges"_ustr)) {
     return;
   }
 
@@ -2410,7 +2406,7 @@ static void version_dynamic_viewer_node_items(bNodeTree &ntree)
       return;
     }
     NodeGeometryViewer *storage = static_cast<NodeGeometryViewer *>(node.storage);
-    const int input_sockets_num = BLI_listbase_count(&node.inputs);
+    const int input_sockets_num = node.inputs.count();
     if (input_sockets_num == storage->items_num + 1) {
       /* Make versioning idempotent. */
       continue;
@@ -2435,9 +2431,9 @@ static void do_version_displace_node_remove_xy_scale(bNodeTree &node_tree, bNode
 {
   bke::node_tree_set_type(node_tree);
 
-  bNodeSocket *displacement_input = bke::node_find_socket(node, SOCK_IN, "Displacement");
-  bNodeSocket *x_scale_input = bke::node_find_socket(node, SOCK_IN, "X Scale");
-  bNodeSocket *y_scale_input = bke::node_find_socket(node, SOCK_IN, "Y Scale");
+  bNodeSocket *displacement_input = bke::node_find_socket(node, SOCK_IN, "Displacement"_ustr);
+  bNodeSocket *x_scale_input = bke::node_find_socket(node, SOCK_IN, "X Scale"_ustr);
+  bNodeSocket *y_scale_input = bke::node_find_socket(node, SOCK_IN, "Y Scale"_ustr);
 
   /* Find the link going into the inputs of the node. */
   bNodeLink *displacement_link = nullptr;
@@ -2461,9 +2457,10 @@ static void do_version_displace_node_remove_xy_scale(bNodeTree &node_tree, bNode
   multiply_node->location[1] = node.location[1];
   multiply_node->custom1 = NODE_VECTOR_MATH_MULTIPLY;
 
-  bNodeSocket *multiply_a_input = bke::node_find_socket(*multiply_node, SOCK_IN, "Vector");
-  bNodeSocket *multiply_b_input = bke::node_find_socket(*multiply_node, SOCK_IN, "Vector_001");
-  bNodeSocket *multiply_output = bke::node_find_socket(*multiply_node, SOCK_OUT, "Vector");
+  bNodeSocket *multiply_a_input = bke::node_find_socket(*multiply_node, SOCK_IN, "Vector"_ustr);
+  bNodeSocket *multiply_b_input = bke::node_find_socket(
+      *multiply_node, SOCK_IN, "Vector_001"_ustr);
+  bNodeSocket *multiply_output = bke::node_find_socket(*multiply_node, SOCK_OUT, "Vector"_ustr);
 
   copy_v2_v2(multiply_a_input->default_value_typed<bNodeSocketValueVector>()->value,
              displacement_input->default_value_typed<bNodeSocketValueVector>()->value);
@@ -2483,9 +2480,9 @@ static void do_version_displace_node_remove_xy_scale(bNodeTree &node_tree, bNode
   combine_node->location[0] = multiply_node->location[0] - multiply_node->width - 20.0f;
   combine_node->location[1] = multiply_node->location[1];
 
-  bNodeSocket *combine_x_input = bke::node_find_socket(*combine_node, SOCK_IN, "X");
-  bNodeSocket *combine_y_input = bke::node_find_socket(*combine_node, SOCK_IN, "Y");
-  bNodeSocket *combine_output = bke::node_find_socket(*combine_node, SOCK_OUT, "Vector");
+  bNodeSocket *combine_x_input = bke::node_find_socket(*combine_node, SOCK_IN, "X"_ustr);
+  bNodeSocket *combine_y_input = bke::node_find_socket(*combine_node, SOCK_IN, "Y"_ustr);
+  bNodeSocket *combine_output = bke::node_find_socket(*combine_node, SOCK_OUT, "Vector"_ustr);
 
   version_node_add_link(
       node_tree, *combine_node, *combine_output, *multiply_node, *multiply_b_input);
@@ -2519,8 +2516,8 @@ static void do_version_bokeh_blur_pixel_size(bNodeTree &node_tree, bNode &node)
 {
   bke::node_tree_set_type(node_tree);
 
-  bNodeSocket *image_input = bke::node_find_socket(node, SOCK_IN, "Image");
-  bNodeSocket *size_input = bke::node_find_socket(node, SOCK_IN, "Size");
+  bNodeSocket *image_input = bke::node_find_socket(node, SOCK_IN, "Image"_ustr);
+  bNodeSocket *size_input = bke::node_find_socket(node, SOCK_IN, "Size"_ustr);
 
   /* Find the link going into the inputs of the node. */
   bNodeLink *image_link = nullptr;
@@ -2566,11 +2563,11 @@ static void do_version_bokeh_blur_pixel_size(bNodeTree &node_tree, bNode &node)
   relative_to_pixel_node->custom2 = CMP_NODE_RELATIVE_TO_PIXEL_REFERENCE_DIMENSION_GREATER;
 
   bNodeSocket *relative_to_pixel_image_input = bke::node_find_socket(
-      *relative_to_pixel_node, SOCK_IN, "Image");
+      *relative_to_pixel_node, SOCK_IN, "Image"_ustr);
   bNodeSocket *relative_to_pixel_value_input = bke::node_find_socket(
-      *relative_to_pixel_node, SOCK_IN, "Float Value");
+      *relative_to_pixel_node, SOCK_IN, "Float Value"_ustr);
   bNodeSocket *relative_to_pixel_value_output = bke::node_find_socket(
-      *relative_to_pixel_node, SOCK_OUT, "Float Value");
+      *relative_to_pixel_node, SOCK_OUT, "Float Value"_ustr);
 
   version_node_add_link(node_tree,
                         *relative_to_pixel_node,
@@ -2606,7 +2603,7 @@ static bool window_has_sequence_editor_open(const wmWindow *win)
 
 /* Merge transform effect properties with strip transform. Because this effect could use modifiers,
  * change its type to gaussian blur with 0 radius. */
-static void sequencer_substitute_transform_effects(Scene *scene)
+static void sequencer_substitute_transform_effects(Scene *scene, const DriverMap &driver_map)
 {
   seq::foreach_strip(&scene->ed->seqbase, [&](Strip *strip) -> bool {
     if (strip->type == STRIP_TYPE_TRANSFORM_LEGACY && strip->effectdata != nullptr) {
@@ -2615,20 +2612,20 @@ static void sequencer_substitute_transform_effects(Scene *scene)
       float2 offset(tv->xIni, tv->yIni);
       if (tv->percent == 1) {
         float2 scene_resolution(scene->r.xsch, scene->r.ysch);
-        offset *= scene_resolution;
+        offset *= scene_resolution / 100;
       }
       transform->xofs += offset.x;
       transform->yofs += offset.y;
       transform->scale_x *= tv->ScalexIni;
       transform->scale_y *= tv->ScaleyIni;
-      transform->rotation += tv->rotIni;
+      transform->rotation += DEG2RADF(tv->rotIni);
       seq::effect_free(strip);
       strip->type = STRIP_TYPE_GAUSSIAN_BLUR;
       seq::effect_ensure_initialized(strip);
       GaussianBlurVars *gv = static_cast<GaussianBlurVars *>(strip->effectdata);
       gv->size_x = gv->size_y = 0.0f;
       seq::edit_strip_name_set(scene, strip, "Transform Placeholder (Migrated)");
-      seq::ensure_unique_name(strip, scene);
+      seq::ensure_unique_name(strip, scene, driver_map);
     }
     return true;
   });
@@ -2639,9 +2636,9 @@ static void sequencer_substitute_transform_effects(Scene *scene)
  * in sRGB space. */
 static void do_version_lift_gamma_gain_srgb_to_linear(bNodeTree &node_tree, bNode &node)
 {
-  bNodeSocket *image_input = bke::node_find_socket(node, SOCK_IN, "Image");
-  bNodeSocket *type_input = bke::node_find_socket(node, SOCK_IN, "Type");
-  bNodeSocket *image_output = bke::node_find_socket(node, SOCK_OUT, "Image");
+  bNodeSocket *image_input = bke::node_find_socket(node, SOCK_IN, "Image"_ustr);
+  bNodeSocket *type_input = bke::node_find_socket(node, SOCK_IN, "Type"_ustr);
+  bNodeSocket *image_output = bke::node_find_socket(node, SOCK_OUT, "Image"_ustr);
 
   /* Find the links going into and out of the node. */
   bNodeLink *image_input_link = nullptr;
@@ -2667,13 +2664,14 @@ static void do_version_lift_gamma_gain_srgb_to_linear(bNodeTree &node_tree, bNod
   inverse_gamma_node->location[1] = node.location[1];
 
   bNodeSocket *inverse_gamma_color_input = bke::node_find_socket(
-      *inverse_gamma_node, SOCK_IN, "Color");
+      *inverse_gamma_node, SOCK_IN, "Color"_ustr);
   copy_v4_v4(inverse_gamma_color_input->default_value_typed<bNodeSocketValueRGBA>()->value,
              image_input->default_value_typed<bNodeSocketValueRGBA>()->value);
   bNodeSocket *inverse_gamma_color_output = bke::node_find_socket(
-      *inverse_gamma_node, SOCK_OUT, "Color");
+      *inverse_gamma_node, SOCK_OUT, "Color"_ustr);
 
-  bNodeSocket *inverse_gamma_input = bke::node_find_socket(*inverse_gamma_node, SOCK_IN, "Gamma");
+  bNodeSocket *inverse_gamma_input = bke::node_find_socket(
+      *inverse_gamma_node, SOCK_IN, "Gamma"_ustr);
   inverse_gamma_input->default_value_typed<bNodeSocketValueFloat>()->value = 1.0f / 2.2f;
 
   version_node_add_link(
@@ -2692,10 +2690,10 @@ static void do_version_lift_gamma_gain_srgb_to_linear(bNodeTree &node_tree, bNod
   gamma_node->location[0] = node.location[0];
   gamma_node->location[1] = node.location[1];
 
-  bNodeSocket *gamma_color_input = bke::node_find_socket(*gamma_node, SOCK_IN, "Color");
-  bNodeSocket *gamma_color_output = bke::node_find_socket(*gamma_node, SOCK_OUT, "Color");
+  bNodeSocket *gamma_color_input = bke::node_find_socket(*gamma_node, SOCK_IN, "Color"_ustr);
+  bNodeSocket *gamma_color_output = bke::node_find_socket(*gamma_node, SOCK_OUT, "Color"_ustr);
 
-  bNodeSocket *gamma_input = bke::node_find_socket(*gamma_node, SOCK_IN, "Gamma");
+  bNodeSocket *gamma_input = bke::node_find_socket(*gamma_node, SOCK_IN, "Gamma"_ustr);
   gamma_input->default_value_typed<bNodeSocketValueFloat>()->value = 2.2f;
 
   for (bNodeLink &link : node_tree.links.items_reversed_mutable()) {
@@ -2718,12 +2716,12 @@ static void version_bone_hide_property_driver(AnimData *arm_adt, Vector<Object *
 
   Vector<FCurve *> drivers_to_fix;
   for (FCurve &fcurve : arm_adt->drivers) {
-    const StringRef rna_path(fcurve.rna_path);
+    const StringRefNull rna_path = fcurve.rna_path();
     int quoted_bone_name_start = 0;
     int quoted_bone_name_end = 0;
     const bool is_prefix_found = BLI_str_quoted_substr_range(
-        fcurve.rna_path, hide_prop_prefix, &quoted_bone_name_start, &quoted_bone_name_end);
-    if (is_prefix_found && STREQ(fcurve.rna_path + quoted_bone_name_end, hide_prop_suffix)) {
+        rna_path.c_str(), hide_prop_prefix, &quoted_bone_name_start, &quoted_bone_name_end);
+    if (is_prefix_found && STREQ(rna_path.c_str() + quoted_bone_name_end, hide_prop_suffix)) {
       drivers_to_fix.append(&fcurve);
     }
   }
@@ -2737,9 +2735,8 @@ static void version_bone_hide_property_driver(AnimData *arm_adt, Vector<Object *
     for (FCurve *original : drivers_to_fix) {
       /* Has to be a copy in case there is more than 1 object using the armature. */
       FCurve *copy = BKE_fcurve_copy(original);
-      char *fixed_path = BLI_string_joinN("pose.", copy->rna_path);
-      MEM_SAFE_DELETE(copy->rna_path);
-      copy->rna_path = fixed_path;
+      char *fixed_path = BLI_string_joinN("pose.", copy->rna_path().c_str());
+      copy->rna_path_set_move(fixed_path);
       BLI_addtail(&ob_adt->drivers, copy);
     }
   }
@@ -2763,7 +2760,7 @@ void do_versions_after_linking_500(FileData *fd, Main *bmain)
   if (!MAIN_VERSION_FILE_ATLEAST(bmain, 500, 27)) {
     FOREACH_NODETREE_BEGIN (bmain, ntree, id) {
       if (ntree->type == NTREE_COMPOSIT) {
-        do_version_convert_to_generic_nodes_after_linking(bmain, ntree, id);
+        do_version_convert_to_generic_nodes_after_linking(bmain, ntree);
       }
     }
     FOREACH_NODETREE_END;
@@ -2825,7 +2822,7 @@ void do_versions_after_linking_500(FileData *fd, Main *bmain)
       }
       BKE_pose_rebuild(nullptr, &object, id_cast<bArmature *>(object.data), false);
       for (bPoseChannel &pose_bone : object.pose->chanbase) {
-        if (pose_bone.bone->flag & BONE_HIDDEN_P) {
+        if (pose_bone.bone_get(object)->flag & BONE_HIDDEN_P) {
           pose_bone.drawflag |= PCHAN_DRAW_HIDDEN;
         }
         else {
@@ -2876,9 +2873,10 @@ void do_versions_after_linking_500(FileData *fd, Main *bmain)
   }
 
   if (!MAIN_VERSION_FILE_ATLEAST(bmain, 500, 97)) {
+    const DriverMap driver_map = BKE_animdata_build_driver_target_map(*bmain);
     for (Scene &scene : bmain->scenes) {
       if (scene.ed != nullptr) {
-        sequencer_substitute_transform_effects(&scene);
+        sequencer_substitute_transform_effects(&scene, driver_map);
       }
     }
   }
@@ -2909,7 +2907,7 @@ void do_versions_after_linking_500(FileData *fd, Main *bmain)
     for (bArmature &armature : bmain->armatures) {
       AnimData *arm_adt = BKE_animdata_from_id(&armature.id);
 
-      if (!arm_adt || BLI_listbase_is_empty(&arm_adt->drivers)) {
+      if (!arm_adt || arm_adt->drivers.is_empty()) {
         continue;
       }
 
@@ -2940,7 +2938,7 @@ static void remove_in_and_out_node_panel_recursive(bNodeTreeInterfacePanel &pane
 
   Vector<bNodeTreeInterfaceItem *> new_sockets;
   for (bNodeTreeInterfaceItem *item : old_sockets) {
-    if (item->item_type == NODE_INTERFACE_PANEL) {
+    if (item->item_type == NodeTreeInterfaceItemType::Panel) {
       remove_in_and_out_node_panel_recursive(*reinterpret_cast<bNodeTreeInterfacePanel *>(item));
       continue;
     }
@@ -2951,9 +2949,9 @@ static void remove_in_and_out_node_panel_recursive(bNodeTreeInterfacePanel &pane
     }
 
     bNodeTreeInterfaceSocket *new_output = MEM_new<bNodeTreeInterfaceSocket>(__func__);
-    new_output->item.item_type = NODE_INTERFACE_SOCKET;
-    new_output->name = BLI_strdup_null(socket->name);
-    new_output->description = BLI_strdup_null(socket->description);
+    new_output->item.item_type = NodeTreeInterfaceItemType::Socket;
+    new_output->name_ = BLI_strdup_null(socket->name_);
+    new_output->description_ = BLI_strdup_null(socket->description_);
     new_output->socket_type = BLI_strdup_null(socket->socket_type);
     new_output->flag = socket->flag & ~NODE_INTERFACE_SOCKET_INPUT;
     new_output->attribute_domain = socket->attribute_domain;
@@ -3095,9 +3093,9 @@ static void do_version_texture_gradient_clamp(bNodeTree *node_tree)
       continue;
     }
 
-    bNodeSocket *factor_output = node_find_socket(node, SOCK_OUT, "Fac");
-    bNodeSocket *color_output = node_find_socket(node, SOCK_OUT, "Color");
-    bNodeSocket *vector_input = node_find_socket(node, SOCK_IN, "Vector");
+    bNodeSocket *factor_output = node_find_socket(node, SOCK_OUT, "Fac"_ustr);
+    bNodeSocket *color_output = node_find_socket(node, SOCK_OUT, "Color"_ustr);
+    bNodeSocket *vector_input = node_find_socket(node, SOCK_IN, "Vector"_ustr);
 
     bool is_factor_output_linked = false;
     bool is_color_output_linked = false;
@@ -3406,8 +3404,8 @@ void blo_do_versions_500(FileData *fd, Library * /*lib*/, Main *bmain)
           if (!ELEM(sl.spacetype, SPACE_ACTION, SPACE_GRAPH, SPACE_NLA, SPACE_SEQ)) {
             continue;
           }
-          ListBaseT<ARegion> *regionbase = (&sl == area.spacedata.first) ? &area.regionbase :
-                                                                           &sl.regionbase;
+          ListBaseT<ARegion> *regionbase = (&sl == area.spacedata.first_) ? &area.regionbase :
+                                                                            &sl.regionbase;
           ARegion *new_footer = do_versions_add_region_if_not_found(
               regionbase, RGN_TYPE_FOOTER, "footer for animation editors", RGN_TYPE_HEADER);
           if (new_footer == nullptr) {
@@ -3541,7 +3539,7 @@ void blo_do_versions_500(FileData *fd, Library * /*lib*/, Main *bmain)
         GreasePencilDrawingBase *drawing_base = grease_pencil.drawing_array[i];
         if (drawing_base->type == GP_DRAWING) {
           GreasePencilDrawing *drawing = reinterpret_cast<GreasePencilDrawing *>(drawing_base);
-          bke::curves_convert_customdata_to_storage(drawing->geometry.wrap());
+          bke::curves_convert_customdata_to_storage(drawing->wrap().strokes_for_write());
         }
       }
     }
@@ -3905,9 +3903,9 @@ void blo_do_versions_500(FileData *fd, Library * /*lib*/, Main *bmain)
   if (!MAIN_VERSION_FILE_ATLEAST(bmain, 500, 63)) {
     for (Scene &scene : bmain->scenes) {
       if (scene.r.bake_flag & R_BAKE_MULTIRES) {
-        scene.r.bake.type = scene.r.bake_mode;
+        scene.r.bake.type = eBakeType(scene.r.bake_mode);
         scene.r.bake.flag |= (scene.r.bake_flag & (R_BAKE_MULTIRES | R_BAKE_LORES_MESH));
-        scene.r.bake.margin_type = scene.r.bake_margin_type;
+        scene.r.bake.margin_type = eBakeMarginType(scene.r.bake_margin_type);
         scene.r.bake.margin = scene.r.bake_margin;
       }
       else {
@@ -4081,8 +4079,7 @@ void blo_do_versions_500(FileData *fd, Library * /*lib*/, Main *bmain)
       if (scene.ed != nullptr) {
         /* Set the first strip modifier as the active one and uncollapse the root panel. */
         seq::foreach_strip(&scene.ed->seqbase, [&](Strip *strip) -> bool {
-          seq::modifier_set_active(strip,
-                                   static_cast<StripModifierData *>(strip->modifiers.first));
+          seq::modifier_set_active(strip, strip->modifiers.first());
           for (StripModifierData &smd : strip->modifiers) {
             smd.layout_panel_open_flag |= UI_PANEL_DATA_EXPAND_ROOT;
           }
@@ -4156,8 +4153,8 @@ void blo_do_versions_500(FileData *fd, Library * /*lib*/, Main *bmain)
       for (ScrArea &area : screen.areabase) {
         for (SpaceLink &sl : area.spacedata) {
           if (sl.spacetype == SPACE_USERPREF) {
-            ListBaseT<ARegion> *regionbase = (&sl == area.spacedata.first) ? &area.regionbase :
-                                                                             &sl.regionbase;
+            ListBaseT<ARegion> *regionbase = (&sl == area.spacedata.first_) ? &area.regionbase :
+                                                                              &sl.regionbase;
             ARegion *new_sidebar = do_versions_add_region_if_not_found(
                 regionbase, RGN_TYPE_UI, "sidebar for preferences", RGN_TYPE_HEADER);
             if (new_sidebar != nullptr) {
@@ -4274,7 +4271,7 @@ void blo_do_versions_500(FileData *fd, Library * /*lib*/, Main *bmain)
     /* Enable new "Optional Label" setting for all menu sockets. This was implicit before. */
     FOREACH_NODETREE_BEGIN (bmain, tree, id) {
       tree->tree_interface.foreach_item([&](bNodeTreeInterfaceItem &item) {
-        if (item.item_type != NODE_INTERFACE_SOCKET) {
+        if (item.item_type != NodeTreeInterfaceItemType::Socket) {
           return true;
         }
         auto &socket = reinterpret_cast<bNodeTreeInterfaceSocket &>(item);
@@ -4421,8 +4418,8 @@ void blo_do_versions_500(FileData *fd, Library * /*lib*/, Main *bmain)
             continue;
           }
 
-          ListBaseT<ARegion> *regionbase = (&sl == area.spacedata.first) ? &area.regionbase :
-                                                                           &sl.regionbase;
+          ListBaseT<ARegion> *regionbase = (&sl == area.spacedata.first_) ? &area.regionbase :
+                                                                            &sl.regionbase;
 
           if (ARegion *new_shelf_region = do_versions_add_region_if_not_found(
                   regionbase,

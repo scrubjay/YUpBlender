@@ -60,7 +60,7 @@ void vert_tris_from_corner_tris(Span<int> corner_verts,
                                 Span<int3> corner_tris,
                                 MutableSpan<int3> vert_tris);
 
-/** Return the triangle's three edge indices they are real edges, otherwise -1. */
+/** Return the triangle's three edge indices if they are real edges, otherwise -1. */
 int3 corner_tri_get_real_edges(Span<int2> edges,
                                Span<int> corner_verts,
                                Span<int> corner_edges,
@@ -132,7 +132,7 @@ struct CornerNormalSpace {
   /** Third vector, orthogonal to #vec_lnor and #vec_ref. */
   float3 vec_ortho;
   /**
-   * Reference angle around #vec_ortho, in ]0, pi] range, between #vec_lnor and the reference edge.
+   * Reference angle around #vec_ortho, in (0, pi] range, between #vec_lnor and the reference edge.
    *
    * A 0.0 value marks that space as invalid, as it can only happen in extremely degenerate
    * geometry cases (it would mean that the default normal is perfectly aligned with the reference
@@ -140,7 +140,7 @@ struct CornerNormalSpace {
    */
   float ref_alpha;
   /**
-   * Reference angle around #vec_lnor, in ]0, 2pi] range, between the reference edge and the other
+   * Reference angle around #vec_lnor, in (0, 2pi] range, between the reference edge and the other
    * border edge of the fan.
    *
    * A 0.0 value marks that space as invalid, as it can only happen in degenerate geometry cases
@@ -418,7 +418,8 @@ void mesh_sharp_edges_set_from_angle(Mesh &mesh, float angle, bool keep_sharp_ed
 
 /**
  * Calculate edge visibility based on vertex visibility, hides an edge when either of its
- * vertices are hidden. */
+ * vertices are hidden.
+ */
 void mesh_edge_hide_from_vert(Span<int2> edges, Span<bool> hide_vert, MutableSpan<bool> hide_edge);
 
 /* Hide faces when any of their vertices are hidden. */
@@ -451,6 +452,8 @@ void mesh_ensure_default_uv_attribute_on_add(Mesh &mesh,
 
 /** Make sure that if there are any uv maps, the active one is set. */
 void mesh_ensure_active_uv_map(Mesh &mesh);
+/** Make sure that if there are any uv maps, the default one is set. */
+void mesh_ensure_default_uv_map(Mesh &mesh);
 
 void mesh_data_update(Depsgraph &depsgraph,
                       const Scene &scene,
@@ -464,9 +467,13 @@ void mesh_remove_invalid_attribute_strings(Mesh &mesh);
  * Check whether the mesh upholds required invariants and fix errors by removing invalid elements
  * or correcting attribute values.
  *
+ * \param allow_missing_edges: When true, faces with missing edges are not treated as errors.
+ * Missing edges are still computed, but no error is printed and the return value is not affected.
+ * Useful for importers that produce faces without edges.
+ *
  * \return True if the mesh was valid (fixes were not applied).
  */
-bool mesh_validate(Mesh &mesh, bool verbose = false);
+bool mesh_validate(Mesh &mesh, bool verbose = false, bool allow_missing_edges = false);
 
 /**
  * Check whether the mesh upholds required invariants.
@@ -485,6 +492,20 @@ bool mesh_validate_material_indices(Mesh &mesh);
  * \return a mask of all invalid faces.
  */
 IndexMask mesh_find_faces_duplicate_verts(const Mesh &mesh, IndexMaskMemory &memory);
+
+/**
+ * Find faces that use the same vertices as another face, in either winding direction. For every
+ * group of duplicates, the face that comes first in the mask isn't a part of the result. The faces
+ * must not contain the same vertex more than once.
+ *
+ * \param r_originals: Optional array with an element for every face, where the face that each
+ * duplicate face duplicates is stored.
+ */
+IndexMask find_duplicate_faces(OffsetIndices<int> faces,
+                               Span<int> corner_verts,
+                               const IndexMask &mask,
+                               IndexMaskMemory &memory,
+                               MutableSpan<int> r_originals = {});
 
 void mesh_apply_spatial_organization(Mesh &mesh);
 const AttributeAccessorFunctions &mesh_attribute_accessor_functions();

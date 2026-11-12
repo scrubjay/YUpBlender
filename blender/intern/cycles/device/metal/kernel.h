@@ -70,7 +70,7 @@ class MetalKernelPipeline {
 
   KernelData kernel_data_;
   bool use_metalrt;
-  uint32_t kernel_features = 0;
+  uint64_t kernel_features = 0;
 
   int threads_per_threadgroup;
 
@@ -104,6 +104,7 @@ class MetalDispatchPipeline {
 
   int pipeline_id = -1;
 
+  MetalDevice *metal_device = nullptr;
   MetalPipelineType pso_type;
   id<MTLComputePipelineState> pipeline = nil;
   int num_threads_per_block = 0;

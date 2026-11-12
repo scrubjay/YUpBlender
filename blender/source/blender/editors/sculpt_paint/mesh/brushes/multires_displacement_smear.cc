@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup edsculpt
+ */
+
 #include "editors/sculpt_paint/mesh/brushes/brushes.hh"
 
 #include "DNA_brush_types.h"
@@ -118,6 +122,7 @@ static void calc_node(const Depsgraph &depsgraph,
 BLI_NOINLINE static void eval_all_limit_positions(const SubdivCCG &subdiv_ccg,
                                                   const MutableSpan<float3> limit_positions)
 {
+  PRF_scope(ProfileCategory::Editor);
   const CCGKey key = BKE_subdiv_ccg_key_top_level(subdiv_ccg);
   threading::parallel_for(IndexRange(subdiv_ccg.grids_num), 1024, [&](const IndexRange range) {
     for (const int grid : range) {
@@ -134,6 +139,7 @@ BLI_NOINLINE static void store_node_prev_displacement(const Span<float3> limit_p
                                                       const bke::pbvh::GridsNode &node,
                                                       const MutableSpan<float3> prev_displacement)
 {
+  PRF_scope(ProfileCategory::Editor);
   for (const int grid : node.grids()) {
     for (const int i : bke::ccg::grid_range(key.grid_area, grid)) {
       prev_displacement[i] = positions[i] - limit_positions[i];
@@ -148,6 +154,7 @@ void do_displacement_smear_brush(const Depsgraph &depsgraph,
                                  Object &ob,
                                  const IndexMask &node_mask)
 {
+  PRF_scope(ProfileCategory::Editor);
   const Brush &brush = *BKE_paint_brush_for_read(&sd.paint);
   SculptSession &ss = *ob.runtime->sculpt_session;
   bke::pbvh::Tree &pbvh = *bke::object::pbvh_get(ob);

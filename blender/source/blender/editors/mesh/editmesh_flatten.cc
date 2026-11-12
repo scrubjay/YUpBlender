@@ -15,7 +15,7 @@
 #include "BKE_layer.hh"
 
 #include "BLI_math_matrix.hh"
-#include "BLI_math_vector.h"
+#include "BLI_math_vector_c.hh"
 
 #include "BLT_translation.hh"
 
@@ -55,7 +55,7 @@ static wmOperatorStatus edbm_flatten_exec(bContext *C, wmOperator *op)
   RegionView3D *rv3d = method == FLATTEN_VIEW ? CTX_wm_region_view3d(C) : nullptr;
 
   for (Object *obedit : objects) {
-    BMEditMesh *em = BKE_editmesh_from_object(obedit);
+    BMesh *bm = BKE_editmesh_bmesh_get_for_write(obedit);
 
     float view_normal[3] = {0.0f, 0.0f, 1.0f};
     if (rv3d) {
@@ -65,7 +65,7 @@ static wmOperatorStatus edbm_flatten_exec(bContext *C, wmOperator *op)
     }
 
     if (!EDBM_op_callf(
-            em,
+            bm,
             op,
             "flatten geom=%hvef factor=%f method=%i view_normal=%v lock_x=%b lock_y=%b lock_z=%b",
             BM_ELEM_SELECT,
@@ -117,7 +117,7 @@ void MESH_OT_flatten(wmOperatorType *ot)
   ot->flag = OPTYPE_REGISTER | OPTYPE_UNDO;
 
   RNA_def_float_factor(
-      ot->srna, "factor", 1.0f, 0.0f, 1.0f, "Factor", "Force of the tool", 0.0f, 1.0f);
+      ot->srna, "factor", 1.0f, 0.0f, 1.0f, "Factor", "Flattening factor", 0.0f, 1.0f);
   RNA_def_enum(
       ot->srna, "method", prop_method_items, 0, "Method", "Plane on which vertices are flattened");
   RNA_def_boolean_array(ot->srna, "lock", 3, nullptr, "Lock", "Lock editing of the axis");

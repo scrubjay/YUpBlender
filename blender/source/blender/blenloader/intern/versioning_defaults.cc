@@ -10,21 +10,21 @@
  * Unlike regular versioning this makes changes that ensure the startup file
  * has brushes and other presets setup to take advantage of newer features.
  *
- * To update preference defaults see `userdef_default.c`.
+ * To update preference defaults see `versioning_userdef.cc`.
  */
 
 #define DNA_DEPRECATED_ALLOW
 
 #include "MEM_guardedalloc.h"
 
-#include "BLI_listbase.h"
-#include "BLI_math_rotation.h"
-#include "BLI_math_vector.h"
+#include "BLI_listbase.hh"
+#include "BLI_math_rotation_c.hh"
+#include "BLI_math_vector_c.hh"
 #include "BLI_math_vector_types.hh"
-#include "BLI_mempool.h"
-#include "BLI_string.h"
-#include "BLI_string_utf8.h"
-#include "BLI_utildefines.h"
+#include "BLI_mempool.hh"
+#include "BLI_string.hh"
+#include "BLI_string_utf8.hh"
+#include "BLI_utildefines.hh"
 
 #include "DNA_camera_types.h"
 #include "DNA_curveprofile_types.h"
@@ -48,7 +48,7 @@
 #include "BKE_colortools.hh"
 #include "BKE_curveprofile.h"
 #include "BKE_customdata.hh"
-#include "BKE_gpencil_legacy.h"
+#include "BKE_grease_pencil.hh"
 #include "BKE_idprop.hh"
 #include "BKE_layer.hh"
 #include "BKE_lib_id.hh"
@@ -125,7 +125,7 @@ static void blo_update_defaults_screen(bScreen *screen,
       /* Remove all stored panels, we want to use defaults
        * (order, open/closed) as defined by UI code here! */
       BKE_area_region_panels_free(&region.panels);
-      BLI_freelistN(&region.panels_category_active);
+      region.panels_category_active.free_no_destruct();
 
       /* Reset size so it uses consistent defaults from the region types. */
       region.sizex = 0;
@@ -134,7 +134,7 @@ static void blo_update_defaults_screen(bScreen *screen,
 
     if (area.spacetype == SPACE_IMAGE) {
       if (STREQ(workspace_name, "UV Editing")) {
-        SpaceImage *sima = static_cast<SpaceImage *>(area.spacedata.first);
+        SpaceImage *sima = area.spacedata.first_as<SpaceImage>();
         if (sima->mode == SI_MODE_VIEW) {
           sima->mode = SI_MODE_UV;
         }
@@ -142,18 +142,19 @@ static void blo_update_defaults_screen(bScreen *screen,
         sima->uv_edge_opacity = 1.0f;
       }
       else if (STR_ELEM(workspace_name, "Texture Paint", "Shading")) {
-        SpaceImage *sima = static_cast<SpaceImage *>(area.spacedata.first);
+        SpaceImage *sima = area.spacedata.first_as<SpaceImage>();
+        /* Face opacity is set to 0 to not interfere with visualization while painting */
         sima->uv_face_opacity = 0.0f;
-        sima->uv_edge_opacity = 0.0f;
+        sima->uv_edge_opacity = 1.0f;
       }
       else if (BLI_str_startswith(workspace_name, "Compositing")) {
-        SpaceImage *sima = static_cast<SpaceImage *>(area.spacedata.first);
+        SpaceImage *sima = area.spacedata.first_as<SpaceImage>();
         sima->overlay.flag &= ~SI_OVERLAY_DRAW_TEXT_INFO;
       }
     }
     else if (area.spacetype == SPACE_ACTION) {
       /* Show markers region, hide channels and collapse summary in timelines. */
-      SpaceAction *saction = static_cast<SpaceAction *>(area.spacedata.first);
+      SpaceAction *saction = area.spacedata.first_as<SpaceAction>();
       saction->flag |= SACTION_SHOW_MARKERS;
       if (saction->mode == SACTCONT_TIMELINE) {
         saction->ads.flag |= ADS_FLAG_SUMMARY_COLLAPSED;
@@ -172,38 +173,45 @@ static void blo_update_defaults_screen(bScreen *screen,
           }
         }
       }
+
+      /* Reveal the footer by default. */
+      for (ARegion &region : area.regionbase) {
+        if (region.regiontype == RGN_TYPE_FOOTER) {
+          region.flag &= ~RGN_FLAG_HIDDEN;
+        }
+      }
     }
     else if (area.spacetype == SPACE_GRAPH) {
-      SpaceGraph *sipo = static_cast<SpaceGraph *>(area.spacedata.first);
+      SpaceGraph *sipo = area.spacedata.first_as<SpaceGraph>();
       sipo->flag |= SIPO_SHOW_MARKERS;
     }
     else if (area.spacetype == SPACE_NLA) {
-      SpaceNla *snla = static_cast<SpaceNla *>(area.spacedata.first);
+      SpaceNla *snla = area.spacedata.first_as<SpaceNla>();
       snla->flag |= SNLA_SHOW_MARKERS;
     }
     else if (area.spacetype == SPACE_SEQ) {
-      SpaceSeq *seq = static_cast<SpaceSeq *>(area.spacedata.first);
+      SpaceSeq *seq = area.spacedata.first_as<SpaceSeq>();
       seq->flag |= SEQ_SHOW_MARKERS | SEQ_ZOOM_TO_FIT | SEQ_USE_PROXIES | SEQ_SHOW_OVERLAY;
       seq->render_size = SEQ_RENDER_SIZE_PROXY_100;
       seq->timeline_overlay.flag |= SEQ_TIMELINE_SHOW_STRIP_SOURCE | SEQ_TIMELINE_SHOW_STRIP_NAME |
                                     SEQ_TIMELINE_SHOW_STRIP_DURATION | SEQ_TIMELINE_SHOW_GRID |
                                     SEQ_TIMELINE_SHOW_STRIP_COLOR_TAG |
                                     SEQ_TIMELINE_SHOW_STRIP_RETIMING |
-                                    SEQ_TIMELINE_WAVEFORMS_HALF |
+                                    SEQ_TIMELINE_WAVEFORMS_HALF | SEQ_TIMELINE_SHOW_THUMBNAILS |
                                     SEQ_TIMELINE_STRIP_END_THUMBNAILS;
       seq->preview_overlay.flag |= SEQ_PREVIEW_SHOW_OUTLINE_SELECTED;
       seq->cache_overlay.flag = SEQ_CACHE_SHOW | SEQ_CACHE_SHOW_FINAL_OUT;
-      seq->draw_flag |= SEQ_DRAW_TRANSFORM_PREVIEW;
+      seq->draw_flag |= SEQ_DRAW_EDIT_POINT_PREVIEW;
     }
     else if (area.spacetype == SPACE_TEXT) {
       /* Show syntax and line numbers in Script workspace text editor. */
-      SpaceText *stext = static_cast<SpaceText *>(area.spacedata.first);
+      SpaceText *stext = area.spacedata.first_as<SpaceText>();
       stext->showsyntax = true;
       stext->showlinenrs = true;
       stext->flags |= ST_FIND_WRAP;
     }
     else if (area.spacetype == SPACE_VIEW3D) {
-      View3D *v3d = static_cast<View3D *>(area.spacedata.first);
+      View3D *v3d = area.spacedata.first_as<View3D>();
       /* Screen space cavity by default for faster performance. */
       v3d->shading.cavity_type = V3D_SHADING_CAVITY_CURVATURE;
       v3d->shading.flag |= V3D_SHADING_SPECULAR_HIGHLIGHT;
@@ -271,7 +279,7 @@ static void blo_update_defaults_screen(bScreen *screen,
       }
     }
     else if (area.spacetype == SPACE_CLIP) {
-      SpaceClip *sclip = static_cast<SpaceClip *>(area.spacedata.first);
+      SpaceClip *sclip = area.spacedata.first_as<SpaceClip>();
       sclip->around = V3D_AROUND_CENTER_MEDIAN;
       sclip->mask_info.blend_factor = 0.7f;
       sclip->mask_info.draw_flag = MASK_DRAWFLAG_SPLINE;
@@ -282,9 +290,8 @@ static void blo_update_defaults_screen(bScreen *screen,
   const bool hide_image_tool_header = STR_ELEM(workspace_name, "Rendering", "Compositing");
   for (ScrArea &area : screen->areabase) {
     for (SpaceLink &sl : area.spacedata) {
-      ListBaseT<ARegion> *regionbase = (&sl == static_cast<SpaceLink *>(area.spacedata.first)) ?
-                                           &area.regionbase :
-                                           &sl.regionbase;
+      ListBaseT<ARegion> *regionbase = (&sl == area.spacedata.first()) ? &area.regionbase :
+                                                                         &sl.regionbase;
 
       for (ARegion &region : *regionbase) {
         if (region.regiontype == RGN_TYPE_TOOL_HEADER) {
@@ -305,16 +312,19 @@ static void blo_update_defaults_screen(bScreen *screen,
   if (app_template && STREQ(app_template, "2D_Animation")) {
     for (ScrArea &area : screen->areabase) {
       if (area.spacetype == SPACE_ACTION) {
-        SpaceAction *saction = static_cast<SpaceAction *>(area.spacedata.first);
+        SpaceAction *saction = area.spacedata.first_as<SpaceAction>();
         /* Enable Sliders. */
         saction->flag |= SACTION_SLIDERS;
       }
       else if (area.spacetype == SPACE_VIEW3D) {
-        View3D *v3d = static_cast<View3D *>(area.spacedata.first);
+        View3D *v3d = area.spacedata.first_as<View3D>();
         /* Set Material Color by default. */
         v3d->shading.color_type = V3D_SHADING_MATERIAL_COLOR;
         /* Enable Annotations. */
         v3d->flag2 |= V3D_SHOW_ANNOTATION;
+        /* Enable Grease Pencil canvas grid and viewport grid in Y-Up. */
+        v3d->gp_flag |= V3D_GP_SHOW_GRID;
+        v3d->gridflag |= V3D_SHOW_FLOOR | V3D_SHOW_ORTHO_GRID | V3D_SHOW_X | V3D_SHOW_Y;
       }
     }
   }
@@ -330,8 +340,8 @@ void BLO_update_defaults_workspace(WorkSpace *workspace, const char *app_templat
 
   if (blo_is_builtin_template(app_template)) {
     /* Clear all tools to use default options instead, ignore the tool saved in the file. */
-    while (!BLI_listbase_is_empty(&workspace->tools)) {
-      BKE_workspace_tool_remove(workspace, static_cast<bToolRef *>(workspace->tools.first));
+    while (!workspace->tools.is_empty()) {
+      BKE_workspace_tool_remove(workspace, workspace->tools.first());
     }
 
     /* For 2D animation template. */
@@ -346,7 +356,7 @@ void BLO_update_defaults_workspace(WorkSpace *workspace, const char *app_templat
         if (screen) {
           for (ScrArea &area : screen->areabase) {
             if (area.spacetype == SPACE_VIEW3D) {
-              View3D *v3d = static_cast<View3D *>(area.spacedata.first);
+              View3D *v3d = area.spacedata.first_as<View3D>();
               v3d->shading.flag &= ~V3D_SHADING_CAVITY;
               copy_v3_fl(v3d->shading.single_color, 1.0f);
               STRNCPY(v3d->shading.matcap, "basic_1");
@@ -367,15 +377,36 @@ void BLO_update_defaults_workspace(WorkSpace *workspace, const char *app_templat
               if ((reinterpret_cast<SpaceSeq *>(&sl))->view == SEQ_VIEW_PREVIEW) {
                 continue;
               }
-              ListBaseT<ARegion> *regionbase = (&sl == area.spacedata.first) ? &area.regionbase :
-                                                                               &sl.regionbase;
+              ListBaseT<ARegion> *regionbase = (&sl == area.spacedata.first_) ? &area.regionbase :
+                                                                                &sl.regionbase;
               ARegion *sidebar = BKE_region_find_in_listbase_by_type(regionbase, RGN_TYPE_UI);
               sidebar->flag |= RGN_FLAG_HIDDEN;
             }
-            if (sl.spacetype == SPACE_PROPERTIES) {
-              SpaceProperties *properties = reinterpret_cast<SpaceProperties *>(&sl);
-              properties->mainb = properties->mainbo = properties->mainbuser = BCONTEXT_STRIP;
+            else if (sl.spacetype == SPACE_PROPERTIES) {
+              reinterpret_cast<SpaceProperties *>(&sl)->visible_tabs &= ~(1
+                                                                          << BCONTEXT_COMPOSITOR);
             }
+            else if (sl.spacetype == SPACE_FILE) {
+              SpaceFile *sfile = reinterpret_cast<SpaceFile *>(&sl);
+              if (sfile->params) {
+                sfile->params->filter |= FILE_TYPE_TEXT;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /* For General template. */
+  if (STRPREFIX(workspace->id.name + 2, "Layout")) {
+    for (WorkSpaceLayout &layout : workspace->layouts) {
+      bScreen *screen = layout.screen;
+      if (screen) {
+        for (ScrArea &area : screen->areabase) {
+          if (area.spacetype == SPACE_VIEW3D) {
+            View3D *v3d = area.spacedata.first_as<View3D>();
+            v3d->shading.use_compositor = V3D_SHADING_USE_COMPOSITOR_ALWAYS;
           }
         }
       }
@@ -431,6 +462,8 @@ static void blo_update_defaults_scene(Main *bmain, Scene *scene)
   scene->r.im_format.exr_flag |= R_IMF_EXR_FLAG_MULTIPART;
   scene->r.bake.im_format.exr_flag |= R_IMF_EXR_FLAG_MULTIPART;
 
+  scene->r.compositor_device = SCE_COMPOSITOR_DEVICE_GPU;
+
   /* Don't enable compositing nodes. */
   if (scene->nodetree) {
     bke::node_tree_free_embedded_tree(scene->nodetree);
@@ -440,8 +473,7 @@ static void blo_update_defaults_scene(Main *bmain, Scene *scene)
   }
 
   /* Rename render layers. */
-  BKE_view_layer_rename(
-      bmain, scene, static_cast<ViewLayer *>(scene->view_layers.first), "ViewLayer");
+  BKE_view_layer_rename(bmain, scene, scene->view_layers.first(), "ViewLayer");
 
   /* Disable Z pass by default. */
   for (ViewLayer &view_layer : scene->view_layers) {
@@ -460,6 +492,8 @@ static void blo_update_defaults_scene(Main *bmain, Scene *scene)
   scene->eevee.motion_blur_shutter_deprecated = 0.5f;
   scene->eevee.flag &= ~SCE_EEVEE_VOLUME_CUSTOM_RANGE;
   scene->eevee.clamp_volume_indirect = 0.0f; /* Default from versioning is not 0. */
+  scene->eevee.ray_tracing_options = {};
+  scene->eevee.fast_gi_thickness_near = 0.1f; /* Default from versioning is not 0.1f. */
 
   copy_v3_v3(scene->display.light_direction, float3(M_SQRT1_3));
   copy_v2_fl2(scene->safe_areas.title, 0.1f, 0.05f);
@@ -561,6 +595,8 @@ static void blo_update_defaults_scene(Main *bmain, Scene *scene)
 
   /* Weight Paint settings */
   ts->weightuser = OB_DRAW_GROUPUSER_ACTIVE;
+  ts->multipaint = true;
+  ts->auto_normalize = true;
 
   /* Cycles settings. */
   IDProperty *cscene = version_cycles_properties_from_ID(&scene->id);
@@ -607,7 +643,6 @@ void BLO_update_defaults_startup_blend(Main *bmain, const char *app_template)
       ma = static_cast<Material *>(
           BLI_findstring(&bmain->materials, "Solid Stroke", offsetof(ID, name) + 2));
       if (ma != nullptr) {
-        ma->gp_style->mix_rgba[3] = 1.0f;
         ma->gp_style->texture_offset[0] = -0.5f;
         ma->gp_style->mix_factor = 0.5f;
       }
@@ -617,7 +652,6 @@ void BLO_update_defaults_startup_blend(Main *bmain, const char *app_template)
           BLI_findstring(&bmain->materials, "Solid Fill", offsetof(ID, name) + 2));
       if (ma != nullptr) {
         ma->gp_style->flag &= ~GP_MATERIAL_STROKE_SHOW;
-        ma->gp_style->mix_rgba[3] = 1.0f;
         ma->gp_style->texture_offset[0] = -0.5f;
         ma->gp_style->mix_factor = 0.5f;
       }
@@ -656,7 +690,7 @@ void BLO_update_defaults_startup_blend(Main *bmain, const char *app_template)
 
       /* Ensure Palette by default. */
       if (ts->gp_paint) {
-        BKE_gpencil_palette_ensure(bmain, &scene);
+        BKE_grease_pencil_palette_ensure(bmain, &scene);
       }
     }
 
@@ -734,10 +768,12 @@ void BLO_update_defaults_startup_blend(Main *bmain, const char *app_template)
       scene.flag &= ~SCE_FRAME_DROP;
     }
 
-    /* Change default selection mode for Grease Pencil. */
+    /* Change default selection mode and drawing plane for Grease Pencil in Y-Up. */
     if (app_template && STREQ(app_template, "2D_Animation")) {
       ToolSettings *ts = scene.toolsettings;
       ts->gpencil_selectmode_edit = GP_SELECTMODE_STROKE;
+      ts->gp_sculpt.lock_axis = GP_LOCKAXIS_Z;
+      ts->plane_axis = 'Z';
     }
   }
 
@@ -746,6 +782,18 @@ void BLO_update_defaults_startup_blend(Main *bmain, const char *app_template)
   do_versions_rename_id(bmain, ID_LA, "Lamp", "Light");
 
   if (app_template && STREQ(app_template, "2D_Animation")) {
+    /* Align camera to look at X-Y plane with Y-up. */
+    Object *cam_ob = static_cast<Object *>(
+        BLI_findstring(&bmain->objects, "Camera", offsetof(ID, name) + 2));
+    if (cam_ob) {
+      cam_ob->loc[0] = 0.0f;
+      cam_ob->loc[1] = 0.0f;
+      cam_ob->loc[2] = 12.0f;
+      cam_ob->rot[0] = 0.0f;
+      cam_ob->rot[1] = 0.0f;
+      cam_ob->rot[2] = 0.0f;
+    }
+
     for (Object &object : bmain->objects) {
       if (object.type == OB_GPENCIL_LEGACY) {
         /* Set grease pencil object in drawing mode */
@@ -770,6 +818,8 @@ void BLO_update_defaults_startup_blend(Main *bmain, const char *app_template)
     mesh.smoothresh_legacy = DEG2RADF(30);
     /* Match voxel remesher options for all existing meshes in templates. */
     mesh.flag |= ME_REMESH_REPROJECT_VOLUME | ME_REMESH_REPROJECT_ATTRIBUTES;
+
+    mesh.editflag |= ME_EDIT_MIRROR_VERTEX_GROUPS;
 
     /* For Sculpting template. */
     if (app_template && STREQ(app_template, "Sculpting")) {
@@ -806,15 +856,18 @@ void BLO_update_defaults_startup_blend(Main *bmain, const char *app_template)
     if (ma.nodetree) {
       for (bNode *node : ma.nodetree->all_nodes()) {
         if (node->type_legacy == SH_NODE_BSDF_PRINCIPLED) {
-          bNodeSocket *roughness_socket = bke::node_find_socket(*node, SOCK_IN, "Roughness");
+          bNodeSocket *roughness_socket = bke::node_find_socket(*node, SOCK_IN, "Roughness"_ustr);
           *version_cycles_node_socket_float_value(roughness_socket) = 0.5f;
-          bNodeSocket *emission = bke::node_find_socket(*node, SOCK_IN, "Emission Color");
+          bNodeSocket *emission = bke::node_find_socket(*node, SOCK_IN, "Emission Color"_ustr);
           copy_v4_fl(version_cycles_node_socket_rgba_value(emission), 1.0f);
           bNodeSocket *emission_strength = bke::node_find_socket(
-              *node, SOCK_IN, "Emission Strength");
+              *node, SOCK_IN, "Emission Strength"_ustr);
           *version_cycles_node_socket_float_value(emission_strength) = 0.0f;
-          bNodeSocket *ior = bke::node_find_socket(*node, SOCK_IN, "IOR");
+          bNodeSocket *ior = bke::node_find_socket(*node, SOCK_IN, "IOR"_ustr);
           *version_cycles_node_socket_float_value(ior) = 1.5f;
+          bNodeSocket *subsurface_scale = bke::node_find_socket(
+              *node, SOCK_IN, "Subsurface Scale"_ustr);
+          *version_cycles_node_socket_float_value(subsurface_scale) = 0.005f;
 
           node->custom1 = SHD_GLOSSY_MULTI_GGX;
           node->custom2 = SHD_SUBSURFACE_RANDOM_WALK;
@@ -891,6 +944,23 @@ void BLO_update_defaults_startup_blend(Main *bmain, const char *app_template)
       scene.grease_pencil_settings.smaa_threshold_render = 0.25f;
       scene.grease_pencil_settings.aa_samples = 8;
       scene.grease_pencil_settings.motion_blur_steps = 8;
+
+      /* Y-Up: Default gravity is -9.81 m/s^2 on Y axis */
+      scene.physics_settings.gravity[0] = 0.0f;
+      scene.physics_settings.gravity[1] = -9.81f;
+      scene.physics_settings.gravity[2] = 0.0f;
+    }
+
+    /* Y-Up: Align default Camera to default view */
+    for (Object &ob : bmain->objects) {
+      if (ob.type == OB_CAMERA && STREQ(ob.id.name + 2, "Camera")) {
+        ob.loc[0] = 6.123724f;
+        ob.loc[1] = -5.0f;
+        ob.loc[2] = 6.123724f;
+        ob.rot[0] = 0.5235988f;  /* 30 deg */
+        ob.rot[1] = 0.7853982f;  /* 45 deg */
+        ob.rot[2] = 0.0f;
+      }
     }
   }
 }

@@ -12,7 +12,7 @@
 #include "../BPy_Id.h"
 #include "../Interface1D/BPy_FEdge.h"
 
-#include "BLI_sys_types.h"
+#include "BLI_sys_types.hh"
 
 using namespace Freestyle;
 
@@ -27,19 +27,23 @@ PyDoc_STRVAR(
     "\n"
     "Class to define a vertex of the embedding.\n"
     "\n"
-    ".. method:: __init__()\n"
-    "            __init__(brother)\n"
-    "            __init__(point_3d, id)\n"
+    ".. method:: __init__(*args)\n"
+    "\n"
+    "   Accepted call signatures:\n"
+    "\n"
+    "   - ``__init__()``\n"
+    "   - ``__init__(brother)``\n"
+    "   - ``__init__(point_3d, id)``\n"
     "\n"
     "   Builds a :class:`SVertex` using the default constructor,\n"
     "   copy constructor or the overloaded constructor which builds"
     "   a :class:`SVertex` from 3D coordinates and an Id.\n"
     "\n"
-    "   :arg brother: A SVertex object.\n"
+    "   :param brother: A SVertex object.\n"
     "   :type brother: :class:`SVertex`\n"
-    "   :arg point_3d: A three-dimensional vector.\n"
+    "   :param point_3d: A three-dimensional vector.\n"
     "   :type point_3d: :class:`mathutils.Vector`\n"
-    "   :arg id: An Id object.\n"
+    "   :param id: An Id object.\n"
     "   :type id: :class:`Id`\n");
 static int SVertex_init(BPy_SVertex *self, PyObject *args, PyObject *kwds)
 {
@@ -48,7 +52,15 @@ static int SVertex_init(BPy_SVertex *self, PyObject *args, PyObject *kwds)
   PyObject *obj = nullptr;
   float v[3];
 
-  if (PyArg_ParseTupleAndKeywords(args, kwds, "|O!", (char **)kwlist_1, &SVertex_Type, &obj)) {
+  if (PyArg_ParseTupleAndKeywords(args,
+                                  kwds,
+                                  "|"  /* Optional arguments. */
+                                  "O!" /* `brother` */
+                                  ":__init__",
+                                  (char **)kwlist_1,
+                                  &SVertex_Type,
+                                  &obj))
+  {
     if (!obj) {
       self->sv = new SVertex();
     }
@@ -57,8 +69,16 @@ static int SVertex_init(BPy_SVertex *self, PyObject *args, PyObject *kwds)
     }
   }
   else if ((void)PyErr_Clear(),
-           PyArg_ParseTupleAndKeywords(
-               args, kwds, "O&O!", (char **)kwlist_2, convert_v3, v, &Id_Type, &obj))
+           PyArg_ParseTupleAndKeywords(args,
+                                       kwds,
+                                       "O&" /* `point_3d` */
+                                       "O!" /* `id` */
+                                       ":__init__",
+                                       (char **)kwlist_2,
+                                       convert_v3,
+                                       v,
+                                       &Id_Type,
+                                       &obj))
   {
     Vec3r point_3d(v[0], v[1], v[2]);
     self->sv = new SVertex(point_3d, *(((BPy_Id *)obj)->id));
@@ -80,7 +100,7 @@ PyDoc_STRVAR(
     "   Adds a normal to the SVertex's set of normals. If the same normal\n"
     "   is already in the set, nothing changes.\n"
     "\n"
-    "   :arg normal: A three-dimensional vector.\n"
+    "   :param normal: A three-dimensional vector.\n"
     "   :type normal: :class:`mathutils.Vector` | tuple[float, float, float] | list[float]\n");
 static PyObject *SVertex_add_normal(BPy_SVertex *self, PyObject *args, PyObject *kwds)
 {
@@ -88,7 +108,13 @@ static PyObject *SVertex_add_normal(BPy_SVertex *self, PyObject *args, PyObject 
   PyObject *py_normal;
   Vec3r n;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O", (char **)kwlist, &py_normal)) {
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "O" /* `normal` */
+                                   ":add_normal",
+                                   (char **)kwlist,
+                                   &py_normal))
+  {
     return nullptr;
   }
   if (!Vec3r_ptr_from_PyObject(py_normal, n)) {
@@ -107,14 +133,21 @@ PyDoc_STRVAR(
     "\n"
     "   Add an FEdge to the list of edges emanating from this SVertex.\n"
     "\n"
-    "   :arg fedge: An FEdge.\n"
+    "   :param fedge: An FEdge.\n"
     "   :type fedge: :class:`FEdge`\n");
 static PyObject *SVertex_add_fedge(BPy_SVertex *self, PyObject *args, PyObject *kwds)
 {
   static const char *kwlist[] = {"fedge", nullptr};
   PyObject *py_fe;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!", (char **)kwlist, &FEdge_Type, &py_fe)) {
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "O!" /* `fedge` */
+                                   ":add_fedge",
+                                   (char **)kwlist,
+                                   &FEdge_Type,
+                                   &py_fe))
+  {
     return nullptr;
   }
   self->sv->AddFEdge(((BPy_FEdge *)py_fe)->fe);
@@ -363,7 +396,7 @@ PyDoc_STRVAR(
     "has exactly one normal. In a smooth surface, an SVertex can have any\n"
     "number of normals.\n"
     "\n"
-    ":type: list of :class:`mathutils.Vector`\n");
+    ":type: list[:class:`mathutils.Vector`]\n");
 static PyObject *SVertex_normals_get(BPy_SVertex *self, void * /*closure*/)
 {
   PyObject *py_normals;

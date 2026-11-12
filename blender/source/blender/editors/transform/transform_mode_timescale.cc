@@ -8,8 +8,8 @@
 
 #include <cstdlib>
 
-#include "BLI_math_vector.h"
-#include "BLI_string_utf8.h"
+#include "BLI_math_vector_c.hh"
+#include "BLI_string_utf8.hh"
 
 #include "BKE_nla.hh"
 #include "BKE_unit.hh"
@@ -61,8 +61,7 @@ static void applyTimeScaleValue(TransInfo *t, float value)
 
   FOREACH_TRANS_DATA_CONTAINER (t, tc) {
     TransData *td = tc->data;
-    TransData2D *td2d = tc->data_2d;
-    for (int i = 0; i < tc->data_len; i++, td++, td2d++) {
+    for (int i = 0; i < tc->data_len; i++, td++) {
       /* It is assumed that td->extra is a pointer to the AnimData,
        * whose active action is where this keyframe comes from
        * (this is only valid when not in NLA). */
@@ -165,6 +164,7 @@ TransModeInfo TransMode_timescale = {
     /*snap_distance_fn*/ nullptr,
     /*snap_apply_fn*/ timescale_snap_apply_fn,
     /*draw_fn*/ nullptr,
+    /*status_fn*/ nullptr,
 };
 
 }  // namespace blender::ed::transform

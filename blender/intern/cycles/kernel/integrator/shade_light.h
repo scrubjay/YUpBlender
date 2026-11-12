@@ -28,6 +28,7 @@ ccl_device_inline ShaderEvalResult integrate_light_forward(
   const float3 ray_P = INTEGRATOR_STATE(state, ray, P);
   const float3 ray_D = INTEGRATOR_STATE(state, ray, D);
   const float ray_time = INTEGRATOR_STATE(state, ray, time);
+  const PathRayVisibility path_visibility = INTEGRATOR_STATE(state, path, visibility);
   const uint32_t path_flag = INTEGRATOR_STATE(state, path, flag);
   const float3 N = INTEGRATOR_STATE(state, path, mis_origin_n);
 
@@ -44,7 +45,7 @@ ccl_device_inline ShaderEvalResult integrate_light_forward(
 #ifdef __PASSES__
   {
     const ccl_global KernelLight *klight = &kernel_data_fetch(lights, isect.prim);
-    if (!is_light_shader_visible_to_path(klight->shader_id, path_flag)) {
+    if (!is_light_shader_visible_to_path(klight->shader_id, path_visibility, path_flag)) {
       return SHADER_EVAL_EMPTY;
     }
   }
@@ -64,7 +65,7 @@ ccl_device_inline ShaderEvalResult integrate_light_forward(
 
   /* MIS weighting. */
   const float mis_weight = light_sample_mis_weight_forward_lamp(
-      kg, state, path_flag, isect.object, light_eval.pdf, ray_P);
+      kg, state, path_visibility, path_flag, isect.object, light_eval.pdf, ray_P);
 
   /* Write to render buffer. */
   guiding_record_surface_emission(kg, state, eval, mis_weight);
@@ -119,10 +120,40 @@ ccl_device ShaderEvalResult integrate_light_nee(KernelGlobals kg, IntegratorShad
   integrator_state_read_shadow_ray_self(state, &ray);
 
   Intersection isect = {};
-  isect.object = ray.self.light_object;
-  isect.prim = ray.self.light_prim;
-  isect.type = kernel_data_fetch(objects, isect.object).primitive_type;
-  isect.t = ray.tmax;
+
+#ifdef __SHADOW_LINKING__
+  const bool is_shadow_linking = INTEGRATOR_STATE(state, shadow_path, flag) &
+                                 PATH_RAY_SHADOW_FOR_LIGHT_LINKING;
+
+  if (is_shadow_linking) {
+    /* Shadow linking stores the intersection in the shadow state,
+     * so it can be used directly. This can be any type of primitive. */
+    integrator_state_read_shadow_light_isect(state, &isect);
+  }
+  else
+#endif
+  {
+    /* NEE sampling from shade_surface only does lights and triangles. Here we
+     * have to recover the triangle UV from the ray, since the shadow state
+     * isect is used by shadow ray intersection and we want to save memory. */
+    isect.object = ray.self.light_object;
+    isect.prim = ray.self.light_prim;
+    isect.type = kernel_data_fetch(objects, isect.object).primitive_type;
+    isect.t = ray.tmax;
+
+    if (isect.type & PRIMITIVE_TRIANGLE) {
+      /* Triangles. */
+      const float2 uv = triangle_light_uv(kg, isect.object, isect.prim, ray.time, ray.P, ray.D);
+      isect.u = uv.x;
+      isect.v = uv.y;
+    }
+    else {
+      /* No NEE sampling for curves, points, etc. */
+      kernel_assert(isect.type == PRIMITIVE_LAMP);
+      isect.u = 0.0f;
+      isect.v = 0.0f;
+    }
+  }
 
   kernel_assert(isect.object != OBJECT_NONE);
   kernel_assert(isect.prim != PRIM_NONE);
@@ -143,7 +174,7 @@ ccl_device ShaderEvalResult integrate_light_nee(KernelGlobals kg, IntegratorShad
     if (light_type == LIGHT_BACKGROUND) {
       /* Background light. */
 #ifdef __RAY_DIFFERENTIALS__
-      const float ray_dD = ray.dD;
+      const float ray_dD = background_light_clamp_dD(kg, ray.dD);
 #else
       const float ray_dD = 0.0f;
 #endif
@@ -175,12 +206,6 @@ ccl_device ShaderEvalResult integrate_light_nee(KernelGlobals kg, IntegratorShad
     }
   }
   else {
-    /* Triangles.
-     * Compute UV on demand so we don't have to store it in integrator state. */
-    const float2 uv = triangle_light_uv(kg, isect.object, isect.prim, ray.time, ray.P, ray.D);
-    isect.u = uv.x;
-    isect.v = uv.y;
-
     shader_setup_from_ray(kg, emission_sd, &ray, &isect);
   }
 
@@ -191,9 +216,9 @@ ccl_device ShaderEvalResult integrate_light_nee(KernelGlobals kg, IntegratorShad
   /* No proper path flag, we're evaluating this for all closures. that's
    * weak but we'd have to do multiple evaluations otherwise. */
   surface_shader_eval<KERNEL_FEATURE_NODE_MASK_SURFACE_LIGHT>(
-      kg, state, emission_sd, nullptr, PATH_RAY_EMISSION);
+      kg, state, emission_sd, nullptr, PATH_RAY_VISIBILITY_NONE, PATH_RAY_EMISSION);
 
-  if (emission_sd->flag & SD_CACHE_MISS) {
+  if (emission_sd->runtime_flag & SR_CACHE_MISS) {
     return SHADER_EVAL_CACHE_MISS;
   }
 

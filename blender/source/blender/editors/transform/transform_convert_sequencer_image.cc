@@ -15,11 +15,11 @@
 #include "BKE_context.hh"
 
 #include "BLI_array.hh"
-#include "BLI_math_matrix.h"
 #include "BLI_math_matrix.hh"
-#include "BLI_math_rotation.h"
-#include "BLI_math_vector.h"
+#include "BLI_math_matrix_c.hh"
+#include "BLI_math_rotation_c.hh"
 #include "BLI_math_vector.hh"
+#include "BLI_math_vector_c.hh"
 
 #include "SEQ_channels.hh"
 #include "SEQ_iterator.hh"
@@ -94,8 +94,7 @@ static TransData *SeqToTransData(
   float vertex[2] = {origin[0], origin[1]};
 
   /* Add control vertex, so rotation and scale can be calculated.
-   * All three vertices will form a "L" shape that is aligned to the local strip axis.
-   */
+   * All three vertices will form a "L" shape that is aligned to the local strip axis. */
   if (vert_index == 1) {
     vertex[0] += cosf(transform->rotation);
     vertex[1] += sinf(transform->rotation);
@@ -146,7 +145,7 @@ static void createTransSeqImageData(bContext *C, TransInfo *t)
 {
   Scene *scene = CTX_data_sequencer_scene(C);
   Editing *ed = seq::editing_get(scene);
-  const SpaceSeq *sseq = static_cast<const SpaceSeq *>(t->area->spacedata.first);
+  const SpaceSeq *sseq = t->area->spacedata.first_as<SpaceSeq>();
   const ARegion *region = t->region;
 
   if (ed == nullptr) {
@@ -177,7 +176,7 @@ static void createTransSeqImageData(bContext *C, TransInfo *t)
                                                                       "TransSeq TransData2D");
 
   for (Strip *strip : strips) {
-    /* One `Sequence` needs 3 `TransData` entries - center point placed in image origin, then 2
+    /* One `Strip` needs 3 `TransData` entries - center point placed at the image origin, then 2
      * points offset by 1 in X and Y direction respectively, so rotation and scale can be
      * calculated from these points. */
     SeqToTransData(scene, strip, td++, td2d++, 0);
@@ -342,18 +341,17 @@ static float2 calculate_new_origin_position(TransInfo *t, TransDataSeq *tdseq, T
   Scene *scene = CTX_data_sequencer_scene(t->context);
   Strip *strip = tdseq->strip;
 
-  const float2 image_size = seq::image_transform_raw_size_get(scene, strip);
+  const float2 box_size = float2(seq::image_transform_box_size_get(scene, strip));
 
   const float2 viewport_pixel_aspect = {scene->r.xasp / scene->r.yasp, 1.0f};
   const float2 mirror = seq::image_transform_mirror_factor_get(strip);
 
   const float2 origin = tdseq->orig_origin_pixelspace;
   const float2 translation = transform_result_get(t, tdseq, td2d, strip).translation;
-  const float2 origin_pixelspace_unscaled = origin / viewport_pixel_aspect * mirror;
-  const float2 origin_translated = origin_pixelspace_unscaled - translation;
+  const float2 origin_translated = origin - translation * viewport_pixel_aspect * mirror;
   const float2 origin_raw_space = math::transform_point(tdseq->orig_matrix, origin_translated);
-  const float2 origin_abs = origin_raw_space + image_size / 2;
-  const float2 origin_rel = origin_abs / image_size;
+  const float2 origin_abs = origin_raw_space + box_size / 2;
+  const float2 origin_rel = origin_abs / box_size;
   return origin_rel;
 }
 
@@ -398,11 +396,10 @@ static void special_aftertrans_update__sequencer_image(bContext *C, TransInfo *t
 
   TransDataContainer *tc = TRANS_DATA_CONTAINER_FIRST_SINGLE(t);
   TransData *td = nullptr;
-  TransData2D *td2d = nullptr;
   Scene *scene = CTX_data_sequencer_scene(C);
   int i;
 
-  for (i = 0, td = tc->data, td2d = tc->data_2d; i < tc->data_len; i += 3, td += 3, td2d += 3) {
+  for (i = 0, td = tc->data; i < tc->data_len; i += 3, td += 3) {
     TransDataSeq *tdseq = static_cast<TransDataSeq *>(td->extra);
     Strip *strip = tdseq->strip;
     StripTransform *transform = strip->data->transform;

@@ -18,20 +18,21 @@
 #include "DNA_object_types.h"
 
 #include "BLI_array_utils.hh"
-#include "BLI_listbase.h"
+#include "BLI_listbase.hh"
 #include "BLI_map.hh"
-#include "BLI_math_geom.h"
-#include "BLI_math_matrix.h"
-#include "BLI_math_rotation.h"
+#include "BLI_math_geom_c.hh"
+#include "BLI_math_matrix_c.hh"
+#include "BLI_math_rotation_c.hh"
 #include "BLI_math_vector_types.hh"
-#include "BLI_memarena.h"
+#include "BLI_memarena.hh"
 #include "BLI_multi_value_map.hh"
 #include "BLI_ordered_edge.hh"
-#include "BLI_polyfill_2d.h"
-#include "BLI_string.h"
-#include "BLI_string_utf8.h"
+#include "BLI_polyfill_2d.hh"
+#include "BLI_resource_scope.hh"
+#include "BLI_string.hh"
+#include "BLI_string_utf8.hh"
 #include "BLI_task.hh"
-#include "BLI_utildefines.h"
+#include "BLI_utildefines.hh"
 
 #include "BKE_attribute.h"
 #include "BKE_attribute.hh"
@@ -286,7 +287,7 @@ void BKE_mesh_strip_loose_faces(Mesh *mesh)
 
 void BKE_mesh_do_versions_cd_flag_init(Mesh *mesh)
 {
-  if (UNLIKELY(mesh->cd_flag)) {
+  if (mesh->cd_flag) [[unlikely]] {
     return;
   }
 
@@ -428,7 +429,6 @@ static void bm_corners_to_loops_ex(ID *id,
 
       for (int i = 0; i < tot; i++, disps += side_sq, ld++) {
         ld->totdisp = side_sq;
-        ld->level = int(logf(float(side) - 1.0f) / float(M_LN2)) + 1;
 
         if (ld->disps) {
           MEM_delete(ld->disps);
@@ -523,7 +523,7 @@ static void convert_mfaces_to_mpolys(ID *id,
   if (id) {
     /* ensure external data is transferred */
     /* TODO(sergey): Use multiresModifier_ensure_external_read(). */
-    CustomData_external_read(fdata_legacy, id, CD_MASK_MDISPS, totface_i);
+    CustomData_external_read(fdata_legacy, "", id, CD_MASK_MDISPS, totface_i);
   }
 
   Map<OrderedEdge, int> eh;
@@ -590,12 +590,17 @@ static void update_active_fdata_layers(Mesh &mesh, CustomData *fdata_legacy, Cus
 {
   int act;
 
-  if (CustomData_has_layer(ldata, CD_PROP_FLOAT2)) {
-    act = CustomData_get_active_layer(ldata, CD_PROP_FLOAT2);
-    CustomData_set_layer_active(fdata_legacy, CD_MTFACE, act);
+  /* Active/default UV map status is stored by name on Mesh, not in CustomData. */
+  if (CustomData_has_layer(fdata_legacy, CD_MTFACE)) {
+    act = CustomData_get_named_layer(fdata_legacy, CD_MTFACE, mesh.active_uv_map_name());
+    if (act != -1) {
+      CustomData_set_layer_active(fdata_legacy, CD_MTFACE, act);
+    }
 
-    act = CustomData_get_render_layer(ldata, CD_PROP_FLOAT2);
-    CustomData_set_layer_render(fdata_legacy, CD_MTFACE, act);
+    act = CustomData_get_named_layer(fdata_legacy, CD_MTFACE, mesh.default_uv_map_name());
+    if (act != -1) {
+      CustomData_set_layer_render(fdata_legacy, CD_MTFACE, act);
+    }
   }
 
   if (CustomData_has_layer(ldata, CD_PROP_BYTE_COLOR)) {
@@ -694,7 +699,7 @@ static void add_mface_layers(Mesh &mesh, CustomData *fdata_legacy, CustomData *l
 
 static void mesh_ensure_tessellation_customdata(Mesh *mesh)
 {
-  if (UNLIKELY((mesh->totface_legacy != 0) && (mesh->faces_num == 0))) {
+  if ((mesh->totface_legacy != 0) && (mesh->faces_num == 0)) [[unlikely]] {
     /* Pass, otherwise this function clears 'mface' before
      * versioning 'mface -> mpoly' code kicks in #30583.
      *
@@ -752,6 +757,10 @@ void BKE_mesh_convert_mfaces_to_mpolys(Mesh *mesh)
   BKE_mesh_legacy_convert_polys_to_offsets(mesh);
   mesh->attribute_storage.wrap().remove(".corner_vert");
   mesh->attribute_storage.wrap().remove(".corner_edge");
+  /* The face and corner domains may have changed size during the conversion above,
+   * ensure attribute storage is in sync, see: #159680. */
+  mesh->attribute_storage.wrap().resize(bke::AttrDomain::Face, mesh->faces_num);
+  mesh->attribute_storage.wrap().resize(bke::AttrDomain::Corner, mesh->corners_num);
   bke::mesh_convert_customdata_to_storage(*mesh);
 
   mesh_ensure_tessellation_customdata(mesh);
@@ -841,7 +850,6 @@ static void mesh_loops_to_tessdata(Mesh &mesh,
                                    CustomData *fdata_legacy,
                                    CustomData *corner_data,
                                    MFace *mface,
-                                   const int *polyindices,
                                    uint (*loopindices)[4],
                                    const int num_faces)
 {
@@ -856,7 +864,6 @@ static void mesh_loops_to_tessdata(Mesh &mesh,
   const bool hasOrigSpace = CustomData_has_layer(corner_data, CD_ORIGSPACE_MLOOP);
   const bool hasLoopNormal = CustomData_has_layer(corner_data, CD_NORMAL);
   int findex, i, j;
-  const int *pidx;
   uint(*lidx)[4];
 
   const bke::AttributeAccessor attributes = mesh.attributes();
@@ -866,9 +873,7 @@ static void mesh_loops_to_tessdata(Mesh &mesh,
         CustomData_get_layer_n_for_write(fdata_legacy, CD_MTFACE, i, num_faces));
     const VArraySpan uv = *attributes.lookup<float2>(uv_names[i], bke::AttrDomain::Corner);
 
-    for (findex = 0, pidx = polyindices, lidx = loopindices; findex < num_faces;
-         pidx++, lidx++, findex++, texface++)
-    {
+    for (findex = 0, lidx = loopindices; findex < num_faces; lidx++, findex++, texface++) {
       for (j = (mface ? mface[findex].v4 : (*lidx)[3]) ? 4 : 3; j--;) {
         copy_v2_v2(texface->uv[j], uv[(*lidx)[j]]);
       }
@@ -1053,7 +1058,7 @@ static void mesh_tessface_calc(Mesh &mesh)
     lidx[3] = 0; \
     mf->mat_nr = material_indices[poly_index]; \
     mf->flag = sharp_faces[poly_index] ? 0 : ME_SMOOTH; \
-    mf->edcode = 0; \
+    mf->edcode = eMFace_EdgeCode{}; \
     (void)0
 
 /* ALMOST IDENTICAL TO DEFINE ABOVE (see EXCEPTION) */
@@ -1076,7 +1081,7 @@ static void mesh_tessface_calc(Mesh &mesh)
     lidx[3] = l4; \
     mf->mat_nr = material_indices[poly_index]; \
     mf->flag = sharp_faces[poly_index] ? 0 : ME_SMOOTH; \
-    mf->edcode = TESSFACE_IS_QUAD; \
+    mf->edcode = eMFace_EdgeCode(TESSFACE_IS_QUAD); \
     (void)0
 
     else if (mp_totloop == 3) {
@@ -1106,7 +1111,7 @@ static void mesh_tessface_calc(Mesh &mesh)
 
       const uint totfilltri = mp_totloop - 2;
 
-      if (UNLIKELY(arena == nullptr)) {
+      if (arena == nullptr) [[unlikely]] {
         arena = BLI_memarena_new(BLI_MEMARENA_STD_BUFSIZE, __func__);
       }
 
@@ -1125,7 +1130,7 @@ static void mesh_tessface_calc(Mesh &mesh)
         add_newell_cross_v3_v3v3(normal, co_prev, co_curr);
         co_prev = co_curr;
       }
-      if (UNLIKELY(normalize_v3(normal) == 0.0f)) {
+      if (normalize_v3(normal) == 0.0f) [[unlikely]] {
         normal[2] = 1.0f;
       }
 
@@ -1163,7 +1168,7 @@ static void mesh_tessface_calc(Mesh &mesh)
         lidx[3] = 0;
 
         mf->mat_nr = material_indices ? material_indices[poly_index] : 0;
-        mf->edcode = 0;
+        mf->edcode = eMFace_EdgeCode{};
 
         mface_index++;
       }
@@ -1183,7 +1188,7 @@ static void mesh_tessface_calc(Mesh &mesh)
   BLI_assert(totface <= corner_tris_num);
 
   /* Not essential but without this we store over-allocated memory in the #CustomData layers. */
-  if (LIKELY(corner_tris_num != totface)) {
+  if (corner_tris_num != totface) [[likely]] {
     mface = static_cast<MFace *>(
         MEM_realloc_uninitialized(mface, sizeof(*mface) * size_t(totface)));
     mface_to_poly_map = static_cast<int *>(MEM_realloc_uninitialized(
@@ -1204,8 +1209,7 @@ static void mesh_tessface_calc(Mesh &mesh)
    * (because they are sorted for polygons, and our quads are still mere copies of their polygons).
    * So we pass nullptr as #MFace pointer, and #mesh_loops_to_tessdata
    * will use the fourth loop index as quad test. */
-  mesh_loops_to_tessdata(
-      mesh, fdata_legacy, &mesh.corner_data, nullptr, mface_to_poly_map, lindices, totface);
+  mesh_loops_to_tessdata(mesh, fdata_legacy, &mesh.corner_data, nullptr, lindices, totface);
 
   /* NOTE: quad detection issue - fourth vert-index vs fourth loop-index:
    * ...However, most #TFace code uses `MFace->v4 == 0` test to check whether it is a tri or quad.
@@ -1216,7 +1220,7 @@ static void mesh_tessface_calc(Mesh &mesh)
   for (mface_index = 0; mface_index < totface; mface_index++, mf++) {
     if (mf->edcode == TESSFACE_IS_QUAD) {
       BKE_mesh_mface_index_validate(mf, fdata_legacy, mface_index, 4);
-      mf->edcode = 0;
+      mf->edcode = eMFace_EdgeCode{};
     }
   }
 #endif
@@ -1262,9 +1266,9 @@ void BKE_mesh_legacy_sharp_faces_from_flags(Mesh *mesh)
   const Span<MPoly> polys(
       static_cast<const MPoly *>(CustomData_get_layer(&mesh->face_data, CD_MPOLY)),
       mesh->faces_num);
-  if (std::any_of(polys.begin(), polys.end(), [](const MPoly &poly) {
-        return !(poly.flag_legacy & ME_SMOOTH);
-      }))
+  if (std::any_of(polys.begin(),
+                  polys.end(),
+                  [](const MPoly &poly) { return !(poly.flag_legacy & ME_SMOOTH); }))
   {
     SpanAttributeWriter<bool> sharp_faces = attributes.lookup_or_add_for_write_only_span<bool>(
         "sharp_face", AttrDomain::Face);
@@ -1386,7 +1390,7 @@ void BKE_mesh_legacy_face_map_to_generic(Main *bmain)
     for (const auto [i, face_map] : object.fmaps.enumerate()) {
       mesh->attributes_for_write().rename(".temp_face_map_" + std::to_string(i), face_map.name);
     }
-    BLI_freelistN(&object.fmaps);
+    object.fmaps.free_no_destruct();
   }
 }
 
@@ -1514,9 +1518,9 @@ void BKE_mesh_legacy_sharp_edges_from_flags(Mesh *mesh)
   if (attributes.contains("sharp_edge")) {
     return;
   }
-  if (std::any_of(edges.begin(), edges.end(), [](const MEdge &edge) {
-        return edge.flag_legacy & ME_SHARP;
-      }))
+  if (std::any_of(edges.begin(),
+                  edges.end(),
+                  [](const MEdge &edge) { return edge.flag_legacy & ME_SHARP; }))
   {
     SpanAttributeWriter<bool> sharp_edges = attributes.lookup_or_add_for_write_only_span<bool>(
         "sharp_edge", AttrDomain::Edge);
@@ -1546,9 +1550,9 @@ void BKE_mesh_legacy_uv_seam_from_flags(Mesh *mesh)
   if (attributes.contains(".uv_seam")) {
     return;
   }
-  if (std::any_of(edges.begin(), edges.end(), [](const MEdge &edge) {
-        return edge.flag_legacy & ME_SEAM;
-      }))
+  if (std::any_of(edges.begin(),
+                  edges.end(),
+                  [](const MEdge &edge) { return edge.flag_legacy & ME_SEAM; }))
   {
     SpanAttributeWriter<bool> uv_seams = attributes.lookup_or_add_for_write_only_span<bool>(
         ".uv_seam", AttrDomain::Edge);
@@ -1577,9 +1581,9 @@ void BKE_mesh_legacy_convert_flags_to_hide_layers(Mesh *mesh)
     return;
   }
   const Span<MVert> verts(mesh->mvert, mesh->verts_num);
-  if (std::any_of(verts.begin(), verts.end(), [](const MVert &vert) {
-        return vert.flag_legacy & ME_HIDE;
-      }))
+  if (std::any_of(verts.begin(),
+                  verts.end(),
+                  [](const MVert &vert) { return vert.flag_legacy & ME_HIDE; }))
   {
     SpanAttributeWriter<bool> hide_vert = attributes.lookup_or_add_for_write_only_span<bool>(
         ".hide_vert", AttrDomain::Point);
@@ -1593,15 +1597,15 @@ void BKE_mesh_legacy_convert_flags_to_hide_layers(Mesh *mesh)
 
   if (mesh->medge) {
     const Span<MEdge> edges(mesh->medge, mesh->edges_num);
-    if (std::any_of(edges.begin(), edges.end(), [](const MEdge &edge) {
-          return edge.flag_legacy & ME_HIDE;
-        }))
+    if (std::any_of(edges.begin(),
+                    edges.end(),
+                    [](const MEdge &edge) { return int(edge.flag_legacy) & ME_HIDE; }))
     {
       SpanAttributeWriter<bool> hide_edge = attributes.lookup_or_add_for_write_only_span<bool>(
           ".hide_edge", AttrDomain::Edge);
       threading::parallel_for(edges.index_range(), 4096, [&](IndexRange range) {
         for (const int i : range) {
-          hide_edge.span[i] = edges[i].flag_legacy & ME_HIDE;
+          hide_edge.span[i] = int(edges[i].flag_legacy) & ME_HIDE;
         }
       });
       hide_edge.finish();
@@ -1611,15 +1615,15 @@ void BKE_mesh_legacy_convert_flags_to_hide_layers(Mesh *mesh)
   const Span<MPoly> polys(
       static_cast<const MPoly *>(CustomData_get_layer(&mesh->face_data, CD_MPOLY)),
       mesh->faces_num);
-  if (std::any_of(polys.begin(), polys.end(), [](const MPoly &poly) {
-        return poly.flag_legacy & ME_HIDE;
-      }))
+  if (std::any_of(polys.begin(),
+                  polys.end(),
+                  [](const MPoly &poly) { return int(poly.flag_legacy) & ME_HIDE; }))
   {
     SpanAttributeWriter<bool> hide_poly = attributes.lookup_or_add_for_write_only_span<bool>(
         ".hide_poly", AttrDomain::Face);
     threading::parallel_for(polys.index_range(), 4096, [&](IndexRange range) {
       for (const int i : range) {
-        hide_poly.span[i] = polys[i].flag_legacy & ME_HIDE;
+        hide_poly.span[i] = int(polys[i].flag_legacy) & ME_HIDE;
       }
     });
     hide_poly.finish();
@@ -1755,6 +1759,7 @@ void BKE_mesh_legacy_convert_uvs_to_generic(Mesh *mesh)
 
 /** \} */
 
+/* -------------------------------------------------------------------- */
 /** \name Selection Attribute and Legacy Flag Conversion
  * \{ */
 
@@ -1784,9 +1789,9 @@ void BKE_mesh_legacy_convert_flags_to_selection_layers(Mesh *mesh)
 
   if (mesh->medge) {
     const Span<MEdge> edges(mesh->medge, mesh->edges_num);
-    if (std::any_of(edges.begin(), edges.end(), [](const MEdge &edge) {
-          return edge.flag_legacy & SELECT;
-        }))
+    if (std::any_of(edges.begin(),
+                    edges.end(),
+                    [](const MEdge &edge) { return edge.flag_legacy & SELECT; }))
     {
       SpanAttributeWriter<bool> select_edge = attributes.lookup_or_add_for_write_only_span<bool>(
           ".select_edge", AttrDomain::Edge);
@@ -1802,9 +1807,9 @@ void BKE_mesh_legacy_convert_flags_to_selection_layers(Mesh *mesh)
   const Span<MPoly> polys(
       static_cast<const MPoly *>(CustomData_get_layer(&mesh->face_data, CD_MPOLY)),
       mesh->faces_num);
-  if (std::any_of(polys.begin(), polys.end(), [](const MPoly &poly) {
-        return poly.flag_legacy & ME_FACE_SEL;
-      }))
+  if (std::any_of(polys.begin(),
+                  polys.end(),
+                  [](const MPoly &poly) { return poly.flag_legacy & ME_FACE_SEL; }))
   {
     SpanAttributeWriter<bool> select_poly = attributes.lookup_or_add_for_write_only_span<bool>(
         ".select_poly", AttrDomain::Face);
@@ -2119,49 +2124,49 @@ static bNodeTree *add_auto_smooth_node_tree(Main &bmain, Library *owner_library)
 
   node_add_link(*group,
                 *edge_angle,
-                *node_find_socket(*edge_angle, SOCK_OUT, "Unsigned Angle"),
+                *node_find_socket(*edge_angle, SOCK_OUT, "Unsigned Angle"_ustr),
                 *less_than_or_equal,
-                *node_find_socket(*less_than_or_equal, SOCK_IN, "A"));
+                *node_find_socket(*less_than_or_equal, SOCK_IN, "A"_ustr));
   node_add_link(*group,
                 *shade_smooth_face,
-                *node_find_socket(*shade_smooth_face, SOCK_OUT, "Geometry"),
+                *node_find_socket(*shade_smooth_face, SOCK_OUT, "Geometry"_ustr),
                 *group_output,
-                *node_find_socket(*group_output, SOCK_IN, "Socket_0"));
+                *node_find_socket(*group_output, SOCK_IN, "Socket_0"_ustr));
   node_add_link(*group,
                 *group_input_angle,
-                *node_find_socket(*group_input_angle, SOCK_OUT, "Socket_2"),
+                *node_find_socket(*group_input_angle, SOCK_OUT, "Socket_2"_ustr),
                 *less_than_or_equal,
-                *node_find_socket(*less_than_or_equal, SOCK_IN, "B"));
+                *node_find_socket(*less_than_or_equal, SOCK_IN, "B"_ustr));
   node_add_link(*group,
                 *less_than_or_equal,
-                *node_find_socket(*less_than_or_equal, SOCK_OUT, "Result"),
+                *node_find_socket(*less_than_or_equal, SOCK_OUT, "Result"_ustr),
                 *boolean_and,
-                *node_find_socket(*boolean_and, SOCK_IN, "Boolean"));
+                *node_find_socket(*boolean_and, SOCK_IN, "Boolean"_ustr));
   node_add_link(*group,
                 *face_smooth,
-                *node_find_socket(*face_smooth, SOCK_OUT, "Smooth"),
+                *node_find_socket(*face_smooth, SOCK_OUT, "Smooth"_ustr),
                 *boolean_and,
-                *node_find_socket(*boolean_and, SOCK_IN, "Boolean_001"));
+                *node_find_socket(*boolean_and, SOCK_IN, "Boolean_001"_ustr));
   node_add_link(*group,
                 *group_input_mesh,
-                *node_find_socket(*group_input_mesh, SOCK_OUT, "Socket_1"),
+                *node_find_socket(*group_input_mesh, SOCK_OUT, "Socket_1"_ustr),
                 *shade_smooth_edge,
-                *node_find_socket(*shade_smooth_edge, SOCK_IN, "Geometry"));
+                *node_find_socket(*shade_smooth_edge, SOCK_IN, "Geometry"_ustr));
   node_add_link(*group,
                 *edge_smooth,
-                *node_find_socket(*edge_smooth, SOCK_OUT, "Smooth"),
+                *node_find_socket(*edge_smooth, SOCK_OUT, "Smooth"_ustr),
                 *shade_smooth_edge,
-                *node_find_socket(*shade_smooth_edge, SOCK_IN, "Selection"));
+                *node_find_socket(*shade_smooth_edge, SOCK_IN, "Selection"_ustr));
   node_add_link(*group,
                 *shade_smooth_edge,
-                *node_find_socket(*shade_smooth_edge, SOCK_OUT, "Geometry"),
+                *node_find_socket(*shade_smooth_edge, SOCK_OUT, "Geometry"_ustr),
                 *shade_smooth_face,
-                *node_find_socket(*shade_smooth_face, SOCK_IN, "Geometry"));
+                *node_find_socket(*shade_smooth_face, SOCK_IN, "Geometry"_ustr));
   node_add_link(*group,
                 *boolean_and,
-                *node_find_socket(*boolean_and, SOCK_OUT, "Boolean"),
+                *node_find_socket(*boolean_and, SOCK_OUT, "Boolean"_ustr),
                 *shade_smooth_edge,
-                *node_find_socket(*shade_smooth_edge, SOCK_IN, "Shade Smooth"));
+                *node_find_socket(*shade_smooth_edge, SOCK_IN, "Shade Smooth"_ustr));
 
   for (bNode &node : group->nodes) {
     node_set_selected(node, false);
@@ -2220,10 +2225,7 @@ static bool is_auto_smooth_node_tree(const bNodeTree &group)
   if (nodes[3]->custom1 != int16_t(bke::AttrDomain::Edge)) {
     return false;
   }
-  if (static_cast<bNodeSocket *>(nodes[4]->inputs.last)
-          ->default_value_typed<bNodeSocketValueBoolean>()
-          ->value != 1)
-  {
+  if (nodes[4]->inputs.last()->default_value_typed<bNodeSocketValueBoolean>()->value != 1) {
     return false;
   }
   if (nodes[4]->custom1 != int16_t(bke::AttrDomain::Face)) {
@@ -2236,7 +2238,7 @@ static bool is_auto_smooth_node_tree(const bNodeTree &group)
   {
     return false;
   }
-  if (BLI_listbase_count(&group.links) != 9) {
+  if (group.links.count() != 9) {
     return false;
   }
 
@@ -2353,7 +2355,7 @@ void BKE_main_mesh_legacy_convert_auto_smooth(Main &bmain)
         WeightedNormalModifierData *nmd = reinterpret_cast<WeightedNormalModifierData *>(&md);
         if ((nmd->flag & MOD_WEIGHTEDNORMAL_KEEP_SHARP) != 0) {
           ModifierData *new_md = create_auto_smooth_modifier(object, add_node_group, angle);
-          BLI_insertlinkbefore(&object.modifiers, object.modifiers.last, new_md);
+          BLI_insertlinkbefore(&object.modifiers, object.modifiers.last(), new_md);
         }
       }
       if (md.type == eModifierType_Nodes) {
@@ -2377,7 +2379,7 @@ void BKE_main_mesh_legacy_convert_auto_smooth(Main &bmain)
       continue;
     }
 
-    ModifierData *last_md = static_cast<ModifierData *>(object.modifiers.last);
+    ModifierData *last_md = object.modifiers.last();
     ModifierData *new_md = create_auto_smooth_modifier(object, add_node_group, angle);
     if (last_md && last_md->type == eModifierType_Subsurf && has_custom_normals &&
         (reinterpret_cast<SubsurfModifierData *>(last_md)->flags &
@@ -2385,7 +2387,7 @@ void BKE_main_mesh_legacy_convert_auto_smooth(Main &bmain)
     {
       /* Add the auto smooth node group before the last subdivision surface modifier if possible.
        * Subdivision surface modifiers have special handling for interpolating custom normals. */
-      BLI_insertlinkbefore(&object.modifiers, object.modifiers.last, new_md);
+      BLI_insertlinkbefore(&object.modifiers, object.modifiers.last(), new_md);
     }
     else {
       BLI_addtail(&object.modifiers, new_md);
@@ -2476,7 +2478,7 @@ void mesh_freestyle_marks_to_generic(Mesh &mesh)
       static_assert(char(FREESTYLE_FACE_MARK) == char(true));
       Attribute::ArrayData array_data{};
       array_data.data = data;
-      array_data.size = mesh.edges_num;
+      array_data.size = mesh.faces_num;
       sharing_info->add_user();
       array_data.sharing_info = ImplicitSharingPtr<>(sharing_info);
       mesh.attribute_storage.wrap().add(
@@ -2488,74 +2490,167 @@ void mesh_freestyle_marks_to_generic(Mesh &mesh)
   }
 }
 
-void mesh_freestyle_marks_to_legacy(AttributeStorage::BlendWriteData &attr_write_data,
-                                    CustomData &edge_data,
-                                    CustomData &face_data,
-                                    Vector<CustomDataLayer, 16> &edge_layers,
-                                    Vector<CustomDataLayer, 16> &face_layers)
+void mesh_skin_to_generic(Mesh &mesh)
 {
-  Array<bool, 64> attrs_to_remove(attr_write_data.attributes.size(), false);
-  for (const int i : attr_write_data.attributes.index_range()) {
-    const blender::Attribute &dna_attr = attr_write_data.attributes[i];
-    if (dna_attr.data_type != int8_t(AttrType::Bool)) {
-      continue;
-    }
-    if (dna_attr.storage_type != int8_t(AttrStorageType::Array)) {
-      continue;
-    }
-    if (dna_attr.domain == int8_t(AttrDomain::Edge)) {
-      if (STREQ(dna_attr.name, "freestyle_edge")) {
-        const auto &array_dna = *static_cast<const blender::AttributeArray *>(dna_attr.data);
-        static_assert(sizeof(FreestyleEdge) == sizeof(bool));
-        static_assert(char(FREESTYLE_EDGE_MARK) == char(true));
-        CustomDataLayer layer{};
-        layer.type = CD_FREESTYLE_EDGE;
-        layer.data = array_dna.data;
-        layer.sharing_info = array_dna.sharing_info;
-        edge_layers.append(layer);
-        std::stable_sort(
-            edge_layers.begin(),
-            edge_layers.end(),
-            [](const CustomDataLayer &a, const CustomDataLayer &b) { return a.type < b.type; });
-        if (!edge_data.layers) {
-          /* edge_data.layers must not be null, or the layers will not be written. Its address
-           * doesn't really matter, but it must be unique within this ID.*/
-          edge_data.layers = edge_layers.data();
-        }
-        edge_data.totlayer = edge_layers.size();
-        edge_data.maxlayer = edge_data.totlayer;
-        attrs_to_remove[i] = true;
-      }
-    }
-    else if (dna_attr.domain == int8_t(AttrDomain::Face)) {
-      if (STREQ(dna_attr.name, "freestyle_face")) {
-        const auto &array_dna = *static_cast<const blender::AttributeArray *>(dna_attr.data);
-        static_assert(sizeof(FreestyleFace) == sizeof(bool));
-        static_assert(char(FREESTYLE_FACE_MARK) == char(true));
-        CustomDataLayer layer{};
-        layer.type = CD_FREESTYLE_FACE;
-        layer.data = array_dna.data;
-        layer.sharing_info = array_dna.sharing_info;
-        face_layers.append(layer);
-        std::stable_sort(
-            face_layers.begin(),
-            face_layers.end(),
-            [](const CustomDataLayer &a, const CustomDataLayer &b) { return a.type < b.type; });
-        if (!face_data.layers) {
-          /* face_data.layers must not be null, or the layers will not be written. Its address
-           * doesn't really matter, but it must be unique within this ID.*/
-          face_data.layers = face_layers.data();
-        }
-        face_data.totlayer = face_layers.size();
-        face_data.maxlayer = face_data.totlayer;
-        attrs_to_remove[i] = true;
-      }
+  if (mesh.attributes().contains("skin_modifier_radius")) {
+    return;
+  }
+  const void *data = nullptr;
+  for (const int i : IndexRange(mesh.vert_data.totlayer)) {
+    const CustomDataLayer &layer = mesh.vert_data.layers[i];
+    if (layer.type == CD_MVERT_SKIN) {
+      data = layer.data;
+      break;
     }
   }
-  attr_write_data.attributes.remove_if([&](const blender::Attribute &attr) {
-    const int i = &attr - attr_write_data.attributes.begin();
-    return attrs_to_remove[i];
+  if (data == nullptr) {
+    return;
+  }
+  const Span src(static_cast<const MVertSkin *>(data), mesh.verts_num);
+
+  float2 *radius_data = MEM_new_array_uninitialized<float2>(mesh.verts_num, __func__);
+  bool *root_data = MEM_new_array_uninitialized<bool>(mesh.verts_num, __func__);
+  bool *loose_data = MEM_new_array_uninitialized<bool>(mesh.verts_num, __func__);
+  threading::parallel_for(src.index_range(), 4096, [&](const IndexRange range) {
+    for (const int i : range) {
+      radius_data[i] = float2(src[i].radius[0], src[i].radius[1]);
+      root_data[i] = (src[i].flag & MVERT_SKIN_ROOT) != 0;
+      loose_data[i] = (src[i].flag & MVERT_SKIN_LOOSE) != 0;
+    }
   });
+
+  CustomData_free_layers(&mesh.vert_data, CD_MVERT_SKIN);
+
+  AttributeStorage &storage = mesh.attribute_storage.wrap();
+  auto add_array = [&]<typename T>(const StringRef name, const AttrType type, T *array_data) {
+    Attribute::ArrayData array{};
+    array.data = array_data;
+    array.size = mesh.verts_num;
+    array.sharing_info = ImplicitSharingPtr<>(implicit_sharing::info_for_mem_free(array_data));
+    storage.add(name, AttrDomain::Point, type, std::move(array));
+  };
+  add_array("skin_modifier_radius", AttrType::Float2, radius_data);
+  add_array("skin_modifier_root", AttrType::Bool, root_data);
+  add_array("skin_modifier_loose", AttrType::Bool, loose_data);
+}
+
+void mesh_skin_to_legacy(AttributeStorage::BlendWriteData &attr_write_data,
+                         CustomData &vert_data,
+                         Vector<CustomDataLayer, 16> &vert_layers,
+                         const int verts_num)
+{
+  const AttributeArray *radius_array = nullptr;
+  const AttributeArray *root_array = nullptr;
+  const AttributeArray *loose_array = nullptr;
+  const AttributeSingle *radius_single = nullptr;
+  const AttributeSingle *root_single = nullptr;
+  const AttributeSingle *loose_single = nullptr;
+  Set<StringRef> attrs_to_remove;
+  for (const int i : attr_write_data.attributes.index_range()) {
+    const blender::Attribute &dna_attr = attr_write_data.attributes[i];
+    if (dna_attr.domain != int8_t(AttrDomain::Point)) {
+      continue;
+    }
+    if (dna_attr.data_type == int8_t(AttrType::Float2) &&
+        STREQ(dna_attr.name, "skin_modifier_radius"))
+    {
+      if (dna_attr.storage_type == int8_t(AttrStorageType::Array)) {
+        radius_array = static_cast<const AttributeArray *>(dna_attr.data);
+      }
+      else if (dna_attr.storage_type == int8_t(AttrStorageType::Single)) {
+        radius_single = static_cast<const AttributeSingle *>(dna_attr.data);
+      }
+      attrs_to_remove.add("skin_modifier_radius");
+    }
+    else if (dna_attr.data_type == int8_t(AttrType::Bool) &&
+             STREQ(dna_attr.name, "skin_modifier_root"))
+    {
+      if (dna_attr.storage_type == int8_t(AttrStorageType::Array)) {
+        root_array = static_cast<const AttributeArray *>(dna_attr.data);
+      }
+      else if (dna_attr.storage_type == int8_t(AttrStorageType::Single)) {
+        root_single = static_cast<const AttributeSingle *>(dna_attr.data);
+      }
+      attrs_to_remove.add("skin_modifier_root");
+    }
+    else if (dna_attr.data_type == int8_t(AttrType::Bool) &&
+             STREQ(dna_attr.name, "skin_modifier_loose"))
+    {
+      if (dna_attr.storage_type == int8_t(AttrStorageType::Array)) {
+        loose_array = static_cast<const AttributeArray *>(dna_attr.data);
+      }
+      else if (dna_attr.storage_type == int8_t(AttrStorageType::Single)) {
+        loose_single = static_cast<const AttributeSingle *>(dna_attr.data);
+      }
+      attrs_to_remove.add("skin_modifier_loose");
+    }
+  }
+  if (radius_array == nullptr && radius_single == nullptr) {
+    return;
+  }
+
+  const VArray<float2> radius = [&]() {
+    if (radius_single) {
+      return VArray<float2>::from_single(*static_cast<const float2 *>(radius_single->data),
+                                         verts_num);
+    }
+    return VArray<float2>::from_span(
+        Span(static_cast<const float2 *>(radius_array->data), verts_num));
+  }();
+  const VArray<bool> root = [&]() {
+    if (root_single) {
+      return VArray<bool>::from_single(*static_cast<const bool *>(root_single->data), verts_num);
+    }
+    if (root_array) {
+      return VArray<bool>::from_span(Span(static_cast<const bool *>(root_array->data), verts_num));
+    }
+    return VArray<bool>::from_single(false, verts_num);
+  }();
+  const VArray<bool> loose = [&]() {
+    if (loose_single) {
+      return VArray<bool>::from_single(*static_cast<const bool *>(loose_single->data), verts_num);
+    }
+    if (loose_array) {
+      return VArray<bool>::from_span(
+          Span(static_cast<const bool *>(loose_array->data), verts_num));
+    }
+    return VArray<bool>::from_single(false, verts_num);
+  }();
+
+  MutableSpan legacy_data = attr_write_data.scope.allocator().construct_array<MVertSkin>(
+      verts_num);
+  threading::parallel_for(IndexRange(verts_num), 4096, [&](const IndexRange range) {
+    for (const int i : range) {
+      legacy_data[i].radius[0] = radius[i][0];
+      legacy_data[i].radius[1] = radius[i][1];
+      legacy_data[i].radius[2] = 0.0f;
+      legacy_data[i].flag = eMVertSkinFlag(0);
+      if (root[i]) {
+        legacy_data[i].flag |= MVERT_SKIN_ROOT;
+      }
+      if (loose[i]) {
+        legacy_data[i].flag |= MVERT_SKIN_LOOSE;
+      }
+    }
+  });
+
+  CustomDataLayer layer{};
+  layer.type = CD_MVERT_SKIN;
+  layer.data = legacy_data.data();
+  vert_layers.append(layer);
+  std::ranges::stable_sort(vert_layers, [](const CustomDataLayer &a, const CustomDataLayer &b) {
+    return a.type < b.type;
+  });
+  vert_data.totlayer = vert_layers.size();
+  vert_data.maxlayer = vert_data.totlayer;
+  if (!vert_data.layers) {
+    /* #CustomData_blend_write_prepare cleared this because there were no other layers to write.
+     * We just need a unique address as a signal to write layers like that function does. */
+    vert_data.layers = reinterpret_cast<CustomDataLayer *>(&vert_data.layers);
+  }
+
+  attr_write_data.attributes.remove_if(
+      [&](const blender::Attribute &attr) { return attrs_to_remove.contains_as(attr.name); });
 }
 
 void mesh_custom_normals_to_generic(Mesh &mesh)

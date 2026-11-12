@@ -29,10 +29,13 @@ static void node_declare(NodeDeclarationBuilder &b)
                        GeometryComponent::Type::Curve,
                        GeometryComponent::Type::GreasePencil});
   b.add_output<decl::Geometry>("Geometry"_ustr)
-      .propagate_all()
+      .propagate_all_geometry()
       .align_with_previous()
       .description("Geometry to assign a material to");
-  b.add_input<decl::Bool>("Selection"_ustr).default_value(true).hide_value().field_on_all();
+  b.add_input<decl::Bool>("Selection"_ustr)
+      .default_value(true)
+      .hide_value()
+      .evaluated_geometry_field();
   b.add_input<decl::Material>("Material"_ustr).optional_label();
 }
 
@@ -95,7 +98,6 @@ static void node_geo_exec(GeoNodeExecParams params)
   bool no_faces_warning = false;
   bool point_selection_warning = false;
   bool volume_selection_warning = false;
-  bool curves_selection_warning = false;
 
   geometry::foreach_real_geometry(geometry_set, [&](GeometrySet &geometry_set) {
     if (Mesh *mesh = geometry_set.get_mesh_for_write()) {
@@ -128,11 +130,17 @@ static void node_geo_exec(GeoNodeExecParams params)
         point_selection_warning = true;
       }
     }
-    if (Curves *curves = geometry_set.get_curves_for_write()) {
-      BKE_id_material_eval_assign(&curves->id, 1, material);
-      if (selection_field.depends_on_input()) {
-        curves_selection_warning = true;
-      }
+    if (Curves *curves_id = geometry_set.get_curves_for_write()) {
+      bke::CurvesGeometry &curves = curves_id->geometry.wrap();
+      const bke::CurvesFieldContext field_context{curves, AttrDomain::Curve};
+      MutableAttributeAccessor attributes = curves.attributes_for_write();
+      assign_material_to_id_geometry(&curves_id->id,
+                                     field_context,
+                                     selection_field,
+                                     attributes,
+                                     AttrDomain::Curve,
+                                     material,
+                                     curves.runtime->max_material_index_cache);
     }
     if (GreasePencil *grease_pencil = geometry_set.get_grease_pencil_for_write()) {
       using namespace blender::bke::greasepencil;
@@ -173,11 +181,6 @@ static void node_geo_exec(GeoNodeExecParams params)
     params.error_message_add(
         NodeWarningType::Info,
         TIP_("Point clouds only support a single material; selection input cannot be a field"));
-  }
-  if (curves_selection_warning) {
-    params.error_message_add(
-        NodeWarningType::Info,
-        TIP_("Curves only support a single material; selection input cannot be a field"));
   }
 
   params.set_output("Geometry"_ustr, std::move(geometry_set));

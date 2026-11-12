@@ -10,6 +10,7 @@
 
 #include "BKE_context.hh"
 #include "BKE_light_linking.h"
+#include "BKE_scene.hh"
 
 #include "ED_object.hh"
 #include "ED_screen.hh"
@@ -139,6 +140,18 @@ static wmOperatorStatus light_linking_link_exec(bContext *C, wmOperator *op)
   const eCollectionLightLinkingState link_state = eCollectionLightLinkingState(
       RNA_enum_get(op->ptr, "link_state"));
 
+  Collection *collection = BKE_light_linking_collection_get(emitter, link_type);
+  if (Scene *collection_scene = BKE_scene_find_from_collection(bmain, collection);
+      collection_scene != nullptr)
+  {
+    BKE_reportf(op->reports,
+                RPT_ERROR,
+                "Cannot link to light linking collection '%s' that is used by scene '%s'",
+                collection->id.name + 2,
+                collection_scene->id.name + 2);
+    return OPERATOR_CANCELLED;
+  }
+
   CTX_DATA_BEGIN (C, Object *, receiver, selected_objects) {
     if (receiver == emitter) {
       continue;
@@ -173,8 +186,8 @@ void OBJECT_OT_light_linking_receivers_link(wmOperatorType *ot)
   };
 
   /* identifiers */
-  ot->name = "Link Receivers to Emitter";
-  ot->description = "Light link selected receivers to the active emitter object";
+  ot->name = "Link Receiver Objects to Emitter";
+  ot->description = "Light link selected objects to the active emitter object";
   ot->idname = "OBJECT_OT_light_linking_receivers_link";
 
   /* API callbacks. */
@@ -244,6 +257,15 @@ static wmOperatorStatus light_linking_unlink_from_collection_exec(bContext *C, w
 
   if (!id || !collection) {
     return OPERATOR_PASS_THROUGH;
+  }
+
+  if (Scene *scene = BKE_scene_find_from_collection(bmain, collection); scene != nullptr) {
+    BKE_reportf(op->reports,
+                RPT_ERROR,
+                "Cannot unlink from light linking collection '%s' that is used by scene '%s'",
+                collection->id.name + 2,
+                scene->id.name + 2);
+    return OPERATOR_CANCELLED;
   }
 
   if (!BKE_light_linking_unlink_id_from_collection(bmain, collection, id, op->reports)) {

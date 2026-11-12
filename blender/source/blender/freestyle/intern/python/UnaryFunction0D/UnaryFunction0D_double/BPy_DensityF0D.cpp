@@ -26,7 +26,7 @@ PyDoc_STRVAR(
     "\n"
     "   Builds a DensityF0D object.\n"
     "\n"
-    "   :arg sigma: The gaussian sigma value indicating the X value for\n"
+    "   :param sigma: The gaussian sigma value indicating the X value for\n"
     "      which the gaussian function is 0.5. It leads to the window size\n"
     "      value (the larger, the smoother).\n"
     "   :type sigma: float\n"
@@ -39,7 +39,7 @@ PyDoc_STRVAR(
     "   window around the evaluation point and integrating these values using\n"
     "   a gaussian.\n"
     "\n"
-    "   :arg it: An Interface0DIterator object.\n"
+    "   :param it: An Interface0DIterator object.\n"
     "   :type it: :class:`freestyle.types.Interface0DIterator`\n"
     "   :return: The density of the image evaluated at the pointed\n"
     "      Interface0D.\n"
@@ -49,7 +49,14 @@ static int DensityF0D___init__(BPy_DensityF0D *self, PyObject *args, PyObject *k
   static const char *kwlist[] = {"sigma", nullptr};
   double d = 2;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "|d", (char **)kwlist, &d)) {
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "|" /* Optional arguments. */
+                                   "d" /* `sigma` */
+                                   ":__init__",
+                                   (char **)kwlist,
+                                   &d))
+  {
     return -1;
   }
   self->py_uf0D_double.uf0D_double = new Functions0D::DensityF0D(d);

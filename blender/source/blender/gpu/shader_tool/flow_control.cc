@@ -182,9 +182,6 @@ void SourceProcessor::lower_loop_unroll(Parser &parser)
       int t = 0;
       const Token cond_var = cond[t++];
       const Token cond_type = cond[t++];
-      if (cond_type.next() == '=') {
-        t++; /* Skip equal sign. */
-      }
       const Token cond_sign = (cond[t] == '+' || cond[t] == '-') ? cond[t++] : Token(parser);
       const Token cond_end = cond[t];
       if (cond_var.str() != var_name.str()) {
@@ -207,14 +204,14 @@ void SourceProcessor::lower_loop_unroll(Parser &parser)
       }
       if (iter_type == Increment) {
         iter_incr = +1;
-        if (cond_type == '>') {
+        if (cond_type == GThan || cond_type == GEqual) {
           report_error(for_tok, "Unsupported condition in unrolled loop.");
           return;
         }
       }
       else if (iter_type == Decrement) {
         iter_incr = -1;
-        if (cond_type == '<') {
+        if (cond_type == LThan || cond_type == LEqual) {
           report_error(for_tok, "Unsupported condition in unrolled loop.");
           return;
         }
@@ -230,7 +227,7 @@ void SourceProcessor::lower_loop_unroll(Parser &parser)
           parser.substr_range_inclusive(cond_sign.is_valid() ? cond_sign : cond_end, cond_end));
       /* TODO(fclem): Support arbitrary strides (aka, arbitrary iter statement). */
       int iter_count = abs(end_value - init_value);
-      if (cond_type.next() == '=') {
+      if (cond_type == GEqual || cond_type == LEqual) {
         iter_count += 1;
       }
 
@@ -275,62 +272,81 @@ void SourceProcessor::lower_loop_unroll(Parser &parser)
 
 void SourceProcessor::lower_static_branch(Parser &parser)
 {
-  parser().foreach_match("i(..)[[A]]{..}", [&](const vector<Token> &tokens) {
-    Token if_tok = tokens[0];
-    Scope condition = tokens[1].scope();
-    Token attribute = tokens[7];
-    Scope body = tokens[10].scope();
 
-    if (attribute.str() != "static_branch") {
-      return;
-    }
+  do {
+    /* Transform `if constexpr (...)` into `if (...) [[static_branch]]`. */
+    parser().foreach_match("iC(..)", [&](const vector<Token> &tokens) {
+      parser.erase(tokens[1]);
+      parser.insert_after(tokens[5], "[[static_branch]]");
+    });
+  } while (parser.apply_mutations());
 
-    if (condition.str().find("&&") != string::npos || condition.str().find("||") != string::npos) {
-      report_error(condition[0], "Expecting single condition.");
-      return;
-    }
+  do {
+    parser().foreach_match("i(..)[[A]]{..}", [&](const vector<Token> &tokens) {
+      Token if_tok = tokens[0];
+      Scope condition = tokens[1].scope();
+      Token attribute = tokens[7];
+      Scope body = tokens[10].scope();
 
-    if (condition[1].str() != "srt_access") {
-      report_error(if_tok,
-                   "Expecting compilation or specialization constant. Make sure SRT arguments "
-                   "have the [[resource_table]] attribute.");
-      return;
-    }
-
-    Token before_body = body.front().prev();
-
-    string test = "SRT_CONSTANT_" + string(condition[5].str()) + " ";
-    if (condition[7] != condition.back().prev()) {
-      test += parser.substr_range_inclusive(condition[7], condition.back().prev());
-    }
-    string directive = (if_tok.prev() == Else ? "#elif " : "#if ");
-
-    parser.insert_directive(before_body, directive + test);
-    parser.erase(if_tok, before_body);
-
-    if (body.back().next() == Else) {
-      Token else_tok = body.back().next();
-      parser.erase(else_tok);
-      if (else_tok.next() == If) {
-        /* Will be processed later. */
-        Token next_if = else_tok.next();
-        /* Ensure the rest of the if clauses also have the attribute. */
-        Scope attributes = next_if.next().scope().back().next().scope();
-        if (attributes.type() != ScopeType::Subscript ||
-            attributes.front().next().scope().str_exclusive() != "static_branch")
-        {
-          report_error(next_if, "Expecting next if statement to also be a static branch.");
-          return;
-        }
+      if (attribute.str() != "static_branch") {
         return;
       }
-      body = else_tok.next().scope();
 
-      parser.insert_directive(else_tok, "#else");
-    }
-    parser.insert_directive(body.back(), "#endif");
-  });
-  parser.apply_mutations();
+      if (condition.str().find("&&") != string::npos || condition.str().find("||") != string::npos)
+      {
+        report_error(condition[0], "Expecting single condition.");
+        return;
+      }
+
+      const int i = condition[1].str() == "!" ? 2 : 1;
+      /* TODO(fclem): Make full check of all params. */
+      const bool is_constexpr = condition[i].str() == "true" || condition[i].str() == "false";
+      const bool constexpr_val = is_constexpr ? (condition[i].str() == "true") ^ (i == 2) : false;
+
+      if (condition[i].str() != "srt_access" && !is_constexpr) {
+        report_error(if_tok,
+                     "Expecting compilation or specialization constant. Make sure SRT arguments "
+                     "have the [[resource_table]] attribute.");
+        return;
+      }
+
+      Token before_body = body.front().prev();
+
+      string test = is_constexpr ? string(constexpr_val ? "1" : "0") :
+                                   string(i == 2 ? "!" : "") + "SRT_CONSTANT_" +
+                                       string(condition[4 + i].str()) + " ";
+      if (condition[is_constexpr ? 2 : 7] != condition.back().prev()) {
+        test += parser.substr_range_inclusive(condition[is_constexpr ? 2 : 7],
+                                              condition.back().prev());
+      }
+      string directive = (if_tok.prev() == Else ? "#elif " : "#if ");
+
+      parser.insert_directive(before_body, directive + test);
+      parser.erase(if_tok, before_body);
+
+      if (body.back().next() == Else) {
+        Token else_tok = body.back().next();
+        parser.erase(else_tok);
+        if (else_tok.next() == If) {
+          /* Will be processed later. */
+          Token next_if = else_tok.next();
+          /* Ensure the rest of the if clauses also have the attribute. */
+          Scope attributes = next_if.next().scope().back().next().scope();
+          if (attributes.type() != ScopeType::Subscript ||
+              attributes.front().next().scope().str_exclusive() != "static_branch")
+          {
+            report_error(next_if, "Expecting next if statement to also be a static branch.");
+            return;
+          }
+          return;
+        }
+        body = else_tok.next().scope();
+
+        parser.insert_directive(else_tok, "#else");
+      }
+      parser.insert_directive(body.back(), "#endif");
+    });
+  } while (parser.apply_mutations());
 }
 
 }  // namespace blender::gpu::shader

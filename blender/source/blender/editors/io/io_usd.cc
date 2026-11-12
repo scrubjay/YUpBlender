@@ -15,7 +15,7 @@
 #  include "BKE_report.hh"
 
 #  include "BLI_path_utils.hh"
-#  include "BLI_string_utf8.h"
+#  include "BLI_string_utf8.hh"
 
 #  include "BLT_translation.hh"
 
@@ -312,6 +312,7 @@ static wmOperatorStatus wm_usd_export_exec(bContext *C, wmOperator *op)
 
   USDExportParams params;
   params.export_animation = RNA_boolean_get(op->ptr, "export_animation");
+  params.incremental_frames = RNA_int_get(op->ptr, "incremental_frames");
   params.selected_objects_only = RNA_boolean_get(op->ptr, "selected_objects_only");
 
   params.export_meshes = RNA_boolean_get(op->ptr, "export_meshes");
@@ -395,6 +396,9 @@ static void wm_usd_export_draw(bContext *C, wmOperator *op)
       sub->prop(ptr, "selected_objects_only", UI_ITEM_NONE, std::nullopt, ICON_NONE);
     }
     sub->prop(ptr, "export_animation", UI_ITEM_NONE, std::nullopt, ICON_NONE);
+    if (RNA_boolean_get(ptr, "export_animation")) {
+      sub->prop(ptr, "incremental_frames", UI_ITEM_NONE, std::nullopt, ICON_NONE);
+    }
 
     sub = &col->column(true, IFACE_("Blender Data"));
     sub->prop(ptr, "export_custom_properties", UI_ITEM_NONE, std::nullopt, ICON_NONE);
@@ -596,6 +600,18 @@ void WM_OT_usd_export(wmOperatorType *ot)
       false,
       "Animation",
       "Export all frames in the render frame range, rather than only the current frame");
+  RNA_def_int(ot->srna,
+              "incremental_frames",
+              0,
+              0,
+              INT_MAX,
+              "Incremental Save",
+              "Incrementally save after the specified number of frames to reduce peak memory "
+              "usage. Incremental saves can result in longer export times and potential issues "
+              "with some file synchronization services. Zero disables incremental save",
+              0,
+              INT_MAX);
+
   RNA_def_boolean(
       ot->srna, "export_hair", false, "Hair", "Export hair particle systems as USD curves");
   RNA_def_boolean(
@@ -889,7 +905,7 @@ static wmOperatorStatus wm_usd_import_exec(bContext *C, wmOperator *op)
   const bool read_mesh_colors = RNA_boolean_get(op->ptr, "read_mesh_colors");
   const bool read_mesh_attributes = RNA_boolean_get(op->ptr, "read_mesh_attributes");
 
-  char mesh_read_flag = MOD_MESHSEQ_READ_VERT | MOD_MESHSEQ_READ_POLY;
+  MeshSeqCacheModifierReadFlag mesh_read_flag = MOD_MESHSEQ_READ_VERT | MOD_MESHSEQ_READ_POLY;
   if (read_mesh_uvs) {
     mesh_read_flag |= MOD_MESHSEQ_READ_UV;
   }
@@ -916,6 +932,7 @@ static wmOperatorStatus wm_usd_import_exec(bContext *C, wmOperator *op)
 
   params.import_visible_only = RNA_boolean_get(op->ptr, "import_visible_only");
   params.import_defined_only = RNA_boolean_get(op->ptr, "import_defined_only");
+  params.load_y_up = RNA_boolean_get(op->ptr, "load_y_up");
 
   params.import_cameras = RNA_boolean_get(op->ptr, "import_cameras");
   params.import_curves = RNA_boolean_get(op->ptr, "import_curves");
@@ -992,6 +1009,7 @@ static void wm_usd_import_draw(bContext *C, wmOperator *op)
     sub.prop(ptr, "import_defined_only", UI_ITEM_NONE, std::nullopt, ICON_NONE);
 
     col = &panel->column(false);
+    col->prop(ptr, "load_y_up", UI_ITEM_NONE, IFACE_("Load Y-Up"), ICON_NONE);
     col->prop(ptr, "set_frame_range", UI_ITEM_NONE, std::nullopt, ICON_NONE);
     col->prop(ptr, "create_collection", UI_ITEM_NONE, std::nullopt, ICON_NONE);
     col->prop(ptr, "relative_path", UI_ITEM_NONE, std::nullopt, ICON_NONE);
@@ -1118,6 +1136,13 @@ void WM_OT_usd_import(wmOperatorType *ot)
       "Value by which to enlarge or shrink the objects with respect to the world's origin",
       0.0001f,
       1000.0f);
+
+  RNA_def_boolean(ot->srna,
+                  "load_y_up",
+                  false,
+                  "Load Y-Up",
+                  "Rotate loaded USD mesh -90 degrees on the X axis and 180 degrees on the Y "
+                  "axis, and zero out object rotation");
 
   RNA_def_boolean(ot->srna,
                   "set_frame_range",

@@ -1,9 +1,9 @@
 
 msgid ""
 msgstr ""
-"Project-Id-Version: Blender 5.2.0 Alpha (b'8bc0d293b105')\n"
+"Project-Id-Version: Blender 5.3.0 Release Candidate (b'f78a5e153839')\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-04-28 08:59+0000\n"
+"POT-Creation-Date: 2026-11-09 09:34+0000\n"
 "PO-Revision-Date: 2026-01-30 13:12+0000\n"
 "Last-Translator: Martin Hansen <martini-141@users.noreply.translate.blender.org>\n"
 "Language-Team: Norwegian Bokmål <https://translate.blender.org/projects/blender-ui/ui/nb_NO/>\n"
@@ -1796,6 +1796,38 @@ msgid "Armatures active edit bone"
 msgstr "Armaturens gjeldende redigeringsbein"
 
 
+msgid "Asset Library"
+msgstr "Eiendelsbibliotek"
+
+
+msgid "All Libraries"
+msgstr "Alle bibliotek"
+
+
+msgid "Show assets from all of the listed asset libraries"
+msgstr "Vis eiendeler fra alle de oppførte eiendelsbibliotekene"
+
+
+msgid "Current File"
+msgstr "Gjeldende fil"
+
+
+msgid "Show the assets currently available in this Blender session"
+msgstr "Vis de tilgjengelige eiendelene i denne Blender-økta"
+
+
+msgid "Essentials"
+msgstr "Nødvendigheter"
+
+
+msgid "Custom"
+msgstr "Tilpasset"
+
+
+msgid "Show assets from the asset libraries configured in the Preferences"
+msgstr "Vis eiendeler fra eiendelsbiblioteket satt opp i innstillingene"
+
+
 msgid "User Asset Libraries"
 msgstr "Eiendels bibliotek"
 
@@ -1937,44 +1969,8 @@ msgid "Regions for quick access to assets"
 msgstr "Regioner for enkel tilgang til eiendelene"
 
 
-msgid "Asset Library"
-msgstr "Eiendelsbibliotek"
-
-
 msgid "Choose the asset library to display assets from"
 msgstr "Velg eiendelsbiblioteket å vise eiendeler fra"
-
-
-msgid "All Libraries"
-msgstr "Alle bibliotek"
-
-
-msgid "Show assets from all of the listed asset libraries"
-msgstr "Vis eiendeler fra alle de oppførte eiendelsbibliotekene"
-
-
-msgid "Current File"
-msgstr "Gjeldende fil"
-
-
-msgid "Show the assets currently available in this Blender session"
-msgstr "Vis de tilgjengelige eiendelene i denne Blender-økta"
-
-
-msgid "Essentials"
-msgstr "Nødvendigheter"
-
-
-msgid "Show the basic building blocks and utilities coming with Blender"
-msgstr "Vis de grunnleggende byggeblokkene og verktøyene, Blender kommer med"
-
-
-msgid "Custom"
-msgstr "Tilpasset"
-
-
-msgid "Show assets from the asset libraries configured in the Preferences"
-msgstr "Vis eiendeler fra eiendelsbiblioteket satt opp i innstillingene"
 
 
 msgid "Activate Operator"
@@ -2509,56 +2505,28 @@ msgid "Point"
 msgstr "Punkt"
 
 
-msgid "Attribute on point"
-msgstr "Egenskapen på punkt"
-
-
 msgid "Edge"
 msgstr "Kant"
-
-
-msgid "Attribute on mesh edge"
-msgstr "Egenskap på maskenett kanten"
 
 
 msgid "Face"
 msgstr "Sideflate"
 
 
-msgid "Attribute on mesh faces"
-msgstr "Egenskap på maskenett sideflata"
-
-
 msgid "Face Corner"
 msgstr "Sideflate kanter"
-
-
-msgid "Attribute on mesh face corner"
-msgstr "Egenskap på maskenett sideflate kanter"
 
 
 msgid "Spline"
 msgstr "Spline"
 
 
-msgid "Attribute on spline"
-msgstr "Egenskap på spline"
-
-
 msgid "Instance"
 msgstr "Instans"
 
 
-msgid "Attribute on instance"
-msgstr "Egenskap på instans"
-
-
 msgid "Layer"
 msgstr "Lag"
-
-
-msgid "Attribute on Grease Pencil layer"
-msgstr "Egenskap på Grease Pencil lag"
 
 
 msgid "Is Internal"
@@ -3824,32 +3792,20 @@ msgid "A color space, view or display was not found, which likely means the Open
 msgstr "Fant ikke et fargerom, visning eller skjerm, noe som sannsynligvis betyr at OpenColorIO-oppsettet brukt til opprettelse av denne blend-fila mangler"
 
 
-msgid "Working Space"
-msgstr "Arbeidsplass"
+msgid "Blender"
+msgstr "Blender"
 
 
 msgid "Color space used for all scene linear colors in this file, and for compositing, shader and geometry nodes processing"
 msgstr "Fargerom brukt for alle lineære scenefarger i denne fila, og for sammensetting, skyggelegging og behandling av geometrinoder"
 
 
-msgid "Linear Rec.709"
-msgstr "Lineær Rec.709"
-
-
 msgid "Linear BT.709 with illuminant D65 white point"
 msgstr "Lineær BT.709 med D65 lyskilde hvitpunkt"
 
 
-msgid "Linear Rec.2020"
-msgstr "Lineær Rec.2020"
-
-
 msgid "Linear BT.2020 with illuminant D65 white point"
 msgstr "Lineær BT.2020 med D65 lyskilde hvitpunkt"
-
-
-msgid "ACEScg"
-msgstr "ACEScg"
 
 
 msgid "Linear AP1 with ACES white point"
@@ -4059,14 +4015,6 @@ msgstr "Blend-fil importsammenheng bibliotek"
 
 msgid "Collection of source libraries, i.e. blendfile paths"
 msgstr "Samling av kildebibliotek, f.eks. blend-fil-stier"
-
-
-msgid "Blendfile Import Context Library"
-msgstr "Blend-fil importsammenheng bibliotek"
-
-
-msgid "Library (blendfile) reference in a BlendImportContext data. Currently only exposed as read-only data for the pre/post blendimport handlers"
-msgstr "Bibliotek (blend-fil) referanse i en blender importsammenheng-data. For øyeblikket kun vist som skrivebeskyttet for før/etter blendimport-behandlere"
 
 
 msgid "Blender RNA"
@@ -5172,10 +5120,6 @@ msgid "Python"
 msgstr "Python"
 
 
-msgid "Blender"
-msgstr "Blender"
-
-
 msgid "System"
 msgstr "System"
 
@@ -5222,6 +5166,10 @@ msgstr "Cycles"
 
 msgid "Down"
 msgstr "Ned"
+
+
+msgid "Search"
+msgstr "Søk"
 
 
 msgctxt "Python console"
@@ -5281,6 +5229,10 @@ msgstr "Om Blender"
 
 msgid "Onion Skin"
 msgstr "Løkskall"
+
+
+msgid "Working Space"
+msgstr "Arbeidsplass"
 
 
 msgctxt "WindowManager"
@@ -5348,16 +5300,8 @@ msgid "Czech - Čeština"
 msgstr "Tsjekkisk – Čeština"
 
 
-msgid "Locale code: cs_CZ. Translation progress: 27%"
-msgstr "Lokalkode: cs_CZ. Status på oversettelse: 27 %"
-
-
 msgid "Danish - Dansk"
 msgstr "Dansk – Dansk"
-
-
-msgid "Locale code: da. Translation progress: 3%"
-msgstr "Lokalkode: da. Status på oversettelse: 3 %"
 
 
 msgid "Dutch - Nederlands"
@@ -5388,10 +5332,6 @@ msgid "Finnish - Suomi"
 msgstr "Finsk – Suomi"
 
 
-msgid "Locale code: fi_FI. Translation progress: 11%"
-msgstr "Lokalkode: fi_FI. Status på oversettelse: 11 %"
-
-
 msgid "French - Français"
 msgstr "Fransk – Français"
 
@@ -5406,10 +5346,6 @@ msgstr "Tysk – Deutsch"
 
 msgid "Greek - Ελληνικά"
 msgstr "Gresk – Ελληνικά"
-
-
-msgid "Locale code: el_GR. Translation progress: 1%"
-msgstr "Lokalkode: el_GR. Status på oversettelse: 1 %"
 
 
 msgid "Hebrew - תירִבְעִ"
@@ -5430,10 +5366,6 @@ msgstr "Lokalkode: hi_IN. Status på oversettelse: 4 %"
 
 msgid "Hungarian - Magyar"
 msgstr "Ungarsk – Magyar"
-
-
-msgid "Locale code: hu_HU. Translation progress: 11%"
-msgstr "Lokalkode: hu_HU. Status på oversettelse: 11 %"
 
 
 msgid "Indonesian - Bahasa indonesia"
@@ -5516,16 +5448,8 @@ msgid "Serbian (Cyrillic) - Српски"
 msgstr "Serbisk (kyrillisk) – Српски"
 
 
-msgid "Locale code: sr_RS. Translation progress: 16%"
-msgstr "Lokalkode: sr_RS. Status på oversettelse: 16 %"
-
-
 msgid "Serbian (Latin) - Srpski latinica"
 msgstr "Serbisk (latinsk) – Srpski latinica"
-
-
-msgid "Locale code: sr_RS@latin. Translation progress: 16%"
-msgstr "Lokalkode: sr_RS@latin. Status på oversettelse: 16 %"
 
 
 msgid "Slovak - Slovenčina"
@@ -5587,10 +5511,6 @@ msgstr "Lagindeks"
 
 msgid "Onion Skins"
 msgstr "Løkskall"
-
-
-msgid "Search"
-msgstr "Søk"
 
 
 msgctxt "WindowManager"

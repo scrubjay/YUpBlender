@@ -10,10 +10,10 @@
 
 #include "MEM_guardedalloc.h"
 
-#include "BLI_listbase.h"
+#include "BLI_listbase.hh"
 #include "BLI_path_utils.hh"
-#include "BLI_string.h"
-#include "BLI_utildefines.h"
+#include "BLI_string.hh"
+#include "BLI_utildefines.hh"
 
 #include "DNA_windowmanager_types.h"
 
@@ -40,7 +40,7 @@ static void image_sequence_get_frame_ranges(StringRefNull blendfile_path,
                                             ListBaseT<ImageFrameRange> *ranges,
                                             bool *r_was_relative)
 {
-  char dir[FILE_MAXDIR];
+  char dir[FILE_MAX];
   const bool do_frame_range = RNA_boolean_get(op->ptr, "use_sequence_detection");
   ImageFrameRange *range = nullptr;
   int range_first_frame = 0;
@@ -135,7 +135,7 @@ static void image_detect_frame_range(ImageFrameRange *range, const bool detect_u
   /* Image Sequence */
   BLI_listbase_sort(&range->frames, image_cmp_frame);
 
-  ImageFrame *frame = static_cast<ImageFrame *>(range->frames.first);
+  ImageFrame *frame = range->frames.first();
   if (frame != nullptr) {
     int frame_curr = frame->framenr;
     range->offset = frame_curr;
@@ -152,7 +152,7 @@ static void image_detect_frame_range(ImageFrameRange *range, const bool detect_u
     range->offset = 0;
   }
 
-  ImageFrame *frame_last = static_cast<ImageFrame *>(range->frames.last);
+  ImageFrame *frame_last = range->frames.last();
   if (frame_last != nullptr) {
     range->max_framenr = frame_last->framenr;
   }
@@ -164,7 +164,7 @@ ListBaseT<ImageFrameRange> ED_image_filesel_detect_sequences(StringRefNull blend
                                                              const bool detect_udim)
 {
   ListBaseT<ImageFrameRange> ranges;
-  BLI_listbase_clear(&ranges);
+  ranges.clear_no_delete();
 
   bool was_relative = false;
   StringRefNull base_path = blendfile_path;
@@ -182,11 +182,25 @@ ListBaseT<ImageFrameRange> ED_image_filesel_detect_sequences(StringRefNull blend
     char filepath[FILE_MAX];
     RNA_string_get(op->ptr, "filepath", filepath);
 
-    ImageFrameRange *range = MEM_new_zeroed<ImageFrameRange>(__func__);
-    BLI_addtail(&ranges, range);
+    /* Treat the file-path as a single selected file, equivalent to the `directory` & `files`. */
+    const char *filename = BLI_path_basename(filepath);
+    if (filename[0]) {
+      ImageFrameRange *range = MEM_new_zeroed<ImageFrameRange>(__func__);
+      BLI_addtail(&ranges, range);
 
-    STRNCPY(range->filepath, filepath);
-    was_relative = BLI_path_is_rel(filepath);
+      STRNCPY(range->filepath, filepath);
+
+      /* Add a single frame so callers building per-frame data have a frame to load.
+       * The frame number is decoded from the file-part (matching the `files` case). */
+      char head[FILE_MAX], tail[FILE_MAX];
+      ushort digits;
+      ImageFrame *frame = MEM_new_zeroed<ImageFrame>("image_frame");
+      frame->framenr = BLI_path_sequence_decode(
+          filename, head, sizeof(head), tail, sizeof(tail), &digits);
+      BLI_addtail(&range->frames, frame);
+
+      was_relative = BLI_path_is_rel(filepath);
+    }
   }
 
   for (ImageFrameRange &range : ranges) {

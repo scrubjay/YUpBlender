@@ -44,7 +44,7 @@ static void node_declare(NodeDeclarationBuilder &b)
       .description(
           "In offset mode, the distance between each socket on each axis. In end points mode, the "
           "position of the final vertex")
-      .label_fn([](bNode node) {
+      .label_fn([](const bNode &node) {
         return (node_storage(node).mode == GEO_NODE_MESH_LINE_MODE_END_POINTS) ?
                    IFACE_("End Location") :
                    IFACE_("Offset");
@@ -75,7 +75,7 @@ static void node_init(bNodeTree * /*tree*/, bNode *node)
 
 static void node_update(bNodeTree *ntree, bNode *node)
 {
-  bNodeSocket *count_socket = static_cast<bNodeSocket *>(node->inputs.first);
+  bNodeSocket *count_socket = node->inputs.first();
   bNodeSocket *resolution_socket = count_socket->next;
 
   const NodeGeometryMeshLine &storage = node_storage(*node);
@@ -100,9 +100,7 @@ static void node_gather_link_searches(GatherLinkSearchOpParams &params)
     search_link_ops_for_declarations(params, declaration.outputs);
     return;
   }
-  if (params.node_tree().typeinfo->validate_link(eNodeSocketDatatype(params.other_socket().type),
-                                                 SOCK_FLOAT))
-  {
+  if (params.node_tree().typeinfo->validate_link(params.other_socket().type, SOCK_FLOAT)) {
     params.add_item(IFACE_("Count"), [](LinkSearchOpParams &params) {
       bNode &node = params.add_node("GeometryNodeMeshLine"_ustr);
       node_storage(node).mode = GEO_NODE_MESH_LINE_MODE_OFFSET;

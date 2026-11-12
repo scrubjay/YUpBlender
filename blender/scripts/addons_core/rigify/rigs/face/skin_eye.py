@@ -533,8 +533,11 @@ class EyeClusterControl(RigComponent):
         center /= self.rig_count
         length /= self.rig_count
 
-        # Create the matrix from the average Y and world Z
-        matrix = matrix_from_axis_pair((0, 0, 1), axis, 'z').to_4x4()
+        # Create the matrix from the average Y and up vector (handles both Z-up and Y-up)
+        axis_norm = axis.normalized() if axis.length > 1e-6 else Vector((0, 0, 1))
+        up_vector = Vector((0, 1, 0)) if abs(axis_norm.z) > 0.5 else Vector((0, 0, 1))
+
+        matrix = matrix_from_axis_pair(up_vector, axis, 'z').to_4x4()
         matrix.translation = center + axis * length * 5
 
         self.size = length * 3 / 4
@@ -548,6 +551,9 @@ class EyeClusterControl(RigComponent):
         head = self.inv_matrix @ bone.head
         tail = self.inv_matrix @ bone.tail
         axis = tail - head
+
+        if abs(axis.z) < 1e-6:
+            return Vector((head.x, head.y, 0))
 
         return head + axis * (-head.z / axis.z)
 

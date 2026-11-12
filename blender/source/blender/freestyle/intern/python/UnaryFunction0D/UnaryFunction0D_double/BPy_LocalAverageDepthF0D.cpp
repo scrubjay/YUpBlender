@@ -26,7 +26,7 @@ PyDoc_STRVAR(
     "\n"
     "   Builds a LocalAverageDepthF0D object.\n"
     "\n"
-    "   :arg mask_size: The size of the mask.\n"
+    "   :param mask_size: The size of the mask.\n"
     "   :type mask_size: float\n"
     "\n"
     ".. method:: __call__(it)\n"
@@ -36,7 +36,7 @@ PyDoc_STRVAR(
     "   Interface0DIterator. The result is obtained by querying the depth\n"
     "   buffer on a window around that point.\n"
     "\n"
-    "   :arg it: An Interface0DIterator object.\n"
+    "   :param it: An Interface0DIterator object.\n"
     "   :type it: :class:`freestyle.types.Interface0DIterator`\n"
     "   :return: The average depth around the pointed Interface0D.\n"
     "   :rtype: float\n");
@@ -47,7 +47,14 @@ static int LocalAverageDepthF0D___init__(BPy_LocalAverageDepthF0D *self,
   static const char *kwlist[] = {"mask_size", nullptr};
   double d = 5.0;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "|d", (char **)kwlist, &d)) {
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "|" /* Optional arguments. */
+                                   "d" /* `mask_size` */
+                                   ":__init__",
+                                   (char **)kwlist,
+                                   &d))
+  {
     return -1;
   }
   self->py_uf0D_double.uf0D_double = new Functions0D::LocalAverageDepthF0D(d);

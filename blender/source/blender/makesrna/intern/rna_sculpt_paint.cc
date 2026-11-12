@@ -8,7 +8,7 @@
 
 #include <cstdlib>
 
-#include "BLI_math_base.h"
+#include "BLI_math_base_c.hh"
 
 #include "BLT_translation.hh"
 
@@ -47,17 +47,17 @@ static const EnumPropertyItem rna_enum_gpencil_lock_axis_items[] = {
      ICON_RESTRICT_VIEW_ON,
      "View",
      "Align strokes to current view plane"},
+    {GP_LOCKAXIS_Z, "AXIS_Z", ICON_AXIS_FRONT, "Front (X-Y)", "Project strokes to plane locked to Z"},
     {GP_LOCKAXIS_Y,
      "AXIS_Y",
-     ICON_AXIS_FRONT,
-     "Front (X-Z)",
+     ICON_AXIS_TOP,
+     "Top (X-Z)",
      "Project strokes to plane locked to Y"},
     {GP_LOCKAXIS_X,
      "AXIS_X",
      ICON_AXIS_SIDE,
      "Side (Y-Z)",
      "Project strokes to plane locked to X"},
-    {GP_LOCKAXIS_Z, "AXIS_Z", ICON_AXIS_TOP, "Top (X-Y)", "Project strokes to plane locked to Z"},
     {GP_LOCKAXIS_CURSOR,
      "CURSOR",
      ICON_PIVOT_CURSOR,
@@ -109,7 +109,6 @@ const EnumPropertyItem rna_enum_symmetrize_direction_items[] = {
 #  include "BKE_collection.hh"
 #  include "BKE_colortools.hh"
 #  include "BKE_context.hh"
-#  include "BKE_gpencil_legacy.h"
 #  include "BKE_layer.hh"
 #  include "BKE_material.hh"
 #  include "BKE_object.hh"
@@ -155,7 +154,7 @@ static PointerRNA rna_ParticleEdit_brush_get(PointerRNA *ptr)
 
 static PointerRNA rna_ParticleBrush_curve_get(PointerRNA * /*ptr*/)
 {
-  return PointerRNA_NULL;
+  return {};
 }
 
 static void rna_ParticleEdit_redo(bContext *C, PointerRNA * /*ptr*/)
@@ -279,7 +278,7 @@ static PointerRNA rna_Paint_brush_get(PointerRNA *ptr)
   Paint *paint = static_cast<Paint *>(ptr->data);
   Brush *brush = BKE_paint_brush(paint);
   if (!brush) {
-    return PointerRNA_NULL;
+    return {};
   }
   return RNA_id_pointer_create(&brush->id);
 }
@@ -504,6 +503,16 @@ static std::optional<std::string> rna_MeshAutomaskingSettings_path(const Pointer
       {
         return "tool_settings.sculpt.mesh_automasking_settings";
       }
+      if (rna_MeshAutomaskingSettings_address_get(
+              reinterpret_cast<Paint *>(tool_settings->vpaint)) == ptr->data)
+      {
+        return "tool_settings.vertex_paint.mesh_automasking_settings";
+      }
+      if (rna_MeshAutomaskingSettings_address_get(
+              reinterpret_cast<Paint *>(tool_settings->wpaint)) == ptr->data)
+      {
+        return "tool_settings.weight_paint.mesh_automasking_settings";
+      }
       return std::nullopt;
     }
     case ID_BR:
@@ -600,7 +609,7 @@ static void rna_UnifiedPaintSettings_unprojected_size_set(PointerRNA *ptr, float
 static void rna_UnifiedPaintSettings_size_update(bContext *C, PointerRNA *ptr)
 {
   /* changing the unified size should invalidate the overlay but also update the brush */
-  BKE_paint_invalidate_overlay_all();
+  bke::paint::invalidate_overlay_all(*CTX_data_scene(C));
   rna_UnifiedPaintSettings_update(C, ptr);
 }
 
@@ -812,6 +821,12 @@ static void rna_def_paint(BlenderRNA *brna)
       srna, "show_size_curve", "Show Size Curve", PAINT_CURVE_SHOW_SIZE);
   rna_def_paint_curve_visibility_flag(
       srna, "show_jitter_curve", "Show Jitter Curve", PAINT_CURVE_SHOW_JITTER);
+  rna_def_paint_curve_visibility_flag(
+      srna, "show_hardness_curve", "Show Hardness Curve", PAINT_CURVE_SHOW_HARDNESS);
+  rna_def_paint_curve_visibility_flag(
+      srna, "show_auto_smooth_curve", "Show Auto-Smooth Curve", PAINT_CURVE_SHOW_AUTO_SMOOTH);
+  rna_def_paint_curve_visibility_flag(
+      srna, "show_spacing_curve", "Show Spacing Curve", PAINT_CURVE_SHOW_SPACING);
 
   /* Unified Paint Settings */
   prop = RNA_def_property(srna, "unified_paint_settings", PROP_POINTER, PROP_NONE);
@@ -848,38 +863,43 @@ static void rna_def_unified_paint_settings(BlenderRNA *brna)
 
   /* high-level flags to enable or disable unified paint settings */
   prop = RNA_def_property(srna, "use_unified_size", PROP_BOOLEAN, PROP_NONE);
-  RNA_def_property_boolean_sdna(prop, nullptr, "flag", UNIFIED_PAINT_SIZE);
+  RNA_def_property_boolean_sdna(prop, nullptr, "flag", UNIFIED_PAINT_SIZE_DEPRECATED);
   RNA_def_property_ui_text(
       prop, "Use Unified Size", "Instead of per-brush size, the size is shared across brushes");
   RNA_def_property_update(prop, NC_SCENE | ND_TOOLSETTINGS, nullptr);
+  RNA_def_property_deprecated(prop, "Replaced by per-brush unified settings", 503, 600);
 
   prop = RNA_def_property(srna, "use_unified_strength", PROP_BOOLEAN, PROP_NONE);
-  RNA_def_property_boolean_sdna(prop, nullptr, "flag", UNIFIED_PAINT_ALPHA);
+  RNA_def_property_boolean_sdna(prop, nullptr, "flag", UNIFIED_PAINT_ALPHA_DEPRECATED);
   RNA_def_property_ui_text(prop,
                            "Use Unified Strength",
                            "Instead of per-brush strength, the strength is shared across brushes");
   RNA_def_property_update(prop, NC_SCENE | ND_TOOLSETTINGS, nullptr);
+  RNA_def_property_deprecated(prop, "Replaced by per-brush unified settings", 503, 600);
 
   prop = RNA_def_property(srna, "use_unified_weight", PROP_BOOLEAN, PROP_NONE);
-  RNA_def_property_boolean_sdna(prop, nullptr, "flag", UNIFIED_PAINT_WEIGHT);
+  RNA_def_property_boolean_sdna(prop, nullptr, "flag", UNIFIED_PAINT_WEIGHT_DEPRECATED);
   RNA_def_property_ui_text(prop,
                            "Use Unified Weight",
                            "Instead of per-brush weight, the weight is shared across brushes");
   RNA_def_property_update(prop, NC_SCENE | ND_TOOLSETTINGS, nullptr);
+  RNA_def_property_deprecated(prop, "Replaced by per-brush unified settings", 503, 600);
 
   prop = RNA_def_property(srna, "use_unified_color", PROP_BOOLEAN, PROP_NONE);
-  RNA_def_property_boolean_sdna(prop, nullptr, "flag", UNIFIED_PAINT_COLOR);
+  RNA_def_property_boolean_sdna(prop, nullptr, "flag", UNIFIED_PAINT_COLOR_DEPRECATED);
   RNA_def_property_ui_text(
       prop, "Use Unified Color", "Instead of per-brush color, the color is shared across brushes");
   RNA_def_property_update(prop, NC_SCENE | ND_TOOLSETTINGS, nullptr);
+  RNA_def_property_deprecated(prop, "Replaced by per-brush unified settings", 503, 600);
 
   prop = RNA_def_property(srna, "use_unified_input_samples", PROP_BOOLEAN, PROP_NONE);
-  RNA_def_property_boolean_sdna(prop, nullptr, "flag", UNIFIED_PAINT_INPUT_SAMPLES);
+  RNA_def_property_boolean_sdna(prop, nullptr, "flag", UNIFIED_PAINT_INPUT_SAMPLES_DEPRECATED);
   RNA_def_property_ui_text(
       prop,
       "Use Unified Input Samples",
       "Instead of per-brush input samples, the value is shared across brushes");
   RNA_def_property_update(prop, NC_SCENE | ND_TOOLSETTINGS, nullptr);
+  RNA_def_property_deprecated(prop, "Replaced by per-brush unified settings", 503, 600);
 
   /* unified paint settings that override the equivalent settings
    * from the active brush */
@@ -1073,7 +1093,6 @@ static void rna_def_mesh_automasking_settings(BlenderRNA *brna)
   RNA_def_property_flag(prop, PROP_CONTEXT_UPDATE);
   RNA_def_property_float_sdna(prop, nullptr, "cavity_factor");
   RNA_def_property_ui_text(prop, "Cavity Factor", "The contrast of the cavity mask");
-  RNA_def_property_float_default(prop, 1.0f);
   RNA_def_property_range(prop, 0.0f, 5.0f);
   RNA_def_property_ui_range(prop, 0.0f, 1.0f, 0.1, 3);
   RNA_def_property_update(prop, 0, "rna_MeshAutomaskingSettings_update");
@@ -1082,7 +1101,6 @@ static void rna_def_mesh_automasking_settings(BlenderRNA *brna)
   RNA_def_property_flag(prop, PROP_CONTEXT_UPDATE);
   RNA_def_property_int_sdna(prop, nullptr, "cavity_blur_steps");
   RNA_def_property_ui_text(prop, "Blur Steps", "The number of times the cavity mask is blurred");
-  RNA_def_property_int_default(prop, 0);
   RNA_def_property_range(prop, 0, 25);
   RNA_def_property_ui_range(prop, 0, 10, 1, 1);
   RNA_def_property_update(prop, 0, "rna_MeshAutomaskingSettings_update");

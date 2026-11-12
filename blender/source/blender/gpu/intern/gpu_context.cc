@@ -15,8 +15,8 @@
 
 #include "BKE_global.hh"
 
-#include "BLI_assert.h"
-#include "BLI_threads.h"
+#include "BLI_assert.hh"
+#include "BLI_threads.hh"
 #include "BLI_vector_set.hh"
 
 #include "DNA_userdef_types.h"
@@ -49,6 +49,7 @@
 
 #include "draw_debug.hh"
 
+#include <cstdio>
 #include <mutex>
 
 namespace blender {
@@ -76,8 +77,7 @@ Context::Context()
   matrix_state = GPU_matrix_state_create();
   texture_pool = GPUBackend::get()->texturepool_alloc();
 
-  context_id = Context::context_counter;
-  Context::context_counter++;
+  context_id = Context::context_counter++;
 }
 
 Context::~Context()
@@ -89,9 +89,10 @@ Context::~Context()
   BLI_assert(back_right == nullptr);
   BLI_assert(texture_pool == nullptr);
 
-  /** IMPORTANT: Do not free resources (texture, batch, buffers) in this function. These objects
-   * are likely to reference the GL/VK/MTLContext which is already destroyed at this point. */
-
+  /**
+   * IMPORTANT: Do not free resources (texture, batch, buffers) in this function. These objects
+   * are likely to reference the GL/VK/MTLContext which is already destroyed at this point.
+   */
   GPU_matrix_state_discard(matrix_state);
   delete state_manager;
   delete imm;
@@ -200,6 +201,10 @@ GPUContext *GPU_context_create(GHOST_IWindow *ghost_window, GHOST_IContext *ghos
     num_backend_users++;
   }
 
+  BLI_assert(ghost_context);
+  if (ghost_window) {
+    BLI_assert(ghost_context == ghost_window->getDrawingContext());
+  }
   Context *ctx = GPUBackend::get()->context_alloc(ghost_window, ghost_context);
 
   GPU_context_active_set(wrap(ctx));
@@ -357,6 +362,7 @@ void GPU_render_step(bool force_resource_release)
 static GPUBackendType g_backend_type = GPU_BACKEND_OPENGL;
 static std::optional<GPUBackendType> g_backend_type_override = std::nullopt;
 static std::optional<bool> g_backend_type_supported = std::nullopt;
+static std::optional<GHOST_GPUDevice> g_preferred_device_override = std::nullopt;
 static std::optional<int> g_vsync_override = std::nullopt;
 static GPUBackend *g_backend = nullptr;
 static GHOST_ISystem *g_ghost_system = nullptr;
@@ -407,8 +413,78 @@ bool GPU_backend_type_selection_is_overridden()
   return g_backend_type_override.has_value();
 }
 
+void GPU_backend_preferred_device_set_override(const int index,
+                                               const uint32_t vendor_id,
+                                               const uint32_t device_id)
+{
+  BLI_assert(index >= 0);
+
+  GHOST_GPUDevice device = {};
+  device.is_override = true;
+  device.fail_on_invalid_override = false;
+  device.index = index;
+  device.vendor_id = vendor_id;
+  device.device_id = device_id;
+  g_preferred_device_override = device;
+}
+
+GHOST_GPUDevice GPU_backend_preferred_device_get()
+{
+  if (g_preferred_device_override.has_value()) {
+    GHOST_GPUDevice device = g_preferred_device_override.value();
+    device.fail_on_invalid_override = (G.debug & G_DEBUG_GPU_DEVICE_NO_FALLBACK) != 0;
+    device.fallback_index = U.gpu_preferred_index;
+    device.fallback_vendor_id = U.gpu_preferred_vendor_id;
+    device.fallback_device_id = U.gpu_preferred_device_id;
+    return device;
+  }
+
+  GHOST_GPUDevice device = {};
+  device.is_override = false;
+  device.fail_on_invalid_override = false;
+  device.index = U.gpu_preferred_index;
+  device.vendor_id = U.gpu_preferred_vendor_id;
+  device.device_id = U.gpu_preferred_device_id;
+  device.fallback_index = device.index;
+  device.fallback_vendor_id = device.vendor_id;
+  device.fallback_device_id = device.device_id;
+  return device;
+}
+
+static const char *gpu_backend_type_name(const GPUBackendType backend_type)
+{
+  switch (backend_type) {
+    case GPU_BACKEND_OPENGL:
+      return "OpenGL";
+    case GPU_BACKEND_VULKAN:
+      return "Vulkan";
+    case GPU_BACKEND_METAL:
+      return "Metal";
+    case GPU_BACKEND_NONE:
+      return "None";
+    case GPU_BACKEND_ANY:
+      break;
+  }
+
+  return "Unknown";
+}
+
+#ifdef WITH_VULKAN_BACKEND
+void GPU_vulkan_supported_devices_print(FILE *fp)
+{
+  blender::gpu::VKBackend::supported_devices_print(fp);
+}
+#endif
+
 bool GPU_backend_type_selection_detect()
 {
+  /* Only detect once, can't switch backend until Blender restart. */
+  static bool backend_type_detected = false;
+  if (backend_type_detected) {
+    return GPU_backend_type_selection_get() != GPU_BACKEND_NONE;
+  }
+  backend_type_detected = true;
+
   VectorSet<GPUBackendType> backends_to_check;
   if (g_backend_type_override.has_value()) {
     backends_to_check.add(*g_backend_type_override);
@@ -426,6 +502,14 @@ bool GPU_backend_type_selection_detect()
   for (const GPUBackendType backend_type : backends_to_check) {
     GPU_backend_type_selection_set(backend_type);
     if (GPU_backend_supported()) {
+      if (g_preferred_device_override.has_value() && backend_type != GPU_BACKEND_VULKAN) {
+        fprintf(stderr,
+                "Warning: '--gpu-device' is only supported for the Vulkan backend. "
+                "Ignoring the device override for the selected %s backend and falling back to the "
+                "stored GPU preference.\n",
+                gpu_backend_type_name(backend_type));
+        g_preferred_device_override.reset();
+      }
       return true;
     }
     G.f |= G_FLAG_GPU_BACKEND_FALLBACK;
@@ -437,6 +521,11 @@ bool GPU_backend_type_selection_detect()
 
 static bool gpu_backend_supported()
 {
+  /* Skip the support check if "--debug-gpu-backend-no-fallback" is used. */
+  if (G.debug & G_DEBUG_GPU_BACKEND_NO_FALLBACK) {
+    return true;
+  }
+
   switch (g_backend_type) {
     case GPU_BACKEND_OPENGL:
 #ifdef WITH_OPENGL_BACKEND
@@ -547,20 +636,7 @@ GPUBackendType GPU_backend_get_type()
 
 const char *GPU_backend_get_name()
 {
-  switch (GPU_backend_get_type()) {
-    case GPU_BACKEND_OPENGL:
-      return "OpenGL";
-    case GPU_BACKEND_VULKAN:
-      return "Vulkan";
-    case GPU_BACKEND_METAL:
-      return "Metal";
-    case GPU_BACKEND_NONE:
-      return "None";
-    case GPU_BACKEND_ANY:
-      break;
-  }
-
-  return "Unknown";
+  return gpu_backend_type_name(GPU_backend_get_type());
 }
 
 GPUBackend *GPUBackend::get()
@@ -611,9 +687,10 @@ GPUSecondaryContextData GPU_create_secondary_context()
   if (G.debug & G_DEBUG_GPU) {
     gpu_settings.flags |= GHOST_gpuDebugContext;
   }
-  gpu_settings.preferred_device.index = U.gpu_preferred_index;
-  gpu_settings.preferred_device.vendor_id = U.gpu_preferred_vendor_id;
-  gpu_settings.preferred_device.device_id = U.gpu_preferred_device_id;
+  if (G.debug & G_DEBUG_GPU_NO_HW_RAYTRACING) {
+    gpu_settings.flags |= GHOST_gpuNoHWRaytracing;
+  }
+  gpu_settings.preferred_device = GPU_backend_preferred_device_get();
 
   /* Grab the system handle. */
   GHOST_ISystem *ghost_system = GPU_backend_ghost_system_get();

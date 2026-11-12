@@ -30,12 +30,13 @@ const EnumPropertyItem rna_enum_tree_node_move_type_items[] = {
 
 #ifdef RNA_RUNTIME
 
-#  include "BLI_listbase.h"
+#  include "BLI_listbase.hh"
 
 #  include "BKE_attribute.hh"
 #  include "BKE_context.hh"
 #  include "BKE_curves.hh"
 #  include "BKE_deform.hh"
+#  include "BKE_geometry_compare.hh"
 #  include "BKE_grease_pencil.hh"
 #  include "BKE_grease_pencil_vertex_groups.hh"
 #  include "BKE_report.hh"
@@ -291,9 +292,9 @@ static void rna_GreasePencilDrawing_set_vertex_weights(ID *grease_pencil_id,
   const int def_nr = bke::greasepencil::ensure_vertex_group(vertex_group_name,
                                                             curves.vertex_group_names);
   const MutableSpan<MDeformVert> dverts = curves.deform_verts_for_write();
-  if (std::any_of(indices.begin(), indices.end(), [&](const int index) {
-        return !dverts.index_range().contains(index);
-      }))
+  if (std::any_of(indices.begin(),
+                  indices.end(),
+                  [&](const int index) { return !dverts.index_range().contains(index); }))
   {
     BKE_reportf(reports, RPT_ERROR, "Indices must be in range");
     return;
@@ -463,7 +464,7 @@ static GreasePencilLayer *rna_GreasePencil_layer_new(GreasePencil *grease_pencil
 {
   using namespace bke::greasepencil;
   LayerGroup *layer_group = nullptr;
-  if (layer_group_ptr && layer_group_ptr->data) {
+  if (layer_group_ptr && *layer_group_ptr) {
     layer_group = static_cast<LayerGroup *>(layer_group_ptr->data);
   }
   Layer *layer;
@@ -542,7 +543,7 @@ static void rna_GreasePencil_layer_move_to_layer_group(GreasePencil *grease_penc
   using namespace bke::greasepencil;
   TreeNode &layer_node = static_cast<Layer *>(layer_ptr->data)->as_node();
   LayerGroup *layer_group;
-  if (layer_group_ptr && layer_group_ptr->data) {
+  if (layer_group_ptr && *layer_group_ptr) {
     layer_group = static_cast<LayerGroup *>(layer_group_ptr->data);
   }
   else {
@@ -563,7 +564,7 @@ static PointerRNA rna_GreasePencil_layer_group_new(GreasePencil *grease_pencil,
 {
   using namespace bke::greasepencil;
   LayerGroup *parent_group;
-  if (parent_group_ptr && parent_group_ptr->data) {
+  if (parent_group_ptr && *parent_group_ptr) {
     parent_group = static_cast<LayerGroup *>(parent_group_ptr->data);
   }
   else {
@@ -643,7 +644,7 @@ static void rna_GreasePencil_layer_group_move_to_layer_group(GreasePencil *greas
   using namespace bke::greasepencil;
   TreeNode &layer_group_node = static_cast<LayerGroup *>(layer_group_ptr->data)->as_node();
   LayerGroup *parent_group;
-  if (parent_group_ptr && parent_group_ptr->data) {
+  if (parent_group_ptr && *parent_group_ptr) {
     parent_group = static_cast<LayerGroup *>(parent_group_ptr->data);
   }
   else {
@@ -722,11 +723,47 @@ static void rna_grease_pencil_layer_mask_remove(GreasePencilLayer *layer,
   WM_main_add_notifier(NC_GPENCIL | ND_DATA | NA_SELECTED, nullptr);
 }
 
+static const char *rna_GreasePencil_unit_test_compare(GreasePencil *grease_pencil_1,
+                                                      GreasePencil *grease_pencil_2,
+                                                      float threshold)
+{
+  using namespace bke::compare_geometry;
+  const std::optional<GeoMismatch> mismatch = compare_grease_pencil(
+      *grease_pencil_1, *grease_pencil_2, threshold);
+
+  if (!mismatch) {
+    return "Same";
+  }
+
+  return mismatch_to_string(mismatch.value());
+}
+
 }  // namespace blender
 
 #else
 
 namespace blender {
+
+void RNA_api_grease_pencil(StructRNA *srna)
+{
+  FunctionRNA *func;
+  PropertyRNA *parm;
+
+  func = RNA_def_function(srna, "unit_test_compare", "rna_GreasePencil_unit_test_compare");
+  RNA_def_pointer(func, "grease_pencil", "GreasePencil", "", "Grease Pencil to compare to");
+  RNA_def_float_factor(func,
+                       "threshold",
+                       FLT_EPSILON * 60,
+                       0.0f,
+                       FLT_MAX,
+                       "Threshold",
+                       "Comparison tolerance threshold",
+                       0.0f,
+                       FLT_MAX);
+  parm = RNA_def_string(
+      func, "result", "nothing", 64, "Return value", "String description of result of comparison");
+  RNA_def_function_return(func, parm);
+}
 
 void RNA_api_grease_pencil_layer_masks(StructRNA *srna)
 {
@@ -740,6 +777,7 @@ void RNA_api_grease_pencil_layer_masks(StructRNA *srna)
   RNA_def_parameter_flags(parm, PROP_NEVER_NULL, PARM_REQUIRED);
   parm = RNA_def_pointer(
       func, "mask", "GreasePencilLayerMask", "", "The mask entry referencing the layer");
+  RNA_def_parameter_flags(parm, PROP_NEVER_NULL, ParameterFlag(0));
   RNA_def_function_return(func, parm);
 
   func = RNA_def_function(srna, "remove", "rna_grease_pencil_layer_mask_remove");
@@ -955,6 +993,7 @@ void RNA_api_grease_pencil_frames(StructRNA *srna)
                      MAXFRAME);
   RNA_def_parameter_flags(parm, PropertyFlag(0), PARM_REQUIRED);
   parm = RNA_def_pointer(func, "frame", "GreasePencilFrame", "", "The newly created frame");
+  RNA_def_parameter_flags(parm, PROP_NEVER_NULL, ParameterFlag(0));
   RNA_def_function_return(func, parm);
 
   func = RNA_def_function(srna, "remove", "rna_Frames_frame_remove");
@@ -1069,6 +1108,7 @@ void RNA_api_grease_pencil_layers(StructRNA *srna)
       "The layer group the new layer will be created in (use None for the main stack)");
   RNA_def_parameter_flags(parm, PropertyFlag(0), PARM_RNAPTR);
   parm = RNA_def_pointer(func, "layer", "GreasePencilLayer", "", "The newly created layer");
+  RNA_def_parameter_flags(parm, PROP_NEVER_NULL, ParameterFlag(0));
   RNA_def_function_return(func, parm);
 
   func = RNA_def_function(srna, "remove", "rna_GreasePencil_layer_remove");
@@ -1136,7 +1176,7 @@ void RNA_api_grease_pencil_layer_groups(StructRNA *srna)
   RNA_def_parameter_flags(parm, PropertyFlag(0), PARM_RNAPTR);
   parm = RNA_def_pointer(
       func, "layer_group", "GreasePencilLayerGroup", "", "The newly created layer group");
-  RNA_def_parameter_flags(parm, PropertyFlag(0), PARM_RNAPTR);
+  RNA_def_parameter_flags(parm, PROP_NEVER_NULL, PARM_RNAPTR);
   RNA_def_function_return(func, parm);
 
   func = RNA_def_function(srna, "remove", "rna_GreasePencil_layer_group_remove");

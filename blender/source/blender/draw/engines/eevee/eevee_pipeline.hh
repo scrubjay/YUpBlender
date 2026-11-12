@@ -12,7 +12,7 @@
 
 #pragma once
 
-#include "BLI_math_bits.h"
+#include "BLI_math_bits.hh"
 
 #include "DRW_render.hh"
 
@@ -144,14 +144,48 @@ class ShadowPipeline {
  * Helper class for handling prepasses in Forward and Deferred pipelines.
  * \{ */
 
-class Prepass : public PassMain {
-  PassMain::Sub *prepass_subpasses[2 /*double sided*/][2 /*moving*/][2 /*write id*/] = {
-      {{nullptr}}};
+class Prepass {
+  Instance &inst_;
+
+  PassMain pass_{"Prepass"};
+  PassMain::Sub *subs_[2 /*hide from raycast*/][2 /*double sided*/][2 /*moving*/][2 /*write id*/] =
+      {{{{nullptr}}}};
+  PassMain::Sub *setup_subs_[2 /*hide from raycast*/][2 /*double sided*/][2 /*moving*/]
+                            [2 /*write id*/] = {{{{nullptr}}}};
+
+  DRWState common_state_{};
+  bool supports_motion_vectors_ = false;
+  bool supports_raycast_visibility_ = false;
+
+  /* These are never read in practice,
+   * only needed for GPU API correctness without extra shader variants. */
+  Texture dummy_raycast_depth_tx_{"prepass.dummy_raycast_depth_tx_"};
+  Texture dummy_raycast_id_tx_{"prepass.dummy_raycast_id_tx_"};
+  Texture dummy_raycast_normal_tx_{"prepass.dummy_raycast_normal_tx_"};
+
+  /* Copies of UniformDataModule::pipeline with can_raycast overridden.
+   * Needed so we can render the whole Prepass in a single PassMain. */
+  draw::UniformBuffer<PipelineInfoData> pipeline_buf_copy_{"prepass.pipeline_buf"};
+  draw::UniformBuffer<PipelineInfoData> pipeline_buf_copy_hide_from_raycast_{
+      "prepass.pipeline_buf_hide_from_raycast"};
+  gpu::Texture *fb_depth_tx_;
 
  public:
-  Prepass(const char *name) : PassMain(name) {};
-  void setup_subpasses(DRWState common_state);
-  PassMain::Sub *add(blender::Material *blender_mat, GPUMaterial *gpumat, bool has_motion);
+  Prepass(Instance &inst) : inst_(inst) {};
+
+  void init(DRWState extra_state = DRW_STATE_NO_DRAW,
+            bool supports_motion_vectors = true,
+            bool supports_raycast_visibility = true,
+            FunctionRef<void(PassMain &pass)> pass_setup_cb = {});
+
+  PassMain::Sub *add(blender::Material *blender_mat,
+                     GPUMaterial *gpumat,
+                     bool has_motion,
+                     bool hide_from_raycast);
+
+  void end_sync();
+
+  void render(View &view, gpu::Texture *fb_depth_tx, bool can_raycast);
 };
 
 /** \} */
@@ -166,7 +200,7 @@ class ForwardPipeline {
  private:
   Instance &inst_;
 
-  Prepass prepass_ps_ = {"Prepass"};
+  Prepass prepass_{inst_};
 
   PassMain opaque_ps_ = {"Shading"};
   PassMain::Sub *opaque_subpasses_[2 /*Raycast*/][2 /*Double-Sided*/] = {{nullptr}};
@@ -241,19 +275,24 @@ class ForwardPipeline {
  * \{ */
 
 struct DeferredLayerBase {
-  Prepass prepass_ps_ = {"Prepass"};
+  Prepass prepass_;
+
+  PassSimple clear_aovs_ps_{"Clear AOVs"};
 
   PassMain gbuffer_ps_ = {"Shading"};
   PassMain::Sub *gbuffer_subpasses_[2 /*Hybrid*/][2 /*Raycast*/][2 /*Double-Sided*/] = {
       {{nullptr}}};
 
+  DeferredLayerBase(Instance &inst) : prepass_(inst) {};
+
   PassMain::Sub *get_gbuffer_subpass(blender::Material *blender_mat, GPUMaterial *gpumat)
   {
-    const bool has_shader_to_rgba = GPU_material_flag_get(gpumat, GPU_MATFLAG_SHADER_TO_RGBA);
+    const bool is_hybrid = GPU_material_flag_get(gpumat, GPU_MATFLAG_SHADER_TO_RGBA) ||
+                           GPU_material_flag_get(gpumat, GPU_MATFLAG_LIGHTING);
     const bool has_raycast = GPU_material_flag_get(gpumat, GPU_MATFLAG_RAYCAST);
     const bool double_sided = !(blender_mat->blend_flag & MA_BL_CULL_BACKFACE);
 
-    return gbuffer_subpasses_[has_shader_to_rgba][has_raycast][double_sided];
+    return gbuffer_subpasses_[is_hybrid][has_raycast][double_sided];
   }
 
   gpu::Texture *radiance_behind_tx_ = nullptr;
@@ -262,6 +301,8 @@ struct DeferredLayerBase {
   eClosureBits closure_bits_ = CLOSURE_NONE;
   /* Maximum closure count considering all material in this pass. */
   int closure_count_ = 0;
+  /* True if this is a planar probe deferred layer. To be set before sync. */
+  bool is_probe_ = false;
 
   /* Stencil values used during the deferred pipeline. */
   enum class StencilBits : uint8_t {
@@ -306,8 +347,7 @@ struct DeferredLayerBase {
      * For now, allocate a custom normal layer for each Closure. */
     int count = to_gbuffer_bin_count(closure_bits_);
     /* Count the additional information layer needed by some closures. */
-    count += count_bits_i(closure_bits_ &
-                          (CLOSURE_SSS | CLOSURE_TRANSLUCENT | CLOSURE_REFRACTION));
+    count += count_bits_i(closure_bits_ & CLOSURE_TRANSMISSION);
     return count;
   }
 
@@ -341,13 +381,8 @@ class DeferredLayer : DeferredLayerBase {
    * BSDF color and do additive blending for each of the lighting step.
    *
    * NOTE: Not to be confused with the render passes.
-   * NOTE: Using array of texture instead of texture array to allow to use TextureFromPool.
    */
-  TextureFromPool direct_radiance_txs_[3] = {
-      {"direct_radiance_1"}, {"direct_radiance_2"}, {"direct_radiance_3"}};
-  /* NOTE: Only used when `use_split_radiance` is true. */
-  TextureFromPool indirect_radiance_txs_[3] = {
-      {"indirect_radiance_1"}, {"indirect_radiance_2"}, {"indirect_radiance_3"}};
+  TextureFromPool direct_radiance_txs_ = {"direct_radiance"};
   /* Used when there is no indirect radiance buffer. */
   Texture dummy_black = {"dummy_black"};
   /* Reference to ray-tracing results. */
@@ -367,11 +402,9 @@ class DeferredLayer : DeferredLayerBase {
   bool use_raytracing_ = false;
   bool use_screen_transmission_ = false;
   bool use_screen_reflection_ = false;
-  bool use_clamp_direct_ = false;
-  bool use_clamp_indirect_ = false;
 
  public:
-  DeferredLayer(Instance &inst) : inst_(inst)
+  DeferredLayer(Instance &inst) : DeferredLayerBase(inst), inst_(inst)
   {
     float4 data(0.0f);
     dummy_black.ensure_2d(gpu::TextureFormat::RAYTRACE_RADIANCE_FORMAT,
@@ -383,7 +416,10 @@ class DeferredLayer : DeferredLayerBase {
   void begin_sync();
   void end_sync(bool is_first_pass, bool is_last_pass, bool next_layer_has_transmission);
 
-  PassMain::Sub *prepass_add(blender::Material *blender_mat, GPUMaterial *gpumat, bool has_motion);
+  PassMain::Sub *prepass_add(blender::Material *blender_mat,
+                             GPUMaterial *gpumat,
+                             bool has_motion,
+                             bool hide_from_raycast);
   PassMain::Sub *material_add(blender::Material *blender_mat, GPUMaterial *gpumat);
 
   bool is_empty() const
@@ -399,12 +435,14 @@ class DeferredLayer : DeferredLayerBase {
 
   /* Do we compute indirect lighting inside the light eval pass. */
   static bool do_merge_direct_indirect_eval(const Instance &inst);
+  /* Do the clamp or light intensity settings change the radiance in the combine pass.
+   * If so, the radiance cannot be fed back to the next layer as-is. */
+  static bool do_modify_radiance(const Instance &inst);
   /* Is the radiance split for the lighting pass. */
   static bool do_split_direct_indirect_radiance(const Instance &inst);
 
   /* Returns the radiance buffer to feed the next layer. */
-  gpu::Texture *render(View &main_view,
-                       View &render_view,
+  gpu::Texture *render(View &render_view,
                        Framebuffer &prepass_fb,
                        Framebuffer &combined_fb,
                        Framebuffer &gbuffer_fb,
@@ -432,7 +470,10 @@ class DeferredPipeline {
   void begin_sync();
   void end_sync();
 
-  PassMain::Sub *prepass_add(blender::Material *blender_mat, GPUMaterial *gpumat, bool has_motion);
+  PassMain::Sub *prepass_add(blender::Material *blender_mat,
+                             GPUMaterial *gpumat,
+                             bool has_motion,
+                             bool hide_from_raycast);
   PassMain::Sub *material_add(blender::Material *blender_mat, GPUMaterial *gpumat);
 
   void render(View &main_view,
@@ -602,17 +643,20 @@ class DeferredProbePipeline {
   Texture dummy_black = {"dummy_black"};
 
  public:
-  DeferredProbePipeline(Instance &inst) : inst_(inst)
+  DeferredProbePipeline(Instance &inst) : inst_(inst), opaque_layer_(inst)
   {
     float4 data(0.0f);
     dummy_black.ensure_2d(
         gpu::TextureFormat::SFLOAT_16_16_16_16, int2(1), GPU_TEXTURE_USAGE_SHADER_READ, data);
+    opaque_layer_.is_probe_ = true;
   }
 
   void begin_sync();
   void end_sync();
 
-  PassMain::Sub *prepass_add(blender::Material *blender_mat, GPUMaterial *gpumat);
+  PassMain::Sub *prepass_add(blender::Material *blender_mat,
+                             GPUMaterial *gpumat,
+                             bool hide_from_raycast);
   PassMain::Sub *material_add(blender::Material *blender_mat, GPUMaterial *gpumat);
 
   void render(View &view,
@@ -656,17 +700,20 @@ class PlanarProbePipeline : DeferredLayerBase {
   Texture dummy_black_ = {"dummy_black"};
 
  public:
-  PlanarProbePipeline(Instance &inst) : inst_(inst)
+  PlanarProbePipeline(Instance &inst) : DeferredLayerBase(inst), inst_(inst)
   {
     float4 data(0.0f);
     dummy_black_.ensure_2d(
         gpu::TextureFormat::SFLOAT_16_16_16_16, int2(1), GPU_TEXTURE_USAGE_SHADER_READ, data);
+    is_probe_ = true;
   };
 
   void begin_sync();
   void end_sync();
 
-  PassMain::Sub *prepass_add(blender::Material *blender_mat, GPUMaterial *gpumat);
+  PassMain::Sub *prepass_add(blender::Material *blender_mat,
+                             GPUMaterial *gpumat,
+                             bool hide_from_raycast);
   PassMain::Sub *material_add(blender::Material *blender_mat, GPUMaterial *gpumat);
 
   void render(View &view,
@@ -693,7 +740,9 @@ class CapturePipeline {
  public:
   CapturePipeline(Instance &inst) : inst_(inst) {};
 
-  PassMain::Sub *surface_material_add(blender::Material *blender_mat, GPUMaterial *gpumat);
+  PassMain::Sub *surface_material_add(Object *ob,
+                                      blender::Material *blender_mat,
+                                      GPUMaterial *gpumat);
 
   void sync();
   void render(View &view);
@@ -819,6 +868,7 @@ class PipelineModule {
   void begin_sync()
   {
     data.ray_type = RAY_TYPE_CAMERA;
+    data.can_raycast = true;
     probe.begin_sync();
     planar.begin_sync();
     deferred.begin_sync();
@@ -847,11 +897,12 @@ class PipelineModule {
     if (GPU_material_flag_get(gpumat, GPU_MATFLAG_RAYCAST)) {
       has_raycast = true;
     }
+    const bool hide_from_raycast = ob->visibility_flag & OB_HIDE_RAYCAST;
 
     if (probe_capture == MAT_PROBE_REFLECTION) {
       switch (pipeline_type) {
         case MAT_PIPE_PREPASS_DEFERRED:
-          return probe.prepass_add(blender_mat, gpumat);
+          return probe.prepass_add(blender_mat, gpumat, hide_from_raycast);
         case MAT_PIPE_DEFERRED:
           return probe.material_add(blender_mat, gpumat);
         default:
@@ -862,7 +913,7 @@ class PipelineModule {
     if (probe_capture == MAT_PROBE_PLANAR) {
       switch (pipeline_type) {
         case MAT_PIPE_PREPASS_PLANAR:
-          return planar.prepass_add(blender_mat, gpumat);
+          return planar.prepass_add(blender_mat, gpumat, hide_from_raycast);
         case MAT_PIPE_DEFERRED:
           return planar.material_add(blender_mat, gpumat);
         default:
@@ -873,7 +924,7 @@ class PipelineModule {
 
     switch (pipeline_type) {
       case MAT_PIPE_PREPASS_DEFERRED:
-        return deferred.prepass_add(blender_mat, gpumat, false);
+        return deferred.prepass_add(blender_mat, gpumat, false, hide_from_raycast);
       case MAT_PIPE_PREPASS_FORWARD:
         return forward.prepass_opaque_add(blender_mat, gpumat, false);
       case MAT_PIPE_PREPASS_OVERLAP:
@@ -881,7 +932,7 @@ class PipelineModule {
         return nullptr;
 
       case MAT_PIPE_PREPASS_DEFERRED_VELOCITY:
-        return deferred.prepass_add(blender_mat, gpumat, true);
+        return deferred.prepass_add(blender_mat, gpumat, true, hide_from_raycast);
       case MAT_PIPE_PREPASS_FORWARD_VELOCITY:
         return forward.prepass_opaque_add(blender_mat, gpumat, true);
 
@@ -892,7 +943,7 @@ class PipelineModule {
       case MAT_PIPE_SHADOW:
         return shadow.surface_material_add(blender_mat, gpumat);
       case MAT_PIPE_CAPTURE:
-        return capture.surface_material_add(blender_mat, gpumat);
+        return capture.surface_material_add(ob, blender_mat, gpumat);
 
       case MAT_PIPE_VOLUME_OCCUPANCY:
       case MAT_PIPE_VOLUME_MATERIAL:

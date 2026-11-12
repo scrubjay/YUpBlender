@@ -11,8 +11,8 @@
 
 #include <Python.h>
 
-#include "BLI_math_base.h"
-#include "BLI_utildefines.h"
+#include "BLI_math_base_c.hh"
+#include "BLI_utildefines.hh"
 
 #include "MEM_guardedalloc.h"
 
@@ -31,7 +31,7 @@ namespace blender {
 PyDoc_STRVAR(
     /* Wrap. */
     bpy_bm_utils_vert_collapse_edge_doc,
-    ".. method:: vert_collapse_edge(vert, edge)\n"
+    ".. function:: vert_collapse_edge(vert, edge)\n"
     "\n"
     "   Collapse a vertex into an edge.\n"
     "\n"
@@ -49,8 +49,14 @@ static PyObject *bpy_bm_utils_vert_collapse_edge(PyObject * /*self*/, PyObject *
   BMesh *bm;
   BMEdge *e_new = nullptr;
 
-  if (!PyArg_ParseTuple(
-          args, "O!O!:vert_collapse_edge", &BPy_BMVert_Type, &py_vert, &BPy_BMEdge_Type, &py_edge))
+  if (!PyArg_ParseTuple(args,
+                        "O!" /* `vert` */
+                        "O!" /* `edge` */
+                        ":vert_collapse_edge",
+                        &BPy_BMVert_Type,
+                        &py_vert,
+                        &BPy_BMEdge_Type,
+                        &py_edge))
   {
     return nullptr;
   }
@@ -87,7 +93,7 @@ static PyObject *bpy_bm_utils_vert_collapse_edge(PyObject * /*self*/, PyObject *
 PyDoc_STRVAR(
     /* Wrap. */
     bpy_bm_utils_vert_collapse_faces_doc,
-    ".. method:: vert_collapse_faces(vert, edge, fac, join_faces)\n"
+    ".. function:: vert_collapse_faces(vert, edge, fac, join_faces)\n"
     "\n"
     "   Collapses a vertex that has only two manifold edges onto a vertex it shares an "
     "edge with.\n"
@@ -115,7 +121,11 @@ static PyObject *bpy_bm_utils_vert_collapse_faces(PyObject * /*self*/, PyObject 
   BMEdge *e_new = nullptr;
 
   if (!PyArg_ParseTuple(args,
-                        "O!O!fi:vert_collapse_faces",
+                        "O!" /* `vert` */
+                        "O!" /* `edge` */
+                        "f"  /* `fac` */
+                        "i"  /* `join_faces` */
+                        ":vert_collapse_faces",
                         &BPy_BMVert_Type,
                         &py_vert,
                         &BPy_BMEdge_Type,
@@ -159,7 +169,7 @@ static PyObject *bpy_bm_utils_vert_collapse_faces(PyObject * /*self*/, PyObject 
 PyDoc_STRVAR(
     /* Wrap. */
     bpy_bm_utils_vert_dissolve_doc,
-    ".. method:: vert_dissolve(vert)\n"
+    ".. function:: vert_dissolve(vert)\n"
     "\n"
     "   Dissolve this vertex (will be removed).\n"
     "\n"
@@ -173,7 +183,12 @@ static PyObject *bpy_bm_utils_vert_dissolve(PyObject * /*self*/, PyObject *args)
 
   BMesh *bm;
 
-  if (!PyArg_ParseTuple(args, "O!:vert_dissolve", &BPy_BMVert_Type, &py_vert)) {
+  if (!PyArg_ParseTuple(args,
+                        "O!" /* `vert` */
+                        ":vert_dissolve",
+                        &BPy_BMVert_Type,
+                        &py_vert))
+  {
     return nullptr;
   }
 
@@ -187,7 +202,7 @@ static PyObject *bpy_bm_utils_vert_dissolve(PyObject * /*self*/, PyObject *args)
 PyDoc_STRVAR(
     /* Wrap. */
     bpy_bm_utils_vert_splice_doc,
-    ".. method:: vert_splice(vert, vert_target)\n"
+    ".. function:: vert_splice(vert, vert_target)\n"
     "\n"
     "   Splice vert into vert_target, merging them.\n"
     "\n"
@@ -207,8 +222,14 @@ static PyObject *bpy_bm_utils_vert_splice(PyObject * /*self*/, PyObject *args)
 
   bool ok;
 
-  if (!PyArg_ParseTuple(
-          args, "O!O!:vert_splice", &BPy_BMVert_Type, &py_vert, &BPy_BMVert_Type, &py_vert_target))
+  if (!PyArg_ParseTuple(args,
+                        "O!" /* `vert` */
+                        "O!" /* `vert_target` */
+                        ":vert_splice",
+                        &BPy_BMVert_Type,
+                        &py_vert,
+                        &BPy_BMVert_Type,
+                        &py_vert_target))
   {
     return nullptr;
   }
@@ -245,7 +266,7 @@ static PyObject *bpy_bm_utils_vert_splice(PyObject * /*self*/, PyObject *args)
 PyDoc_STRVAR(
     /* Wrap. */
     bpy_bm_utils_vert_separate_doc,
-    ".. method:: vert_separate(vert, edges)\n"
+    ".. function:: vert_separate(vert, edges)\n"
     "\n"
     "   Separate this vertex at every edge.\n"
     "\n"
@@ -267,7 +288,14 @@ static PyObject *bpy_bm_utils_vert_separate(PyObject * /*self*/, PyObject *args)
 
   PyObject *ret;
 
-  if (!PyArg_ParseTuple(args, "O!O:vert_separate", &BPy_BMVert_Type, &py_vert, &edge_seq)) {
+  if (!PyArg_ParseTuple(args,
+                        "O!" /* `vert` */
+                        "O"  /* `edges` */
+                        ":vert_separate",
+                        &BPy_BMVert_Type,
+                        &py_vert,
+                        &edge_seq))
+  {
     return nullptr;
   }
 
@@ -297,7 +325,7 @@ static PyObject *bpy_bm_utils_vert_separate(PyObject * /*self*/, PyObject *args)
 PyDoc_STRVAR(
     /* Wrap. */
     bpy_bm_utils_edge_split_doc,
-    ".. method:: edge_split(edge, vert, fac)\n"
+    ".. function:: edge_split(edge, vert, fac)\n"
     "\n"
     "   Split an edge, return the newly created data.\n"
     "\n"
@@ -319,8 +347,16 @@ static PyObject *bpy_bm_utils_edge_split(PyObject * /*self*/, PyObject *args)
   BMVert *v_new = nullptr;
   BMEdge *e_new = nullptr;
 
-  if (!PyArg_ParseTuple(
-          args, "O!O!f:edge_split", &BPy_BMEdge_Type, &py_edge, &BPy_BMVert_Type, &py_vert, &fac))
+  if (!PyArg_ParseTuple(args,
+                        "O!" /* `edge` */
+                        "O!" /* `vert` */
+                        "f"  /* `fac` */
+                        ":edge_split",
+                        &BPy_BMEdge_Type,
+                        &py_edge,
+                        &BPy_BMVert_Type,
+                        &py_vert,
+                        &fac))
   {
     return nullptr;
   }
@@ -354,7 +390,7 @@ static PyObject *bpy_bm_utils_edge_split(PyObject * /*self*/, PyObject *args)
 PyDoc_STRVAR(
     /* Wrap. */
     bpy_bm_utils_edge_rotate_doc,
-    ".. method:: edge_rotate(edge, ccw=False)\n"
+    ".. function:: edge_rotate(edge, ccw=False)\n"
     "\n"
     "   Rotate the edge and return the newly created edge.\n"
     "   If rotating the edge fails, None will be returned.\n"
@@ -373,8 +409,15 @@ static PyObject *bpy_bm_utils_edge_rotate(PyObject * /*self*/, PyObject *args)
   BMesh *bm;
   BMEdge *e_new = nullptr;
 
-  if (!PyArg_ParseTuple(
-          args, "O!|O&:edge_rotate", &BPy_BMEdge_Type, &py_edge, PyC_ParseBool, &do_ccw))
+  if (!PyArg_ParseTuple(args,
+                        "O!" /* `edge` */
+                        "|"  /* Optional arguments. */
+                        "O&" /* `ccw` */
+                        ":edge_rotate",
+                        &BPy_BMEdge_Type,
+                        &py_edge,
+                        PyC_ParseBool,
+                        &do_ccw))
   {
     return nullptr;
   }
@@ -395,7 +438,7 @@ static PyObject *bpy_bm_utils_edge_rotate(PyObject * /*self*/, PyObject *args)
 PyDoc_STRVAR(
     /* Wrap. */
     bpy_bm_utils_face_split_doc,
-    ".. method:: face_split(face, vert_a, vert_b, *, coords=(), use_exist=True, source=None)\n"
+    ".. function:: face_split(face, vert_a, vert_b, *, coords=(), use_exist=True, source=None)\n"
     "\n"
     "   Face split with optional intermediate points.\n"
     "\n"
@@ -416,6 +459,8 @@ PyDoc_STRVAR(
     "   :rtype: tuple[:class:`bmesh.types.BMFace`, :class:`bmesh.types.BMLoop`]\n");
 static PyObject *bpy_bm_utils_face_split(PyObject * /*self*/, PyObject *args, PyObject *kw)
 {
+  const char *error_prefix = "face_split(...)";
+
   BPy_BMFace *py_face;
   BPy_BMVert *py_vert_a;
   BPy_BMVert *py_vert_b;
@@ -440,7 +485,7 @@ static PyObject *bpy_bm_utils_face_split(PyObject * /*self*/, PyObject *args, Py
       "O!" /* `face` */
       "O!" /* `vert_a` */
       "O!" /* `vert_b` */
-      "|$" /* Optional keyword only arguments. */
+      "|$" /* Optional, keyword only arguments. */
       "O"  /* `coords` */
       "O&" /* `use_exist` */
       "O&" /* `source` */
@@ -471,7 +516,9 @@ static PyObject *bpy_bm_utils_face_split(PyObject * /*self*/, PyObject *args, Py
   BPY_BM_CHECK_OBJ(py_vert_b);
 
   if (py_edge_source) {
-    BPY_BM_CHECK_OBJ(py_edge_source);
+    /* Check the source edge is from the same mesh,
+     * its custom-data is read using the destination mesh's layout. */
+    BPY_BM_CHECK_SOURCE_OBJ(py_face->bm, error_prefix, py_edge_source);
   }
 
   /* this doubles for checking that the verts are in the same mesh */
@@ -481,13 +528,13 @@ static PyObject *bpy_bm_utils_face_split(PyObject * /*self*/, PyObject *args, Py
     /* pass */
   }
   else {
-    PyErr_SetString(PyExc_ValueError,
-                    "face_split(...): one of the verts passed is not found in the face");
+    PyErr_Format(
+        PyExc_ValueError, "%s: one of the verts passed is not found in the face", error_prefix);
     return nullptr;
   }
 
   if (py_vert_a->v == py_vert_b->v) {
-    PyErr_SetString(PyExc_ValueError, "face_split(...): vert arguments must differ");
+    PyErr_Format(PyExc_ValueError, "%s: vert arguments must differ", error_prefix);
     return nullptr;
   }
 
@@ -499,7 +546,7 @@ static PyObject *bpy_bm_utils_face_split(PyObject * /*self*/, PyObject *args, Py
   }
   else {
     if (BM_loop_is_adjacent(l_a, l_b)) {
-      PyErr_SetString(PyExc_ValueError, "face_split(...): verts are adjacent in the face");
+      PyErr_Format(PyExc_ValueError, "%s: verts are adjacent in the face", error_prefix);
       return nullptr;
     }
   }
@@ -535,14 +582,14 @@ static PyObject *bpy_bm_utils_face_split(PyObject * /*self*/, PyObject *args, Py
     return ret;
   }
 
-  PyErr_SetString(PyExc_ValueError, "face_split(...): couldn't split the face, internal error");
+  PyErr_Format(PyExc_ValueError, "%s: couldn't split the face, internal error", error_prefix);
   return nullptr;
 }
 
 PyDoc_STRVAR(
     /* Wrap. */
     bpy_bm_utils_face_split_edgenet_doc,
-    ".. method:: face_split_edgenet(face, edgenet)\n"
+    ".. function:: face_split_edgenet(face, edgenet)\n"
     "\n"
     "   Splits a face into any number of regions defined by an edgenet.\n"
     "\n"
@@ -571,7 +618,9 @@ static PyObject *bpy_bm_utils_face_split_edgenet(PyObject * /*self*/, PyObject *
 
   if (!PyArg_ParseTupleAndKeywords(args,
                                    kw,
-                                   "O!O:face_split_edgenet",
+                                   "O!" /* `face` */
+                                   "O"  /* `edgenet` */
+                                   ":face_split_edgenet",
                                    const_cast<char **>(kwlist),
                                    &BPy_BMFace_Type,
                                    &py_face,
@@ -611,7 +660,7 @@ static PyObject *bpy_bm_utils_face_split_edgenet(PyObject * /*self*/, PyObject *
 PyDoc_STRVAR(
     /* Wrap. */
     bpy_bm_utils_face_join_doc,
-    ".. method:: face_join(faces, remove=True)\n"
+    ".. function:: face_join(faces, remove=True)\n"
     "\n"
     "   Joins a sequence of faces.\n"
     "\n"
@@ -629,7 +678,15 @@ static PyObject *bpy_bm_utils_face_join(PyObject * /*self*/, PyObject *args)
   BMFace *f_new;
   bool do_remove = true;
 
-  if (!PyArg_ParseTuple(args, "O|O&:face_join", &py_face_array, PyC_ParseBool, &do_remove)) {
+  if (!PyArg_ParseTuple(args,
+                        "O"  /* `faces` */
+                        "|"  /* Optional arguments. */
+                        "O&" /* `remove` */
+                        ":face_join",
+                        &py_face_array,
+                        PyC_ParseBool,
+                        &do_remove))
+  {
     return nullptr;
   }
 
@@ -660,7 +717,7 @@ static PyObject *bpy_bm_utils_face_join(PyObject * /*self*/, PyObject *args)
 PyDoc_STRVAR(
     /* Wrap. */
     bpy_bm_utils_face_vert_separate_doc,
-    ".. method:: face_vert_separate(face, vert)\n"
+    ".. function:: face_vert_separate(face, vert)\n"
     "\n"
     "   Rip a vertex in a face away and add a new vertex.\n"
     "\n"
@@ -684,8 +741,14 @@ static PyObject *bpy_bm_utils_face_vert_separate(PyObject * /*self*/, PyObject *
   BMLoop *l;
   BMVert *v_old, *v_new;
 
-  if (!PyArg_ParseTuple(
-          args, "O!O!:face_vert_separate", &BPy_BMFace_Type, &py_face, &BPy_BMVert_Type, &py_vert))
+  if (!PyArg_ParseTuple(args,
+                        "O!" /* `face` */
+                        "O!" /* `vert` */
+                        ":face_vert_separate",
+                        &BPy_BMFace_Type,
+                        &py_face,
+                        &BPy_BMVert_Type,
+                        &py_vert))
   {
     return nullptr;
   }
@@ -715,7 +778,7 @@ static PyObject *bpy_bm_utils_face_vert_separate(PyObject * /*self*/, PyObject *
 PyDoc_STRVAR(
     /* Wrap. */
     bpy_bm_utils_face_flip_doc,
-    ".. method:: face_flip(face)\n"
+    ".. function:: face_flip(face)\n"
     "\n"
     "   Flip the face's direction.\n"
     "\n"
@@ -740,7 +803,7 @@ static PyObject *bpy_bm_utils_face_flip(PyObject * /*self*/, BPy_BMFace *value)
 PyDoc_STRVAR(
     /* Wrap. */
     bpy_bm_utils_loop_separate_doc,
-    ".. method:: loop_separate(loop)\n"
+    ".. function:: loop_separate(loop)\n"
     "\n"
     "   Rip a vertex in a face away and add a new vertex.\n"
     "\n"
@@ -779,7 +842,7 @@ static PyObject *bpy_bm_utils_loop_separate(PyObject * /*self*/, BPy_BMLoop *val
 PyDoc_STRVAR(
     /* Wrap. */
     bpy_bm_utils_uv_select_check_doc,
-    ".. method:: uv_select_check(bm, /, *, sync=True, flush=False, contiguous=False)\n"
+    ".. function:: uv_select_check(bm, /, *, sync=True, flush=False, contiguous=False)\n"
     "\n"
     "   Check UV selection state for consistency issues.\n"
     "\n"
@@ -814,7 +877,7 @@ static PyObject *bpy_bm_utils_uv_select_check(PyObject * /*self*/, PyObject *arg
   };
   static _PyArg_Parser _parser = {
       "O!" /* `bm` */
-      "|$" /* Optional keyword only arguments. */
+      "|$" /* Optional, keyword only arguments. */
       "O&" /* `sync` */
       "O&" /* `flush` */
       "O&" /* `contiguous` */

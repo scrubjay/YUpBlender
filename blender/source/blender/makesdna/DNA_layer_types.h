@@ -19,6 +19,7 @@ namespace blender {
 
 struct Base;
 struct Object;
+struct ViewLayerRuntime;
 
 using ObjectBasesMap = Map<const Object *, Base *>;
 
@@ -26,7 +27,7 @@ using ObjectBasesMap = Map<const Object *, Base *>;
  * Render-passes for EEVEE.
  * #ViewLayerEEVEE.render_passes
  */
-enum eViewLayerEEVEEPassType {
+enum eViewLayerEEVEEPassType : int {
   EEVEE_RENDER_PASS_COMBINED = (1 << 0),
   EEVEE_RENDER_PASS_DEPTH = (1 << 1),
   EEVEE_RENDER_PASS_MIST = (1 << 2),
@@ -45,7 +46,7 @@ enum eViewLayerEEVEEPassType {
   EEVEE_RENDER_PASS_AOV = (1 << 15),
   /*
    * TODO(@jbakker): Clean up conflicting bits after EEVEE has been removed.
-   * #EEVEE_RENDER_PASS_CRYPTOMATTE is for EEVEE, `EEVEE_RENDER_PASS_CRYTPOMATTE_*` are for
+   * #EEVEE_RENDER_PASS_CRYPTOMATTE is for EEVEE, `EEVEE_RENDER_PASS_CRYPTOMATTE_*` are for
    * EEVEE-Next.
    */
   EEVEE_RENDER_PASS_CRYPTOMATTE = (1 << 16),
@@ -55,28 +56,48 @@ enum eViewLayerEEVEEPassType {
   EEVEE_RENDER_PASS_VECTOR = (1 << 19),
   EEVEE_RENDER_PASS_TRANSPARENT = (1 << 20),
   EEVEE_RENDER_PASS_POSITION = (1 << 21),
+  /*
+   * Set of denoising render passes. The flags are left as zero in DNA and controlled via
+   * eViewLayerEEVEEDenoisingPassCategory.
+   */
+  EEVEE_RENDER_PASS_DENOISING_DEPTH = (1 << 22),
+  EEVEE_RENDER_PASS_DENOISING_NORMAL = (1 << 23),
+  EEVEE_RENDER_PASS_DENOISING_ROUGHNESS = (1 << 24),
+  EEVEE_RENDER_PASS_DENOISING_DIFFUSE_ALBEDO = (1 << 25),
+  EEVEE_RENDER_PASS_DENOISING_SPECULAR_ALBEDO = (1 << 26),
 };
-#define EEVEE_RENDER_PASS_MAX_BIT 21
+#define EEVEE_RENDER_PASS_MAX_BIT 26
 ENUM_OPERATORS(eViewLayerEEVEEPassType)
 
+/** #SceneRenderLayer::passflag */
+enum eViewLayerEEVEEDenoisingPassFlag : uint32_t {
+  /* Can be changed in the future if not all passes should be enabled by the same flag. */
+  EEVEE_DENOISING_PASS_STORE = (1 << 0),
+  /* Whether to use roughness-based weighting for the albedo or split by the BSDF type. */
+  EEVEE_DENOISING_PASS_USE_ALBEDO_ROUGHNESS_WEIGHTING = (1 << 1),
+};
+ENUM_OPERATORS(eViewLayerEEVEEDenoisingPassFlag)
+
 /* #ViewLayer::grease_pencil_flags */
-enum eViewLayerGreasePencilFlags {
+enum eViewLayerGreasePencilFlags : int {
   GREASE_PENCIL_AS_SEPARATE_PASS = (1 << 0),
 };
+ENUM_OPERATORS(eViewLayerGreasePencilFlags)
 
 /* #ViewLayerAOV.type */
-enum eViewLayerAOVType {
+enum eViewLayerAOVType : int {
   AOV_TYPE_VALUE = 0,
   AOV_TYPE_COLOR = 1,
 };
 
 /* #ViewLayerAOV.flag */
-enum eViewLayerAOVFlag {
+enum eViewLayerAOVFlag : int {
   AOV_CONFLICT = (1 << 0),
 };
+ENUM_OPERATORS(eViewLayerAOVFlag)
 
 /* #ViewLayer.cryptomatte_flag */
-enum eViewLayerCryptomatteFlags {
+enum eViewLayerCryptomatteFlags : short {
   VIEW_LAYER_CRYPTOMATTE_OBJECT = (1 << 0),
   VIEW_LAYER_CRYPTOMATTE_MATERIAL = (1 << 1),
   VIEW_LAYER_CRYPTOMATTE_ASSET = (1 << 2),
@@ -87,7 +108,7 @@ ENUM_OPERATORS(eViewLayerCryptomatteFlags)
   (VIEW_LAYER_CRYPTOMATTE_OBJECT | VIEW_LAYER_CRYPTOMATTE_MATERIAL | VIEW_LAYER_CRYPTOMATTE_ASSET)
 
 /* Base->flag */
-enum {
+enum eBase_Flag : short {
   /* User controlled flags. */
   BASE_SELECTED = (1 << 0), /* Object is selected. */
   BASE_HIDDEN = (1 << 8),   /* Object is hidden for editing. */
@@ -132,9 +153,10 @@ enum {
   /* Object only contributes indirectly to render */
   BASE_INDIRECT_ONLY = (1 << 11),
 };
+ENUM_OPERATORS(eBase_Flag)
 
 /* LayerCollection->flag */
-enum {
+enum eLayerCollection_Flag : short {
   /* LAYER_COLLECTION_DEPRECATED0 = (1 << 0), */
   /* LAYER_COLLECTION_DEPRECATED1 = (1 << 1), */
   /* LAYER_COLLECTION_DEPRECATED2 = (1 << 2), */
@@ -145,24 +167,27 @@ enum {
   LAYER_COLLECTION_HIDE = (1 << 7),
   LAYER_COLLECTION_PREVIOUSLY_EXCLUDED = (1 << 8),
 };
+ENUM_OPERATORS(eLayerCollection_Flag)
 
 /* Layer Collection->runtime_flag
  * Keep it synced with base->flag based on g_base_collection_flags. */
-enum {
+enum eLayerCollection_RuntimeFlag : short {
   LAYER_COLLECTION_HAS_OBJECTS = (1 << 0),
   /* LAYER_COLLECTION_VISIBLE_DEPSGRAPH = (1 << 1), */ /* UNUSED */
   LAYER_COLLECTION_HIDE_VIEWPORT = (1 << 2),
   LAYER_COLLECTION_VISIBLE_VIEW_LAYER = (1 << 4),
 };
+ENUM_OPERATORS(eLayerCollection_RuntimeFlag)
 
 /* ViewLayer->flag */
-enum {
+enum eViewLayer_Flag : short {
   VIEW_LAYER_RENDER = (1 << 0),
   /* VIEW_LAYER_DEPRECATED  = (1 << 1), */
   VIEW_LAYER_FREESTYLE = (1 << 2),
   VIEW_LAYER_OUT_OF_SYNC = (1 << 3),
   VIEW_LAYER_HAS_EXPORT_COLLECTIONS = (1 << 4),
 };
+ENUM_OPERATORS(eViewLayer_Flag)
 
 struct Base {
   struct Base *next = nullptr, *prev = nullptr;
@@ -176,10 +201,10 @@ struct Base {
   DNA_DEPRECATED unsigned int lay = 0;
   /* Final flags, including both accumulated collection flags and object's
    * restriction flags. */
-  short flag = 0;
+  eBase_Flag flag = {};
   /* Flags which are based on the collections flags evaluation, does not
    * include flags from object's restrictions. */
-  short flag_from_collection = 0;
+  eBase_Flag flag_from_collection = {};
   short flag_legacy = 0;
   unsigned short local_view_bits = 0;
   unsigned short local_collections_bits = 0;
@@ -190,8 +215,8 @@ struct LayerCollection {
   struct LayerCollection *next = nullptr, *prev = nullptr;
   struct Collection *collection = nullptr;
   void *_pad1 = nullptr;
-  short flag = 0;
-  short runtime_flag = 0;
+  eLayerCollection_Flag flag = {};
+  eLayerCollection_RuntimeFlag runtime_flag = {};
   char _pad[4] = {};
 
   /** Synced with collection->children. */
@@ -203,8 +228,10 @@ struct LayerCollection {
 
 /* Type containing EEVEE settings per view-layer */
 struct ViewLayerEEVEE {
-  int render_passes = 0;
+  eViewLayerEEVEEPassType render_passes = {};
   float ambient_occlusion_distance = 10.0f;
+  int denoising_pass_flags = EEVEE_DENOISING_PASS_USE_ALBEDO_ROUGHNESS_WEIGHTING;
+  char _pad[4] = {};
 };
 
 /** AOV Render-pass definition. */
@@ -213,10 +240,9 @@ struct ViewLayerAOV {
 
   /* Name of the AOV */
   char name[64] = "";
-  int flag = 0;
-  /* Type of AOV (color/value)
-   * matches `eViewLayerAOVType` */
-  int type = 0;
+  eViewLayerAOVFlag flag = {};
+  /* Type of AOV (color/value). */
+  eViewLayerAOVType type = AOV_TYPE_VALUE;
 };
 
 /** Light-group Render-pass definition. */
@@ -236,7 +262,7 @@ struct LightgroupMembership {
 struct ViewLayer {
   struct ViewLayer *next = nullptr, *prev = nullptr;
   char name[/*MAX_NAME*/ 64] = "";
-  short flag = VIEW_LAYER_RENDER | VIEW_LAYER_FREESTYLE;
+  eViewLayer_Flag flag = VIEW_LAYER_RENDER | VIEW_LAYER_FREESTYLE;
   char _pad[6] = {};
   ListBaseT<Base> object_bases = {nullptr, nullptr};
   /** Default allocated now. */
@@ -254,9 +280,9 @@ struct ViewLayer {
   /** Pass_xor has to be after passflag. */
   int passflag = SCE_PASS_COMBINED;
   float pass_alpha_threshold = 0.5f;
-  short cryptomatte_flag = VIEW_LAYER_CRYPTOMATTE_ACCURATE;
+  eViewLayerCryptomatteFlags cryptomatte_flag = VIEW_LAYER_CRYPTOMATTE_ACCURATE;
   short cryptomatte_levels = 6;
-  int grease_pencil_flags = 0;
+  eViewLayerGreasePencilFlags grease_pencil_flags = {};
 
   int samples = 0;
 
@@ -276,9 +302,12 @@ struct ViewLayer {
   ListBaseT<ViewLayerLightgroup> lightgroups = {nullptr, nullptr};
   ViewLayerLightgroup *active_lightgroup = nullptr;
 
-  /* Runtime data */
-  struct Base **object_bases_array = nullptr;
-  ObjectBasesMap *object_bases_hash = nullptr;
+  ViewLayerRuntime *runtime = nullptr;
+
+#ifdef __cplusplus
+  /** This is the same as #object_bases but cached as an array for faster index-based access. */
+  Span<Base *> object_bases_array() const;
+#endif
 };
 
 }  // namespace blender

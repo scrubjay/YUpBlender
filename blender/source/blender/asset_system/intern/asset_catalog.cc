@@ -12,15 +12,16 @@
 #include "AS_asset_catalog.hh"
 #include "AS_asset_catalog_tree.hh"
 #include "AS_asset_library.hh"
+#include "AS_essentials_library.hh"
 #include "asset_catalog_collection.hh"
 #include "asset_catalog_definition_file.hh"
 
-#include "BLI_fileops.h"
+#include "BLI_fileops.hh"
 #include "BLI_path_utils.hh"
 
 /* For S_ISREG() and S_ISDIR() on Windows. */
 #ifdef WIN32
-#  include "BLI_winstuff.h"
+#  include "BLI_winstuff.hh"
 #endif
 
 #include "asset_library_service.hh"
@@ -314,8 +315,8 @@ void AssetCatalogService::load_from_disk(const CatalogFilePath &file_or_director
 {
   BLI_stat_t status;
   if (BLI_stat(file_or_directory_path.data(), &status) == -1) {
-    /* TODO(@sybren): throw an appropriate exception. */
-    CLOG_WARN(&LOG, "path not found: %s", file_or_directory_path.data());
+    /* It's fine if the catalogs file doesn't exist, it just means there are no catalogs. */
+    CLOG_DEBUG(&LOG, "path not found: %s", file_or_directory_path.data());
     return;
   }
 
@@ -380,6 +381,10 @@ std::unique_ptr<AssetCatalogDefinitionFile> AssetCatalogService::parse_catalog_f
 
   auto catalog_parsed_callback = [this, catalog_definition_file_path, &seen_paths](
                                      std::unique_ptr<AssetCatalog> catalog) {
+    if (skip_experimental_asset_catalog(catalog->catalog_id)) {
+      return false;
+    }
+
     if (catalog_collection_->catalogs_.contains(catalog->catalog_id)) {
       /* TODO(@sybren): apparently another CDF was already loaded. This is not supported yet. */
       std::cerr << catalog_definition_file_path << ": multiple definitions of catalog "
@@ -413,6 +418,10 @@ void AssetCatalogService::reload_catalogs()
   Set<CatalogID> cats_in_file;
 
   auto catalog_parsed_callback = [this, &cats_in_file](std::unique_ptr<AssetCatalog> catalog) {
+    if (skip_experimental_asset_catalog(catalog->catalog_id)) {
+      return false;
+    }
+
     const CatalogID catalog_id = catalog->catalog_id;
     cats_in_file.add(catalog_id);
 

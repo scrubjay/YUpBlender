@@ -11,6 +11,8 @@
 #include "gpu_context_private.hh"
 
 #include "BLI_utility_mixins.hh"
+
+#include "render_graph/vk_resource_state_tracker.hh"
 #include "vk_common.hh"
 
 namespace blender::gpu {
@@ -23,7 +25,7 @@ class VKDevice;
 class VKBuffer : public NonCopyable {
   size_t size_in_bytes_ = 0;
   size_t alloc_size_in_bytes_ = 0;
-  VkBuffer vk_buffer_ = VK_NULL_HANDLE;
+  VKResourceWithHandle<VkBuffer> resource_;
   VmaAllocation allocation_ = VK_NULL_HANDLE;
   TimelineValue async_timeline_ = 0;
   /** Has a previous allocation failed. Will skip reallocations. */
@@ -49,7 +51,9 @@ class VKBuffer : public NonCopyable {
               VmaMemoryUsage vma_memory_usage,
               VmaAllocationCreateFlags vma_allocation_flags,
               float priority,
-              bool export_memory = false);
+              bool export_memory = false,
+              const char *debug_name = "VKBuffer",
+              size_t alignment = 0);
   void clear(VKContext &context, uint32_t clear_value);
   void update_immediately(const void *data) const;
   void update_sub_immediately(size_t start_offset, size_t data_size, const void *data) const;
@@ -87,11 +91,6 @@ class VKBuffer : public NonCopyable {
    */
   bool free();
 
-  /**
-   * Destroy the buffer immediately.
-   */
-  void free_immediately(VKDevice &device);
-
   int64_t size_in_bytes() const
   {
     return size_in_bytes_;
@@ -102,9 +101,13 @@ class VKBuffer : public NonCopyable {
     return alloc_size_in_bytes_;
   }
 
+  const VKResourceWithHandle<VkBuffer> &resource() const
+  {
+    return resource_;
+  }
   VkBuffer vk_handle() const
   {
-    return vk_buffer_;
+    return resource_.vk_handle;
   }
 
   /**
@@ -114,9 +117,14 @@ class VKBuffer : public NonCopyable {
    */
   void *mapped_memory_get() const;
 
-  VkDeviceAddress device_address_get() const
+  inline VkDeviceAddress device_address_get() const
   {
     return vk_device_address;
+  }
+
+  inline bool has_device_address() const
+  {
+    return vk_device_address != 0;
   }
 
   /**
@@ -128,6 +136,18 @@ class VKBuffer : public NonCopyable {
    * Get allocated device memory.
    */
   VkDeviceMemory export_memory_get(size_t &memory_size);
+
+  /**
+   * Flush the mapped memory after writing to it on the host. Only has an effect if the memory is
+   * not host coherent.
+   */
+  void flush_mapped_memory();
+
+  /**
+   * Invalidates the mapped memory after writing to it on the device. Only has an effect if the
+   * memory is not host coherent.
+   */
+  void invalidate_mapped_memory();
 
  private:
   /** Check if this buffer is mapped. */
@@ -157,7 +177,7 @@ inline bool VKBuffer::is_allocated() const
  * Used for de-interleaved vertex input buffers and immediate mode buffers.
  */
 struct VKBufferWithOffset {
-  const VkBuffer buffer;
+  VKResourceWithHandle<VkBuffer> buffer;
   VkDeviceSize offset;
 };
 

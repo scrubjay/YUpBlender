@@ -57,7 +57,7 @@ set(OSL_EXTRA_ARGS
   -Dlibdeflate_DIR=${LIBDIR}/deflate/lib/cmake/libdeflate
 )
 
-if(NOT (APPLE OR BLENDER_PLATFORM_WINDOWS_ARM))
+if(NOT APPLE)
   list(APPEND OSL_EXTRA_ARGS
     -DOSL_USE_OPTIX=ON
     -DCUDA_TARGET_ARCH=sm_50
@@ -80,9 +80,6 @@ ExternalProject_Add(external_osl
     ${PATCH_CMD} -p 1 -d
       ${BUILD_DIR}/osl/src/external_osl <
       ${PATCH_DIR}/osl_ptx_version.diff &&
-    ${PATCH_CMD} -p 1 -d
-      ${BUILD_DIR}/osl/src/external_osl <
-      ${PATCH_DIR}/osl_supports_isa_thread.diff &&
     ${PATCH_CMD} -p 1 -d
       ${BUILD_DIR}/osl/src/external_osl <
       ${PATCH_DIR}/osl_relative_inc_cmake.diff

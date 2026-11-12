@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup edsculpt
+ */
+
 #include "editors/sculpt_paint/mesh/brushes/brushes.hh"
 
 #include "DNA_brush_types.h"
@@ -15,6 +19,8 @@
 #include "BLI_enumerable_thread_specific.hh"
 #include "BLI_math_vector.hh"
 #include "BLI_task.hh"
+
+#include "PRF_profile.hh"
 
 #include "editors/sculpt_paint/mesh/mesh_brush_common.hh"
 #include "editors/sculpt_paint/mesh/sculpt_automask.hh"
@@ -38,6 +44,7 @@ BLI_NOINLINE static void calc_translations(const Set<BMVert *, 0> &verts,
                                            const float3 &direction,
                                            const MutableSpan<float3> translations)
 {
+  PRF_scope(ProfileCategory::Editor);
   int i = 0;
   for (const BMVert *vert : verts) {
     float3 average;
@@ -82,6 +89,7 @@ void do_bmesh_topology_rake_brush(const Depsgraph &depsgraph,
                                   const IndexMask &node_mask,
                                   const float input_strength)
 {
+  PRF_scope(ProfileCategory::Editor);
   const SculptSession &ss = *object.runtime->sculpt_session;
   bke::pbvh::Tree &pbvh = *bke::object::pbvh_get(object);
   const Brush &brush = *BKE_paint_brush_for_read(&sd.paint);

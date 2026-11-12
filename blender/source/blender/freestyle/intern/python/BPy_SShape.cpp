@@ -14,7 +14,7 @@
 #include "Interface0D/BPy_SVertex.h"
 #include "Interface1D/BPy_FEdge.h"
 
-#include "BLI_sys_types.h"
+#include "BLI_sys_types.hh"
 
 #include "../generic/py_capi_utils.hh"
 
@@ -45,19 +45,31 @@ PyDoc_STRVAR(
     "Class to define a feature shape. It is the gathering of feature\n"
     "elements from an identified input shape.\n"
     "\n"
-    ".. method:: __init__()\n"
-    "            __init__(brother)\n"
+    ".. method:: __init__(*args)\n"
+    "\n"
+    "   Accepted call signatures:\n"
+    "\n"
+    "   - ``__init__()``\n"
+    "   - ``__init__(brother)``\n"
     "\n"
     "   Creates a :class:`SShape` class using either a default constructor or copy constructor.\n"
     "\n"
-    "   :arg brother: An SShape object.\n"
+    "   :param brother: An SShape object.\n"
     "   :type brother: :class:`SShape`\n");
 static int SShape_init(BPy_SShape *self, PyObject *args, PyObject *kwds)
 {
   static const char *kwlist[] = {"brother", nullptr};
   PyObject *brother = nullptr;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "|O!", (char **)kwlist, &SShape_Type, &brother)) {
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "|"  /* Optional arguments. */
+                                   "O!" /* `brother` */
+                                   ":__init__",
+                                   (char **)kwlist,
+                                   &SShape_Type,
+                                   &brother))
+  {
     return -1;
   }
   if (!brother) {
@@ -88,7 +100,7 @@ static char SShape_add_edge_doc[] =
     "\n"
     "   Adds an FEdge to the list of FEdges.\n"
     "\n"
-    "   :arg edge: An FEdge object.\n"
+    "   :param edge: An FEdge object.\n"
     "   :type edge: :class:`FEdge`\n";
 
 static PyObject *SShape_add_edge(BPy_SShape *self, PyObject *args, PyObject *kwds)
@@ -96,7 +108,14 @@ static PyObject *SShape_add_edge(BPy_SShape *self, PyObject *args, PyObject *kwd
   static const char *kwlist[] = {"edge", nullptr};
   PyObject *py_fe = nullptr;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!", (char **)kwlist, &FEdge_Type, &py_fe)) {
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "O!" /* `edge` */
+                                   ":add_edge",
+                                   (char **)kwlist,
+                                   &FEdge_Type,
+                                   &py_fe))
+  {
     return nullptr;
   }
   self->ss->AddEdge(((BPy_FEdge *)py_fe)->fe);
@@ -111,14 +130,21 @@ PyDoc_STRVAR(
     "   Adds an SVertex to the list of SVertex of this Shape. The SShape\n"
     "   attribute of the SVertex is also set to this SShape.\n"
     "\n"
-    "   :arg vertex: An SVertex object.\n"
+    "   :param vertex: An SVertex object.\n"
     "   :type vertex: :class:`SVertex`\n");
 static PyObject *SShape_add_vertex(BPy_SShape *self, PyObject *args, PyObject *kwds)
 {
   static const char *kwlist[] = {"edge", nullptr};
   PyObject *py_sv = nullptr;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!", (char **)kwlist, &SVertex_Type, &py_sv)) {
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "O!" /* `edge` */
+                                   ":add_vertex",
+                                   (char **)kwlist,
+                                   &SVertex_Type,
+                                   &py_sv))
+  {
     return nullptr;
   }
   self->ss->AddNewVertex(((BPy_SVertex *)py_sv)->sv);
@@ -242,7 +268,7 @@ PyDoc_STRVAR(
     SShape_vertices_doc,
     "The list of vertices constituting this SShape.\n"
     "\n"
-    ":type: List of :class:`SVertex`\n");
+    ":type: list[:class:`SVertex`]\n");
 static PyObject *SShape_vertices_get(BPy_SShape *self, void * /*closure*/)
 {
 
@@ -263,7 +289,7 @@ PyDoc_STRVAR(
     SShape_edges_doc,
     "The list of edges constituting this SShape.\n"
     "\n"
-    ":type: List of :class:`FEdge`\n");
+    ":type: list[:class:`FEdge`]\n");
 static PyObject *SShape_edges_get(BPy_SShape *self, void * /*closure*/)
 {
 

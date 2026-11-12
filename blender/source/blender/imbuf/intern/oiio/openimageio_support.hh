@@ -2,12 +2,16 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup openimageio
+ */
+
 #pragma once
 
 /* Include our own math header first to avoid warnings about M_PI
  * redefinition between OpenImageIO and Windows headers. */
-#include "BLI_math_base.h"  // IWYU pragma: keep
-#include "BLI_sys_types.h"
+#include "BLI_math_base_c.hh"  // IWYU pragma: keep
+#include "BLI_sys_types.hh"
 
 #include <OpenImageIO/filesystem.h>
 #include <OpenImageIO/imageio.h>
@@ -29,7 +33,7 @@ struct ReadContext {
   const size_t mem_size;
   const char *file_format;
   const eImbFileType file_type;
-  const int flags;
+  const ImBufFlags flags;
 
   /** Allocate and use all #ImBuf image planes even if the image has fewer. */
   bool use_all_planes = false;
@@ -43,12 +47,10 @@ struct ReadContext {
  */
 struct WriteContext {
   const char *file_format;
-  ImBuf *ibuf;
-  int flags;
+  const ImBuf *ibuf;
+  ImBufFlags flags;
 
-  uchar *mem_start;
-  OIIO::stride_t mem_xstride;
-  OIIO::stride_t mem_ystride;
+  OIIO::image_span<const std::byte> mem_span;
   OIIO::ImageSpec mem_spec;
 };
 
@@ -60,7 +62,7 @@ bool imb_oiio_check(const uchar *mem, size_t mem_size, const char *file_format);
 /**
  * The primary method for reading data into an #ImBuf.
  *
- * During the `IB_test` phase of loading, the `colorspace` parameter will be populated
+ * During the `ImBufFlags::Test` phase of loading, the `colorspace` parameter will be populated
  * with the appropriate `colorspace` name.
  *
  * Upon return, the `r_newspec` parameter will contain image format information
@@ -72,14 +74,20 @@ ImBuf *imb_oiio_read(const ReadContext &ctx,
                      OIIO::ImageSpec &r_newspec);
 
 /**
- * The primary method for writing data from an #ImBuf to either a physical or in-memory
- * destination.
+ * The primary method for writing data from an #ImBuf to a file.
  *
  * The `file_spec` parameter will typically come from #imb_create_write_spec.
  */
 bool imb_oiio_write(const WriteContext &ctx,
                     const char *filepath,
                     const OIIO::ImageSpec &file_spec);
+
+/**
+ * The primary method for writing data from an #ImBuf to an in-memory buffer.
+ *
+ * The `file_spec` parameter will typically come from #imb_create_write_spec.
+ */
+Vector<uint8_t> imb_oiio_write_buffer(const WriteContext &ctx, const OIIO::ImageSpec &file_spec);
 
 /**
  * Create a #WriteContext based on the provided #ImBuf and format information.
@@ -89,8 +97,8 @@ bool imb_oiio_write(const WriteContext &ctx,
  * be used.
  */
 WriteContext imb_create_write_context(const char *file_format,
-                                      ImBuf *ibuf,
-                                      int flags,
+                                      const ImBuf *ibuf,
+                                      ImBufFlags flags,
                                       bool prefer_float = true);
 
 /**

@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup shdnodes
+ */
+
 #include "DNA_node_types.h"
 #include "node_shader_util.hh"
 #include "node_util.hh"
@@ -11,6 +15,8 @@
 #include "BKE_scene.hh"
 
 #include "DEG_depsgraph_query.hh"
+
+#include "ED_node.hh"
 
 #include "RNA_access.hh"
 
@@ -41,12 +47,9 @@ static void node_shader_buts_normal_map(ui::Layout &layout, bContext *C, Pointer
   layout.prop(ptr, "convention", ui::ITEM_R_SPLIT_EMPTY_NAME, "", ICON_NONE);
 
   if (RNA_enum_get(ptr, "space") == SHD_SPACE_TANGENT) {
-    if (BKE_scene_uses_cycles(CTX_data_scene(C))) {
-      layout.prop(ptr, "base", ui::ITEM_R_SPLIT_EMPTY_NAME, "", ICON_NONE);
-    }
+    layout.prop(ptr, "base", ui::ITEM_R_SPLIT_EMPTY_NAME, "", ICON_NONE);
 
-    PointerRNA obptr = CTX_data_pointer_get(C, "active_object");
-    Object *object = static_cast<Object *>(obptr.data);
+    Object *object = ed::space_node::get_space_editor_object(C);
 
     if (object && object->type == OB_MESH) {
       Depsgraph *depsgraph = CTX_data_depsgraph_pointer(C);
@@ -82,7 +85,7 @@ static int gpu_shader_normal_map(GPUMaterial *mat,
     strength = in[0].link;
   }
   else {
-    strength = GPU_uniform(in[0].vec);
+    strength = GPU_uniform(in[0]);
   }
 
   GPUNodeLink *newnormal;
@@ -90,7 +93,7 @@ static int gpu_shader_normal_map(GPUMaterial *mat,
     newnormal = in[1].link;
   }
   else {
-    newnormal = GPU_uniform(in[1].vec);
+    newnormal = GPU_uniform(in[1]);
   }
 
   const char *color_to_normal_fnc_name = "color_to_normal_new_shading";
@@ -104,6 +107,13 @@ static int gpu_shader_normal_map(GPUMaterial *mat,
     GPU_link(mat, "color_invert_green_channel", newnormal, &newnormal);
   }
 
+  const char *input_fn_name = (nm->base == SHD_NORMAL_MAP_BASE_DISPLACED) ?
+                                  "input_normal_displaced" :
+                                  "input_normal_original";
+
+  GPUNodeLink *input_normal;
+  GPU_link(mat, input_fn_name, GPU_shading_data(), &input_normal);
+
   switch (nm->space) {
     case SHD_SPACE_TANGENT:
       GPU_material_flag_set(mat, GPU_MATFLAG_OBJECT_INFO);
@@ -114,11 +124,19 @@ static int gpu_shader_normal_map(GPUMaterial *mat,
                GPU_attribute(mat, CD_TANGENT, nm->uv_map),
                strength,
                newnormal,
+               input_normal,
+               GPU_kernel_globals(),
+               GPU_shading_data(),
                &out[0].link);
       return true;
     case SHD_SPACE_OBJECT:
     case SHD_SPACE_BLENDER_OBJECT:
-      GPU_link(mat, "normal_transform_object_to_world", newnormal, &newnormal);
+      GPU_link(mat,
+               "normal_transform_object_to_world",
+               newnormal,
+               GPU_kernel_globals(),
+               GPU_shading_data(),
+               &newnormal);
       break;
     case SHD_SPACE_WORLD:
     case SHD_SPACE_BLENDER_WORLD:
@@ -127,7 +145,7 @@ static int gpu_shader_normal_map(GPUMaterial *mat,
   }
 
   /* Final step - mix and apply strength for all other than tangent space. */
-  GPU_link(mat, "node_normal_map_mix", strength, newnormal, &out[0].link);
+  GPU_link(mat, "node_normal_map_mix", strength, newnormal, GPU_shading_data(), &out[0].link);
 
   return true;
 }
@@ -207,7 +225,7 @@ void register_node_type_sh_normal_map()
   ntype.nclass = NODE_CLASS_OP_VECTOR;
   ntype.declare = file_ns::node_declare;
   ntype.draw_buttons = file_ns::node_shader_buts_normal_map;
-  bke::node_type_size_preset(ntype, bke::eNodeSizePreset::Middle);
+  ntype.default_width = bke::NodeWidth::_160;
   ntype.initfunc = file_ns::node_shader_init_normal_map;
   bke::node_type_storage(
       ntype, "NodeShaderNormalMap", node_free_standard_storage, node_copy_standard_storage);

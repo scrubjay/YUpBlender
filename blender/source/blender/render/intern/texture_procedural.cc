@@ -11,10 +11,10 @@
 #include <cstdlib>
 #include <cstring>
 
-#include "BLI_math_geom.h"
-#include "BLI_noise.h"
-#include "BLI_rand.h"
-#include "BLI_utildefines.h"
+#include "BLI_math_geom_c.hh"
+#include "BLI_noise_c.hh"
+#include "BLI_rand_c.hh"
+#include "BLI_utildefines.hh"
 
 #include "DNA_material_types.h"
 #include "DNA_node_types.h"
@@ -721,10 +721,11 @@ static int multitex(Tex *tex,
         tex->nodetree, texres, texvec, thread, tex, which_output, cfra, texnode_preview, nullptr);
   }
   else {
+    if (tex->type == eTex_Type(0)) {
+      texres->tin = 0.0f;
+      return 0;
+    }
     switch (tex->type) {
-      case 0:
-        texres->tin = 0.0f;
-        return 0;
       case TEX_CLOUDS:
         retval = clouds(tex, texvec, texres);
         break;
@@ -748,9 +749,6 @@ static int multitex(Tex *tex,
         break;
       case TEX_IMAGE:
         retval = imagewrap(tex, tex->ima, texvec, texres, pool, skip_load_image);
-        if (tex->ima) {
-          BKE_image_tag_time(tex->ima);
-        }
         break;
       case TEX_MUSGRAVE:
         /* newnoise: musgrave types */

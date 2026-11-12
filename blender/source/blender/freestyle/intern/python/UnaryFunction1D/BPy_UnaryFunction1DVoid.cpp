@@ -62,13 +62,17 @@ PyDoc_STRVAR(
     "Base class for unary functions (functors) working on\n"
     ":class:`Interface1D`.\n"
     "\n"
-    ".. method:: __init__()\n"
-    "             __init__(integration_type)\n"
+    ".. method:: __init__(*args)\n"
+    "\n"
+    "   Accepted call signatures:\n"
+    "\n"
+    "   - ``__init__()``\n"
+    "   - ``__init__(integration_type)``\n"
     "\n"
     "   Builds a unary 1D function using either a default constructor\n"
     "   or the integration method given as an argument.\n"
     "\n"
-    "   :arg integration_type: An integration method.\n"
+    "   :param integration_type: An integration method.\n"
     "   :type integration_type: :class:`IntegrationType`\n");
 static int UnaryFunction1DVoid___init__(BPy_UnaryFunction1DVoid *self,
                                         PyObject *args,
@@ -77,8 +81,14 @@ static int UnaryFunction1DVoid___init__(BPy_UnaryFunction1DVoid *self,
   static const char *kwlist[] = {"integration", nullptr};
   PyObject *obj = nullptr;
 
-  if (!PyArg_ParseTupleAndKeywords(
-          args, kwds, "|O!", (char **)kwlist, &IntegrationType_Type, &obj))
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "|"  /* Optional arguments. */
+                                   "O!" /* `integration` */
+                                   ":__init__",
+                                   (char **)kwlist,
+                                   &IntegrationType_Type,
+                                   &obj))
   {
     return -1;
   }
@@ -113,7 +123,14 @@ static PyObject *UnaryFunction1DVoid___call__(BPy_UnaryFunction1DVoid *self,
   static const char *kwlist[] = {"inter", nullptr};
   PyObject *obj = nullptr;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!", (char **)kwlist, &Interface1D_Type, &obj)) {
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "O!" /* `inter` */
+                                   ":__call__",
+                                   (char **)kwlist,
+                                   &Interface1D_Type,
+                                   &obj))
+  {
     return nullptr;
   }
 

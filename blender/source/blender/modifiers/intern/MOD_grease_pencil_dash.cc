@@ -9,8 +9,8 @@
 #include "BLI_array_utils.hh"
 #include "BLI_index_range.hh"
 #include "BLI_span.hh"
-#include "BLI_string.h"
-#include "BLI_string_utf8.h"
+#include "BLI_string.hh"
+#include "BLI_string_utf8.hh"
 
 #include "DNA_modifier_types.h"
 
@@ -514,8 +514,7 @@ static void blend_read(BlendDataReader *reader, ModifierData *md)
 
   modifier::greasepencil::read_influence_data(reader, &dmd->influence);
 
-  BLO_read_struct_array(
-      reader, GreasePencilDashModifierSegment, dmd->segments_num, &dmd->segments_array);
+  BLO_read_array_and_validate_size(reader, &dmd->segments_array, &dmd->segments_num);
 }
 
 ModifierTypeInfo modifierType_GreasePencilDash = {

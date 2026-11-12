@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup bke
+ */
+
 #include "BKE_geometry_set.hh"
 #include "BKE_grease_pencil.hh"
 #include "BKE_lib_id.hh"
@@ -115,6 +119,8 @@ std::optional<MutableAttributeAccessor> GreasePencilComponent::attributes_for_wr
   GreasePencil *grease_pencil = this->get_for_write();
   return MutableAttributeAccessor(grease_pencil, greasepencil::get_attribute_accessor_functions());
 }
+
+/** \} */
 
 }  // namespace bke
 }  // namespace blender

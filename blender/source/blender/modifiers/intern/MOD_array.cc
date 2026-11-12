@@ -12,10 +12,10 @@
 
 #include "MEM_guardedalloc.h"
 
-#include "BLI_utildefines.h"
+#include "BLI_utildefines.hh"
 
-#include "BLI_math_matrix.h"
-#include "BLI_math_vector.h"
+#include "BLI_math_matrix_c.hh"
+#include "BLI_math_vector_c.hh"
 #include "BLI_span.hh"
 
 #include "BLT_translation.hh"
@@ -47,7 +47,7 @@
 
 #include "DEG_depsgraph.hh"
 
-#include "GEO_mesh_merge_by_distance.hh"
+#include "GEO_mesh_merge_verts.hh"
 
 namespace blender {
 
@@ -461,9 +461,10 @@ static Mesh *arrayModifier_doArray(ArrayModifierData *amd,
   }
 
   if (amd->offset_type & MOD_ARR_OFF_RELATIVE) {
-    const Bounds<float3> bounds = *mesh->bounds_min_max();
-    for (j = 3; j--;) {
-      offset[3][j] += amd->scale[j] * (bounds.max[j] - bounds.min[j]);
+    if (const std::optional<Bounds<float3>> bounds = mesh->bounds_min_max()) {
+      for (j = 3; j--;) {
+        offset[3][j] += amd->scale[j] * (bounds->max[j] - bounds->min[j]);
+      }
     }
   }
 
@@ -845,9 +846,15 @@ static Mesh *arrayModifier_doArray(ArrayModifierData *amd,
       }
     }
     if (tot_doubles > 0) {
+      /* Vertex merging expects un-merged vertices to point at themselves rather than being -1. */
+      for (i = 0; i < result_nverts; i++) {
+        if (full_doubles_map[i] == -1) {
+          full_doubles_map[i] = i;
+        }
+      }
       Mesh *tmp = result;
       result = geometry::mesh_merge_verts(
-          *tmp, MutableSpan<int>{full_doubles_map, result->verts_num}, tot_doubles, false);
+          *tmp, Span<int>{full_doubles_map, result->verts_num}, tot_doubles, false);
       BKE_id_free(nullptr, tmp);
     }
     MEM_delete(full_doubles_map);

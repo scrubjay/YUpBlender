@@ -31,7 +31,6 @@ import bpy
 from bpy.props import (
     BoolProperty,
     EnumProperty,
-    PointerProperty,
     CollectionProperty,
     StringProperty,
 )
@@ -40,7 +39,7 @@ from bpy.props import (
 # Only import submodules here when necessary for type checking.
 # At runtime, the module is imported only when it's actually used.
 if TYPE_CHECKING:
-    from _bpy_internal.assets.remote_library_listing import listing_downloader
+    from _bpy_internal.assets.remote_library import listing_downloader
 
     type _RemoteAssetListingDownloader = listing_downloader.RemoteAssetListingDownloader
 else:
@@ -428,6 +427,7 @@ _downloaders: list[_RemoteAssetListingDownloader] = []
 # Called directly from C++ code.
 def remote_asset_library_sync(
     asset_library_url: str,
+    asset_library_auth_token: str,
     asset_library_local_path: Path,
     only_if_older_than_sec=0,
 ) -> None:
@@ -452,7 +452,7 @@ def remote_asset_library_sync(
         print("  skipping {!r}, online access is not allowed,".format(asset_library_url))
         return
 
-    from _bpy_internal.assets.remote_library_listing import listing_downloader
+    from _bpy_internal.assets.remote_library import listing_downloader
 
     # Check if the download should happen at all.
     if only_if_older_than_sec and listing_downloader.is_more_recent_than(
@@ -461,7 +461,7 @@ def remote_asset_library_sync(
 
     # Only actually start downloading if no other Blender is already syncing
     # this asset library.
-    from _bpy_internal.assets.remote_library_listing import sync_mutex
+    from _bpy_internal.assets.remote_library import sync_mutex
     if not sync_mutex.mutex_lock(asset_library_local_path):
         print("  skipping {!r}, another Blender is already syncing this asset library,".format(asset_library_url))
         return
@@ -473,6 +473,7 @@ def remote_asset_library_sync(
     # Create the downloader and start downloading.
     downloader = listing_downloader.RemoteAssetListingDownloader(
         asset_library_url,
+        asset_library_auth_token,
         asset_library_local_path,
         on_update_callback=_remote_asset_library_sync_update,
         on_done_callback=_remote_asset_library_sync_done,
@@ -485,6 +486,20 @@ def remote_asset_library_sync(
     _downloaders.append(downloader)
 
 
+def remote_asset_library_sync_cancel() -> None:
+    """Cancel all remote asset library sync operations.
+
+    This will cancel all running downloads & shut down the downloaders. Any
+    partially-downloaded listing will have to be re-downloaded to be fully
+    correct again.
+    """
+
+    # This calls the relevant _remote_asset_library_sync_done() functions as well, ensuring that each downloader is
+    # properly cleaned up. That includes removing items from _downloaders, hence the copy of that list.
+    for downloader in _downloaders[:]:
+        downloader.cancel_and_shutdown()
+
+
 def _remote_asset_library_sync_done(downloader: _RemoteAssetListingDownloader) -> None:
     """
     Called when the downloading of the remote asset listing is done.
@@ -493,8 +508,8 @@ def _remote_asset_library_sync_done(downloader: _RemoteAssetListingDownloader) -
     or other issues can cause things to abort. In that case, this function is
     still called.
     """
-    from _bpy_internal.assets.remote_library_listing import sync_mutex
-    from _bpy_internal.assets.remote_library_listing.listing_downloader import DownloadStatus
+    from _bpy_internal.assets.remote_library import sync_mutex
+    from _bpy_internal.assets.remote_library.listing_downloader import DownloadStatus
     from bpy.types import WindowManager
 
     try:
@@ -513,7 +528,7 @@ def _remote_asset_library_sync_done(downloader: _RemoteAssetListingDownloader) -
 
 
 def _remote_asset_library_sync_update(downloader: _RemoteAssetListingDownloader) -> None:
-    from _bpy_internal.assets.remote_library_listing.listing_downloader import DownloadStatus
+    from _bpy_internal.assets.remote_library.listing_downloader import DownloadStatus
 
     # Only call `asset_library_status_ping_still_loading()` if the loading is still going on.
     if downloader.status == DownloadStatus.LOADING:
@@ -535,11 +550,74 @@ def _remote_asset_library_sync_all_periodic():
     if not bpy.context.preferences.experimental.use_remote_asset_libraries:
         return
 
-    for asset_lib in bpy.context.preferences.filepaths.asset_libraries:
-        if not asset_lib.enabled:
+    prefs = bpy.context.preferences
+    for asset_lib in prefs.filepaths.asset_libraries:
+        if not asset_lib.is_available():
             continue
-        remote_asset_library_sync(asset_lib.remote_url, Path(asset_lib.path),
+        if not asset_lib.use_remote_url:
+            continue
+        auth_token = asset_lib.auth_token
+        # Match `AUTH_TOKEN_MAYBE_OVERRIDE_FROM_EXTENSIONS` in `remote_library.cc`.
+        if (auth_token_override := asset_auth_token_from_url(asset_lib.remote_url)) is not None:
+            auth_token = auth_token_override
+        remote_asset_library_sync(asset_lib.remote_url, auth_token, Path(asset_lib.path),
                                   only_if_older_than_sec=REMOTE_ASSET_LIBS_AUTOSYNC_PERIOD_SEC)
+
+    # The online essentials library is not listed in the 'asset_libraries' list above, because it's not a preference.
+    if prefs.asset_libraries.use_online_essentials:
+        remote_url = bpy.types.AssetLibrary.online_assets_url()
+        cache_path = bpy.types.AssetLibrary.online_assets_cache_path()
+        remote_asset_library_sync(remote_url, "", Path(cache_path),
+                                  only_if_older_than_sec=REMOTE_ASSET_LIBS_AUTOSYNC_PERIOD_SEC)
+
+
+def _remote_asset_library_restore_backups() -> None:
+    """Restore any remote asset library listing backup.
+
+    If at startup there is an asset library listing backup, and no other Blender
+    is actively syncing that asset library, it means that Blender quit while
+    the listing was being downloaded, and it's probably incomplete. Better to
+    restore the backup.
+    """
+    if not bpy.context.preferences.experimental.use_remote_asset_libraries:
+        return
+
+    for asset_lib in bpy.context.preferences.filepaths.asset_libraries:
+        if not asset_lib.is_available():
+            continue
+        if not asset_lib.use_remote_url:
+            continue
+
+        from _bpy_internal.assets.remote_library import listing_downloader
+        listing_downloader.restore_backup_if_exists_locked(asset_lib.remote_url, Path(asset_lib.path))
+
+
+# -----------------------------------------------------------------------------
+# Remote Asset Library Authentication
+
+def asset_auth_token_from_url(remote_url: str) -> str | None:
+    """
+    Given an asset library URL, return it's authentication token
+    in the case the repository is declared as a repository that uses a single repository-wide token.
+    """
+    from .bl_extension_ops import extension_asset_library_repo_and_item_from_url
+    repo_cache_store = repo_cache_store_ensure()
+    result = extension_asset_library_repo_and_item_from_url(repo_cache_store, remote_url, error_fn=print)
+    # When the asset-library isn't from an extensions repository.
+    if result is None:
+        return None
+
+    repo_item, value = result
+
+    # When the manifest requests no authentication, don't pass in a token.
+    if value.asset_library.auth is None:
+        return None
+
+    # Special case, this extensions repository declares all extension-asset libraries
+    assetlib_auth_method = repo_cache_store.assetlib_auth_method_from_directory(repo_item.directory, error_fn=print)
+    if assetlib_auth_method == 'FROM_REPOSITORY':
+        return repo_item.access_token
+    return None
 
 
 # -----------------------------------------------------------------------------
@@ -616,13 +694,17 @@ def extension_repos_files_clear(directory, _):
 # Wrap Handlers
 
 _monkeypatch_extensions_repos_update_dirs = set()
+# Map `repo.as_pointer()` to the module before the update, to follow renamed & removed repositories.
+_monkeypatch_extensions_repos_update_modules = {}
 
 
 def monkeypatch_extensions_repos_update_pre_impl():
     _monkeypatch_extensions_repos_update_dirs.clear()
+    _monkeypatch_extensions_repos_update_modules.clear()
 
     extension_repos = bpy.context.preferences.extensions.repos
     for repo_item in extension_repos:
+        _monkeypatch_extensions_repos_update_modules[repo_item.as_pointer()] = repo_item.module
         if not repo_item.enabled:
             continue
         directory, _repo_path = repo_paths_or_none(repo_item)
@@ -658,6 +740,11 @@ def monkeypatch_extensions_repos_update_post_impl():
         repo_cache_store.refresh_local_from_directory(directory=directory, error_fn=print, ignore_missing=True)
 
     _monkeypatch_extensions_repos_update_dirs.clear()
+
+    # Repositories may have been added, removed, renamed or toggled.
+    bl_extension_ops.extension_asset_libraries_repos_update(_monkeypatch_extensions_repos_update_modules)
+    _monkeypatch_extensions_repos_update_modules.clear()
+    bl_extension_ops.extension_asset_libraries_sync(repo_cache_store, error_fn=print)
 
     # Based on changes, the statistics may need to be re-calculated.
     repo_stats_calc()
@@ -882,11 +969,12 @@ def register():
             ('ALL', "All", "Show all extension types"),
             None,
             ('ADDON', "Add-ons", "Only show add-ons"),
+            ('ASSET_LIBRARY', "Asset Libraries", "Only show asset libraries"),
             ('THEME', "Themes", "Only show themes"),
         ),
         name="Filter by Type",
         description="Show extensions by type",
-        default='ADDON',
+        default='ALL',
     )
     WindowManager.extension_use_filter = BoolProperty(
         name="Filter Extensions",
@@ -932,10 +1020,15 @@ def register():
 
     cli_commands.append(bpy.utils.register_cli_command("extension", cli_extension))
 
-    from _bpy_internal.assets import remote_library_listing
-    cli_commands.append(bpy.utils.register_cli_command("asset_listing", remote_library_listing.asset_listing_main))
+    from _bpy_internal.assets import remote_library
+    cli_commands.append(bpy.utils.register_cli_command("asset_listing", remote_library.asset_listing_main))
 
     monkeypatch_install()
+
+    # The preferences may have been reset or extensions changed while Blender wasn't running.
+    bl_extension_ops.extension_asset_libraries_sync_if_dirty(repo_cache_store_ensure(), error_fn=print)
+
+    _remote_asset_library_restore_backups()
 
     if not bpy.app.background:
         if prefs.view.show_extensions_updates:

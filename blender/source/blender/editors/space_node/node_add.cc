@@ -17,14 +17,15 @@
 #include "DNA_sequence_types.h"
 #include "DNA_texture_types.h"
 
-#include "BLI_easing.h"
-#include "BLI_listbase.h"
-#include "BLI_math_geom.h"
-#include "BLI_string.h"
-#include "BLI_string_utf8.h"
+#include "BLI_easing.hh"
+#include "BLI_listbase.hh"
+#include "BLI_math_geom_c.hh"
+#include "BLI_string.hh"
+#include "BLI_string_utf8.hh"
 
 #include "BLT_translation.hh"
 
+#include "BKE_compositor.hh"
 #include "BKE_context.hh"
 #include "BKE_image.hh"
 #include "BKE_lib_id.hh"
@@ -247,16 +248,20 @@ static wmOperatorStatus add_reroute_exec(bContext *C, wmOperator *op)
       bke::node_set_active(ntree, *reroute);
     }
 
-    bke::node_add_link(ntree,
-                       *item.value.from_node,
-                       *item.key,
-                       *reroute,
-                       *static_cast<bNodeSocket *>(reroute->inputs.first));
+    bNodeLink &link_from = bke::node_add_link(
+        ntree, *item.value.from_node, *item.key, *reroute, *reroute->inputs.first());
+
+    /* Mute resulting link if all cut links were muted as well. */
+    bke::node_link_set_mute(ntree,
+                            link_from,
+                            std::all_of(cuts.keys().begin(),
+                                        cuts.keys().end(),
+                                        [](const bNodeLink *link) { return link->is_muted(); }));
 
     /* Reconnect links from the original output socket to the new reroute. */
     for (bNodeLink *link : cuts.keys()) {
       link->fromnode = reroute;
-      link->fromsock = static_cast<bNodeSocket *>(reroute->outputs.first);
+      link->fromsock = reroute->outputs.first();
       BKE_ntree_update_tag_link_changed(&ntree);
     }
 
@@ -599,8 +604,15 @@ static wmOperatorStatus node_swap_group_asset_invoke(bContext *C,
   RNA_collection_add(&ptr, "settings", &itemptr);
   RNA_string_set(&itemptr, "name", "node_tree");
 
-  std::string setting_value = "bpy.data.node_groups[\"" +
-                              std::string(BKE_id_name(node_group->id)) + "\"]";
+  /* Reference the node group by index.
+   *
+   * NOTE: #RNA_path_full_ID_py would be preferable, however its `(name, library-filepath)` key
+   * fails to resolve packed IDs (essentials assets for e.g.) since archive libraries share their
+   * file-path with the library they were packed from. As the expression is evaluated immediately,
+   * an index is reliable, so use it for now. */
+  const int node_group_index = BLI_findindex(&bmain.nodetrees, node_group);
+  BLI_assert(node_group_index != -1);
+  const std::string setting_value = fmt::format("bpy.data.node_groups[{}]", node_group_index);
   RNA_string_set(&itemptr, "value", setting_value.c_str());
 
   WM_operator_name_call_ptr(C, ot, wm::OpCallContext::InvokeDefault, &ptr, nullptr);
@@ -699,7 +711,7 @@ static wmOperatorStatus node_add_object_exec(bContext *C, wmOperator *op)
     return OPERATOR_CANCELLED;
   }
 
-  bNodeSocket *sock = bke::node_find_socket(*object_node, SOCK_IN, "Object");
+  bNodeSocket *sock = bke::node_find_socket(*object_node, SOCK_IN, "Object"_ustr);
   if (!sock) {
     BLI_assert_unreachable();
     return OPERATOR_CANCELLED;
@@ -738,7 +750,8 @@ static wmOperatorStatus node_add_object_invoke(bContext *C, wmOperator *op, cons
 static bool node_add_object_poll(bContext *C)
 {
   const SpaceNode *snode = CTX_wm_space_node(C);
-  return ED_operator_node_editable(C) && ELEM(snode->nodetree->type, NTREE_GEOMETRY);
+  return ED_operator_node_editable(C) &&
+         ELEM(snode->nodetree->type, NTREE_GEOMETRY, NTREE_COMPOSIT);
 }
 
 void NODE_OT_add_object(wmOperatorType *ot)
@@ -786,7 +799,7 @@ static wmOperatorStatus node_add_collection_exec(bContext *C, wmOperator *op)
     return OPERATOR_CANCELLED;
   }
 
-  bNodeSocket *sock = bke::node_find_socket(*collection_node, SOCK_IN, "Collection");
+  bNodeSocket *sock = bke::node_find_socket(*collection_node, SOCK_IN, "Collection"_ustr);
   if (!sock) {
     BKE_report(op->reports, RPT_WARNING, "Could not find node collection socket");
     return OPERATOR_CANCELLED;
@@ -858,7 +871,7 @@ void NODE_OT_add_collection(wmOperatorType *ot)
 static bool node_add_image_poll(bContext *C)
 {
   const SpaceNode *snode = CTX_wm_space_node(C);
-  if (!snode) {
+  if (!snode || !snode->nodetree) {
     return false;
   }
 
@@ -925,7 +938,12 @@ static wmOperatorStatus node_add_image_exec(bContext *C, wmOperator *op)
   int type = 0;
   switch (snode.nodetree->type) {
     case NTREE_SHADER:
-      type = SH_NODE_TEX_IMAGE;
+      if (snode.shaderfrom == SNODE_SHADER_WORLD) {
+        type = SH_NODE_TEX_ENVIRONMENT;
+      }
+      else {
+        type = SH_NODE_TEX_IMAGE;
+      }
       break;
     case NTREE_TEXTURE:
       type = TEX_NODE_IMAGE;
@@ -975,7 +993,7 @@ static wmOperatorStatus node_add_image_exec(bContext *C, wmOperator *op)
       continue;
     }
     if (type == GEO_NODE_IMAGE_TEXTURE) {
-      bNodeSocket *image_socket = static_cast<bNodeSocket *>(node->inputs.first);
+      bNodeSocket *image_socket = node->inputs.first();
       bNodeSocketValueImage *socket_value = static_cast<bNodeSocketValueImage *>(
           image_socket->default_value);
       socket_value->value = image;
@@ -1225,28 +1243,32 @@ static wmOperatorStatus node_add_import_node_exec(bContext *C, wmOperator *op)
   Main *bmain = CTX_data_main(C);
   SpaceNode *snode = CTX_wm_space_node(C);
   bNodeTree *ntree = snode->edittree;
+  const bool is_geometry_tree = ntree->type == NTREE_GEOMETRY;
 
   const Vector<std::string> paths = ed::io::paths_from_operator_properties(op->ptr);
 
   Vector<bNode *> new_nodes;
   for (const StringRefNull path : paths) {
     bNode *node = nullptr;
-    if (path.endswith(".csv")) {
+    if (is_geometry_tree && path.endswith(".csv")) {
       node = add_node(*C, "GeometryNodeImportCSV"_ustr, snode->runtime->cursor);
     }
-    else if (path.endswith(".obj")) {
+    else if (is_geometry_tree && path.endswith(".obj")) {
       node = add_node(*C, "GeometryNodeImportOBJ"_ustr, snode->runtime->cursor);
     }
-    else if (path.endswith(".ply")) {
+    else if (is_geometry_tree && path.endswith(".ply")) {
       node = add_node(*C, "GeometryNodeImportPLY"_ustr, snode->runtime->cursor);
     }
-    else if (path.endswith(".stl")) {
+    else if (is_geometry_tree && path.endswith(".spz")) {
+      node = add_node(*C, "GeometryNodeImportSPZ"_ustr, snode->runtime->cursor);
+    }
+    else if (is_geometry_tree && path.endswith(".stl")) {
       node = add_node(*C, "GeometryNodeImportSTL"_ustr, snode->runtime->cursor);
     }
     else if (path.endswith(".txt")) {
       node = add_node(*C, "GeometryNodeImportText"_ustr, snode->runtime->cursor);
     }
-    else if (path.endswith(".vdb")) {
+    else if (is_geometry_tree && path.endswith(".vdb")) {
       node = add_node(*C, "GeometryNodeImportVDB"_ustr, snode->runtime->cursor);
     }
 
@@ -1305,7 +1327,8 @@ static wmOperatorStatus node_add_import_node_invoke(bContext *C,
 static bool node_add_import_node_poll(bContext *C)
 {
   const SpaceNode *snode = CTX_wm_space_node(C);
-  return ED_operator_node_editable(C) && snode->nodetree->type == NTREE_GEOMETRY;
+  return ED_operator_node_editable(C) &&
+         ELEM(snode->nodetree->type, NTREE_GEOMETRY, NTREE_COMPOSIT);
 }
 
 void NODE_OT_add_import_node(wmOperatorType *ot)
@@ -1337,91 +1360,56 @@ void NODE_OT_add_import_node(wmOperatorType *ot)
 /** \name Add Group Input Node Operator
  * \{ */
 
+static void hide_unselected_sockets(bNode *node,
+                                    bNodeTreeInterfaceItem *item,
+                                    bool panels_with_header_unselected)
+{
+  switch (item->item_type) {
+    case NodeTreeInterfaceItemType::Socket: {
+      auto *socket = reinterpret_cast<bNodeTreeInterfaceSocket *>(item);
+      if (socket->flag & NODE_INTERFACE_SOCKET_INPUT &&
+          !(socket->flag & NODE_INTERFACE_SOCKET_SELECT))
+      {
+        auto *node_socket = node->output_by_identifier(UString(socket->identifier));
+        node_socket->flag |= SOCK_HIDDEN;
+      }
+      break;
+    }
+    case NodeTreeInterfaceItemType::Panel: {
+      /* Only visit unselected panels. */
+      auto *interface_panel = reinterpret_cast<bNodeTreeInterfacePanel *>(item);
+      bool panel_selection_ignored = panels_with_header_unselected &&
+                                     interface_panel->header_toggle_socket();
+      if (!(interface_panel->flag & NODE_INTERFACE_PANEL_SELECT) || panel_selection_ignored) {
+        for (auto *sub_item : interface_panel->items()) {
+          hide_unselected_sockets(node, sub_item, panels_with_header_unselected);
+        }
+      }
+      break;
+    }
+  }
+}
+
 static wmOperatorStatus node_add_group_input_node_exec(bContext *C, wmOperator *op)
 {
   SpaceNode *snode = CTX_wm_space_node(C);
   bNodeTree *ntree = snode->edittree;
+  bNodeTreeInterface &interface = ntree->tree_interface;
 
-  bool single_socket = false;
-  char socket_identifier[int(sizeof(bNodeSocket::idname))];
-  bool single_panel = false;
-  int panel_identifier = 0;
-  if (RNA_struct_property_is_set(op->ptr, "socket_identifier")) {
-    single_socket = true;
-    RNA_string_get(op->ptr, "socket_identifier", socket_identifier);
-  }
-  if (RNA_struct_property_is_set(op->ptr, "panel_identifier")) {
-    single_panel = true;
-    panel_identifier = RNA_int_get(op->ptr, "panel_identifier");
-  }
-  if (single_socket && single_panel) {
-    BKE_report(op->reports, RPT_ERROR, "Cannot set both socket and panel identifier");
-    return OPERATOR_CANCELLED;
-  }
-
-  bNodeTreeInterfacePanel *interface_panel = nullptr;
-
-  if (single_socket) {
-    /* Ensure the requested socket exists in the node interface. */
-    bNodeTreeInterfaceSocket *interface_socket = nullptr;
-    for (bNodeTreeInterfaceSocket *tsocket : ntree->interface_inputs()) {
-      if (STREQ(socket_identifier, tsocket->identifier)) {
-        interface_socket = tsocket;
-        break;
-      }
-    }
-    if (!interface_socket) {
-      BKE_report(
-          op->reports,
-          RPT_ERROR,
-          fmt::format("Invalid socket_identifier: Socket \"%s\" not found", socket_identifier)
-              .c_str());
-      return OPERATOR_CANCELLED;
-    }
-  }
-  if (single_panel) {
-    /* Ensure the requested panel exists in the node interface. */
-    for (bNodeTreeInterfaceItem *item : ntree->interface_items()) {
-      bNodeTreeInterfacePanel *tpanel = bke::node_interface::get_item_as<bNodeTreeInterfacePanel>(
-          item);
-      if (tpanel && tpanel->identifier == panel_identifier) {
-        interface_panel = tpanel;
-        break;
-      }
-    }
-
-    if (!interface_panel) {
-      BKE_report(op->reports, RPT_ERROR, "Invalid panel identifier");
-      return OPERATOR_CANCELLED;
-    }
-  }
+  const bool only_selected = RNA_boolean_get(op->ptr, "only_selected_sockets");
+  const bool all_panel_contents = RNA_boolean_get(op->ptr, "all_panel_contents");
 
   ED_preview_kill_jobs(CTX_wm_manager(C), CTX_data_main(C));
 
   bNode *group_input_node = add_node(*C, "NodeGroupInput"_ustr, snode->runtime->cursor);
 
-  if (single_socket) {
-    /* Hide all other sockets in the new node, to only display the selected one. */
-    for (bNodeSocket &socket : group_input_node->outputs) {
-      if (!STREQ(socket.identifier, socket_identifier)) {
-        socket.flag |= SOCK_HIDDEN;
-      }
-    }
-  }
-  if (single_panel) {
-    /* Initially hide all sockets. */
-    for (bNodeSocket &socket : group_input_node->outputs) {
-      socket.flag |= SOCK_HIDDEN;
-    }
-    /* Show only sockets contained in the dragged panel. */
-    for (bNodeTreeInterfaceSocket *iface_socket : ntree->interface_inputs()) {
-      if (interface_panel->contains_recursive(iface_socket->item)) {
-        bNodeSocket *socket = bke::node_find_socket(
-            *group_input_node, SOCK_OUT, iface_socket->identifier);
-        BLI_assert(socket);
-        socket->flag &= ~SOCK_HIDDEN;
-      }
-    }
+  if (only_selected) {
+    hide_unselected_sockets(group_input_node,
+                            reinterpret_cast<bNodeTreeInterfaceItem *>(&interface.root_panel),
+                            !all_panel_contents);
+
+    /* Hide __extend__ socket. */
+    group_input_node->output_by_identifier("__extend__"_ustr)->flag |= SOCK_HIDDEN;
   }
 
   return OPERATOR_FINISHED;
@@ -1447,6 +1435,29 @@ static wmOperatorStatus node_add_group_input_node_invoke(bContext *C,
   return node_add_group_input_node_exec(C, op);
 }
 
+static bool contains_any_selected_input(const bNodeTreeInterfaceItem &item, bool parent_selected)
+{
+  switch (item.item_type) {
+    case NodeTreeInterfaceItemType::Socket: {
+      const auto &socket = reinterpret_cast<const bNodeTreeInterfaceSocket &>(item);
+      return socket.flag & NODE_INTERFACE_SOCKET_INPUT &&
+             (parent_selected || socket.flag & NODE_INTERFACE_SOCKET_SELECT);
+    }
+    case NodeTreeInterfaceItemType::Panel: {
+      const auto &panel = reinterpret_cast<const bNodeTreeInterfacePanel &>(item);
+      for (const auto *sub_item : panel.items()) {
+        /* There's no need to handle the header toggle differently. */
+        if (contains_any_selected_input(
+                *sub_item, parent_selected || panel.flag & NODE_INTERFACE_PANEL_SELECT))
+        {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
 static bool node_add_group_input_node_poll(bContext *C)
 {
   if (!ED_operator_node_editable(C)) {
@@ -1455,34 +1466,16 @@ static bool node_add_group_input_node_poll(bContext *C)
 
   const SpaceNode *snode = CTX_wm_space_node(C);
   bNodeTree *ntree = snode->edittree;
+  bNodeTreeInterface &interface = ntree->tree_interface;
 
-  bNodeTreeInterface interface = ntree->tree_interface;
-  bNodeTreeInterfaceItem *active_item = interface.active_item();
-
-  if (auto *socket = bke::node_interface::get_item_as<bNodeTreeInterfaceSocket>(active_item)) {
-    if (socket->flag & NODE_INTERFACE_SOCKET_OUTPUT) {
-      CTX_wm_operator_poll_msg_set(C, "Cannot drag an output socket");
-      return false;
-    }
-    return true;
+  if (!contains_any_selected_input(
+          reinterpret_cast<bNodeTreeInterfaceItem &>(interface.root_panel), false))
+  {
+    CTX_wm_operator_poll_msg_set(C, "No selected input sockets or panels");
+    return false;
   }
 
-  if (auto *panel = bke::node_interface::get_item_as<bNodeTreeInterfacePanel>(active_item)) {
-    bool has_inputs = false;
-    for (bNodeTreeInterfaceSocket *socket : ntree->interface_inputs()) {
-      if (panel->contains_recursive(socket->item)) {
-        has_inputs = true;
-        break;
-      }
-    }
-
-    if (!has_inputs) {
-      CTX_wm_operator_poll_msg_set(C, "Cannot drag panel with no inputs");
-      return false;
-    }
-    return true;
-  }
-  return false;
+  return true;
 }
 
 void NODE_OT_add_group_input_node(wmOperatorType *ot)
@@ -1497,23 +1490,20 @@ void NODE_OT_add_group_input_node(wmOperatorType *ot)
 
   ot->flag = OPTYPE_REGISTER | OPTYPE_UNDO | OPTYPE_INTERNAL;
 
-  PropertyRNA *prop = RNA_def_string(ot->srna,
-                                     "socket_identifier",
-                                     nullptr,
-                                     int(sizeof(bNodeSocket::idname)),
-                                     "Socket Identifier",
-                                     "Socket to include in the added group input/output node");
-  RNA_def_property_flag(prop, PROP_SKIP_SAVE | PROP_HIDDEN);
-  prop = RNA_def_int(ot->srna,
-                     "panel_identifier",
-                     0,
-                     INT_MIN,
-                     INT_MAX,
-                     "Panel Identifier",
-                     "Panel from which to add sockets to the added group input/output node",
-                     INT_MIN,
-                     INT_MAX);
-  RNA_def_property_flag(prop, PROP_SKIP_SAVE | PROP_HIDDEN);
+  PropertyRNA *prop = RNA_def_boolean(
+      ot->srna,
+      "only_selected_sockets",
+      true,
+      "Only Selected Sockets",
+      "Include only selected sockets/panels in the added group input node");
+  RNA_def_property_flag(prop, PROP_SKIP_SAVE);
+  prop = RNA_def_boolean(
+      ot->srna,
+      "all_panel_contents",
+      false,
+      "All Panel Contents",
+      "Include sockets in all selected panels, even if they have a panel toggle");
+  RNA_def_property_flag(prop, PROP_SKIP_SAVE);
 }
 
 /** \} */
@@ -1569,7 +1559,7 @@ static wmOperatorStatus node_add_color_exec(bContext *C, wmOperator *op)
     copy_v4_v4(input_color_storage->color, color);
   }
   else {
-    bNodeSocket *sock = static_cast<bNodeSocket *>(color_node->outputs.first);
+    bNodeSocket *sock = color_node->outputs.first();
     if (!sock) {
       BKE_report(op->reports, RPT_WARNING, "Could not find node color socket");
       return OPERATOR_CANCELLED;
@@ -1632,6 +1622,8 @@ void NODE_OT_add_color(wmOperatorType *ot)
   RNA_def_boolean(
       ot->srna, "has_alpha", false, "Has Alpha", "The source color contains an Alpha component");
 }
+
+/** \} */
 
 /* -------------------------------------------------------------------- */
 /** \name New Node Tree Operator
@@ -1749,12 +1741,15 @@ static wmOperatorStatus new_compositing_node_group_invoke(bContext *C,
   return new_compositing_node_group_exec(C, op);
 }
 
+/* Todo(#140111): Unused, remove in 6.0. */
 void NODE_OT_new_compositing_node_group(wmOperatorType *ot)
 {
   /* identifiers */
   ot->name = "New Compositing Node Group";
   ot->idname = "NODE_OT_new_compositing_node_group";
-  ot->description = "Create a new compositing node group and initialize it with default nodes";
+  ot->description =
+      "Create a new compositing node group and initialize it with default nodes. Deprecated and "
+      "will be removed in 6.0";
 
   /* api callbacks */
   ot->exec = new_compositing_node_group_exec;
@@ -1791,28 +1786,6 @@ static wmOperatorStatus duplicate_and_assign_node_tree(bContext *C, bNodeTree *s
   return OPERATOR_FINISHED;
 }
 
-static wmOperatorStatus duplicate_compositing_node_group_exec(bContext *C, wmOperator * /*op*/)
-{
-  Scene *scene = CTX_data_scene(C);
-  return duplicate_and_assign_node_tree(C, scene->compositing_node_group);
-}
-
-void NODE_OT_duplicate_compositing_node_group(wmOperatorType *ot)
-{
-  ot->name = "New Compositing Node Group";
-  ot->idname = "NODE_OT_duplicate_compositing_node_group";
-  ot->description = "Duplicate the currently assigned compositing node group.";
-
-  ot->exec = duplicate_compositing_node_group_exec;
-
-  ot->flag = OPTYPE_REGISTER | OPTYPE_UNDO;
-}
-
-/** \} */
-
-/* -------------------------------------------------------------------- */
-/** \name Duplicate Compositing Modifier Node Tree Operator
- * \{ */
 static wmOperatorStatus duplicate_compositing_modifier_node_group_exec(bContext *C,
                                                                        wmOperator * /*op*/)
 {
@@ -1856,7 +1829,7 @@ static void initialize_compositor_sequencer_node_group(const bContext *C,
                                                        int effect_input_count)
 {
   BLI_assert(ntree.type == NTREE_COMPOSIT);
-  BLI_assert(BLI_listbase_count(&ntree.nodes) == 0);
+  BLI_assert(ntree.nodes.count() == 0);
 
   if (for_effect) {
     /* Effect: Input 1, Input 2, Fader depending on input count. */
@@ -1892,31 +1865,11 @@ static void initialize_compositor_sequencer_node_group(const bContext *C,
   input_node->location[1] = 0.0f;
   bke::node_set_active(ntree, *input_node);
 
-  bNode *reroute = bke::node_add_static_node(C, ntree, NODE_REROUTE);
-  reroute->location[0] = 100.0f;
-  reroute->location[1] = -35.0f;
-
-  bNode *viewer = bke::node_add_static_node(C, ntree, CMP_NODE_VIEWER);
-  viewer->location[0] = 200.0f;
-  viewer->location[1] = -80.0f;
-
   bke::node_add_link(ntree,
                      *input_node,
-                     *static_cast<bNodeSocket *>(input_node->outputs.first),
-                     *reroute,
-                     *static_cast<bNodeSocket *>(reroute->inputs.first));
-
-  bke::node_add_link(ntree,
-                     *reroute,
-                     *static_cast<bNodeSocket *>(reroute->outputs.first),
+                     *input_node->outputs.first(),
                      *output_node,
-                     *static_cast<bNodeSocket *>(output_node->inputs.first));
-
-  bke::node_add_link(ntree,
-                     *reroute,
-                     *static_cast<bNodeSocket *>(reroute->outputs.first),
-                     *viewer,
-                     *static_cast<bNodeSocket *>(viewer->inputs.first));
+                     *output_node->inputs.first());
 
   BKE_ntree_update_after_single_tree_change(*CTX_data_main(C), ntree);
 }
@@ -1943,6 +1896,14 @@ static wmOperatorStatus new_compositor_sequencer_node_group_exec(bContext *C, wm
    * already have been called. */
   bNodeTree *ntree = bke::node_tree_add_tree(bmain, tree_name, "CompositorNodeTree");
   initialize_compositor_sequencer_node_group(C, *ntree, is_effect_active, effect_input_count);
+  if (!is_effect_active) {
+    /* Set the compositor asset trait `is_strip_modifier` to true. */
+    if (!ntree->compositor_node_asset_traits) {
+      ntree->compositor_node_asset_traits = MEM_new<CompositorNodeAssetTraits>(__func__);
+    }
+    ntree->compositor_node_asset_traits->flag |= COMPOSIT_NODE_ASSET_STRIP_MODIFIER;
+    bke::node_update_asset_metadata(*ntree);
+  }
   node_templateID_assign(C, ntree);
 
   if (strip != nullptr && strip->type != STRIP_TYPE_SOUND) {

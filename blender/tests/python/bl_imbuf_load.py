@@ -168,6 +168,9 @@ class ImBufLoadTest(ImBufTest):
     def test_load_iris(self):
         self.check("*.rgb")
 
+    def test_load_dds(self):
+        self.check("*.dds")
+
 
 class ImBufBrokenTest(AbstractImBufTest):
     @classmethod

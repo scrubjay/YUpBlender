@@ -49,17 +49,20 @@ struct wmEvent;
 struct wmKeyConfig;
 struct wmOperator;
 struct wmOperatorType;
+struct wmGizmoGroupType;
 
 namespace ed::asset {
 struct AssetItemTree;
+}
+
+namespace seq {
+enum class Side : int;
 }
 
 namespace ed::vse {
 
 class SeqQuadsBatch;
 class StripsDrawBatch;
-
-#define DEFAULT_IMG_STRIP_LENGTH 25 /* XXX arbitrary but ok for now. */
 
 struct SpaceSeq_Runtime : public NonCopyable {
   int rename_channel_index = 0;
@@ -127,7 +130,8 @@ struct TimelineDrawContext {
   ListBaseT<SeqTimelineChannel> *channels;
   GPUViewport *viewport;
   gpu::FrameBuffer *framebuffer_overlay;
-  float pixelx, pixely; /* Width and height of pixel in timeline space. */
+  /** Width and height of pixel in timeline space, calculated from #view2d_pixel_size_get. */
+  float pixelx, pixely;
   Map<SeqRetimingKey *, Strip *> retiming_selection;
 
   SeqQuadsBatch *quads;
@@ -138,7 +142,12 @@ struct TimelineDrawContext {
 /* Returns value in frames (view-space), 5px for large strips, 1/4 of the strip for smaller. */
 float strip_handle_draw_size_get(const Scene *scene, const Strip *strip, float pixelx);
 void draw_timeline_seq(const bContext *C, const ARegion *region);
+void sequencer_scrubbing_region_draw(const bContext *C, ARegion *region);
 void draw_timeline_seq_display(const bContext *C, ARegion *region);
+void sequencer_blade_handlers_add(ARegion *region);
+void sequencer_blade_tooltip_show(bContext *C);
+
+void SEQUENCER_GGT_blade(wmGizmoGroupType *gzgt);
 
 /* `sequencer_preview_draw.cc` */
 
@@ -180,9 +189,9 @@ void channel_draw_context_init(const bContext *C,
 
 void slip_modal_keymap(wmKeyConfig *keyconf);
 VectorSet<Strip *> strip_effect_get_new_inputs(const Scene *scene,
-                                               int num_inputs,
+                                               StripType effect_type,
                                                bool ignore_active = false);
-const char *effect_inputs_validate(int have_inputs, int num_inputs);
+bool effect_inputs_validate(int have_inputs, int num_inputs, ReportList *reports);
 
 /* Operator helpers. */
 bool sequencer_edit_poll(bContext *C);
@@ -191,19 +200,22 @@ bool sequencer_editing_initialized_and_active(bContext *C);
 /* UNUSED */
 // bool sequencer_strip_poll( bContext *C);
 bool sequencer_strip_editable_poll(bContext *C);
+bool sequencer_strip_editable_and_selected_poll(bContext *C);
 bool sequencer_strip_has_path_poll(bContext *C);
 bool sequencer_view_has_preview_poll(bContext *C);
 bool sequencer_view_preview_only_poll(const bContext *C);
 bool sequencer_view_strips_poll(bContext *C);
 
 /**
- * Returns collection with all strips presented to user. If operation is done in preview,
- * collection is limited to all presented strips that can produce image output.
- *
- * \param C: context
- * \return collection of strips (`Strip`)
+ * Returns all strips presented to the user. If the operation is done in preview, this is limited
+ * to presented strips that can produce image output.
  */
 VectorSet<Strip *> all_strips_from_context(bContext *C);
+
+/** Temporary shim to query split & box blade property, where either the new #only_selected or
+ * deprecated #ignore_selection may be used, to be removed in 6.0.  */
+bool split_only_selected_get(wmOperator *op);
+rctf box_blade_rect_get(wmOperator *op, const View2D *v2d);
 
 /* Externals. */
 
@@ -228,6 +240,8 @@ void SEQUENCER_OT_reassign_inputs(wmOperatorType *ot);
 void SEQUENCER_OT_swap_inputs(wmOperatorType *ot);
 void SEQUENCER_OT_duplicate(wmOperatorType *ot);
 void SEQUENCER_OT_delete(wmOperatorType *ot);
+void SEQUENCER_OT_ripple_delete(wmOperatorType *ot);
+void SEQUENCER_OT_ripple_trim(wmOperatorType *ot);
 void SEQUENCER_OT_offset_clear(wmOperatorType *ot);
 void SEQUENCER_OT_images_separate(wmOperatorType *ot);
 void SEQUENCER_OT_meta_toggle(wmOperatorType *ot);
@@ -266,11 +280,16 @@ void SEQUENCER_OT_scene_frame_range_update(wmOperatorType *ot);
 /* `sequencer_select.cc` */
 
 /**
- *  Returns box bounds of strip in view-space.
+ *  Returns real-valued box bounds of strip in view-space.
+ *
+ * \note Strips are slightly shorter than their containing channels:
+ * their height starts at `STRIP_OFSBOTTOM` and ends at `STRIP_OFSTOP`.
+ * For a strip's channel and frame extents (rather than the size),
+ * see #seq::strip_int_bounds_get.
  */
 rctf strip_bounds_get(const Scene *scene, const Strip *strip);
-Strip *find_neighboring_strip(const Scene *scene, const Strip *test, const int lr, int sel);
-void recurs_sel_strip(Strip *strip_meta);
+
+Strip *find_neighboring_strip(const Scene *scene, const Strip *test, const seq::Side lr, int sel);
 
 void SEQUENCER_OT_select_all(wmOperatorType *ot);
 void SEQUENCER_OT_select(wmOperatorType *ot);
@@ -285,8 +304,8 @@ void SEQUENCER_OT_select_side(wmOperatorType *ot);
 void SEQUENCER_OT_select_box(wmOperatorType *ot);
 void SEQUENCER_OT_select_lasso(wmOperatorType *ot);
 void SEQUENCER_OT_select_circle(wmOperatorType *ot);
-void SEQUENCER_OT_select_inverse(wmOperatorType *ot);
 void SEQUENCER_OT_select_grouped(wmOperatorType *ot);
+void SEQUENCER_OT_select_by_type(wmOperatorType *ot);
 
 bool strip_point_image_isect(const Scene *scene, const Strip *strip, float point_view[2]);
 void sequencer_select_do_updates(const bContext *C, Scene *scene);
@@ -311,8 +330,16 @@ void SEQUENCER_OT_movieclip_strip_add(wmOperatorType *ot);
 void SEQUENCER_OT_mask_strip_add(wmOperatorType *ot);
 void SEQUENCER_OT_sound_strip_add(wmOperatorType *ot);
 void SEQUENCER_OT_image_strip_add(wmOperatorType *ot);
+void SEQUENCER_OT_text_strip_add(wmOperatorType *ot);
 void SEQUENCER_OT_effect_strip_add(wmOperatorType *ot);
 void SEQUENCER_OT_add_scene_strip_from_scene_asset(wmOperatorType *ot);
+
+void frame_filename_set(char *dst,
+                        size_t dst_maxncpy,
+                        const char *filename_stripped,
+                        const int frame,
+                        const int numdigits,
+                        const char *ext);
 
 /* `sequencer_drag_drop.cc` */
 
@@ -361,15 +388,6 @@ void SEQUENCER_OT_rename_channel(wmOperatorType *ot);
 
 void sequencer_preview_add_sound(const bContext *C, const Strip *strip);
 
-/* `sequencer_add.cc` */
-
-int sequencer_image_strip_get_minmax_frame(wmOperator *op,
-                                           int sfra,
-                                           int *r_minframe,
-                                           int *r_numdigits);
-void sequencer_image_strip_reserve_frames(
-    wmOperator *op, StripElem *se, int len, int minframe, int numdigits);
-
 /* `sequencer_retiming.cc` */
 void SEQUENCER_OT_retiming_reset(wmOperatorType *ot);
 void SEQUENCER_OT_retiming_show(wmOperatorType *ot);
@@ -411,6 +429,30 @@ bool retiming_overlay_enabled(const SpaceSeq *sseq);
 
 /* `sequencer_text_edit.cc` */
 bool sequencer_text_editing_active_poll(bContext *C);
+
+/**
+ * Return the strip used for text editing.
+ *
+ * \note intended to be used with #sequencer_text_editing_cursor_region_xy_get,
+ * where the functionality is split across two functions for the purpose
+ * of detecting of IME text should be enabled but is currently isn't visible.
+ */
+const Strip *sequencer_text_editing_cursor_strip_get(const Scene *scene);
+/**
+ * Return the text cursor of the active text strip, in region pixels.
+ *
+ * \param strip: The result of #sequencer_text_editing_cursor_strip_get.
+ *
+ * \note This may return null even when \a strip is non-null:
+ * - The current frame may be off the strip.
+ * - The runtime may not be built until the strip renders.
+ *
+ * In both cases editing stays active and recovers.
+ */
+std::optional<int2> sequencer_text_editing_cursor_region_xy_get(const Scene *scene,
+                                                                const ARegion *region,
+                                                                const Strip *strip);
+
 void SEQUENCER_OT_text_cursor_move(wmOperatorType *ot);
 void SEQUENCER_OT_text_insert(wmOperatorType *ot);
 void SEQUENCER_OT_text_delete(wmOperatorType *ot);
@@ -440,6 +482,8 @@ wmOperatorStatus sequencer_clipboard_paste_invoke(bContext *C,
 MenuType add_catalog_assets_menu_type();
 MenuType add_unassigned_assets_menu_type();
 MenuType add_scene_menu_type();
+
+void sequencer_strip_modifier_add_asset_register();
 
 }  // namespace ed::vse
 }  // namespace blender

@@ -13,8 +13,8 @@
 #include "MEM_guardedalloc.h"
 
 #include "BLI_lasso_2d.hh"
-#include "BLI_listbase.h"
-#include "BLI_math_vector.h"
+#include "BLI_listbase.hh"
+#include "BLI_math_vector_c.hh"
 
 #include "DNA_anim_types.h"
 #include "DNA_scene_types.h"
@@ -118,7 +118,7 @@ static void nearest_fcurve_vert_store(ListBaseT<tNearestVertInfo> *matches,
         /* check if distance from mouse cursor to vert in screen space is within tolerance */
         ((dist = len_v2v2_int(mval, screen_co)) <= GVERTSEL_TOL))
     {
-      tNearestVertInfo *nvi = static_cast<tNearestVertInfo *>(matches->last);
+      tNearestVertInfo *nvi = matches->last();
       bool replace = false;
 
       /* If there is already a point for the F-Curve,
@@ -261,12 +261,12 @@ static void get_nearest_fcurve_verts_list(bAnimContext *ac,
 static tNearestVertInfo *get_best_nearest_fcurve_vert(ListBaseT<tNearestVertInfo> *matches)
 {
   /* abort if list is empty */
-  if (BLI_listbase_is_empty(matches)) {
+  if (matches->is_empty()) {
     return nullptr;
   }
 
   /* if list only has 1 item, remove it from the list and return */
-  if (BLI_listbase_is_single(matches)) {
+  if (matches->is_single()) {
     /* need to remove from the list, otherwise it gets freed and then we can't return it */
     return static_cast<tNearestVertInfo *>(BLI_pophead(matches));
   }
@@ -334,7 +334,7 @@ static tNearestVertInfo *find_nearest_fcurve_vert(bAnimContext *ac, const int mv
   /* step 2: find the best vert */
   nvi = get_best_nearest_fcurve_vert(&matches);
 
-  BLI_freelistN(&matches);
+  matches.free_no_destruct();
 
   /* return the best vert found */
   return nvi;
@@ -1286,8 +1286,8 @@ static void columnselect_graph_keys(bAnimContext *ac, short mode)
   }
 
   /* free elements */
-  BLI_freelistN(&ked.cfra_elem_list);
-  BLI_freelistN(&ked.time_marker_list);
+  ked.cfra_elem_list.free_no_destruct();
+  ked.time_marker_list.free_no_destruct();
   ANIM_animdata_freelist(&anim_data);
 }
 
@@ -1528,9 +1528,9 @@ void GRAPH_OT_select_less(wmOperatorType *ot)
 
 /* defines for left-right select tool */
 static const EnumPropertyItem prop_graphkeys_leftright_select_types[] = {
-    {GRAPHKEYS_LRSEL_TEST, "CHECK", 0, "Check if Select Left or Right", ""},
     {GRAPHKEYS_LRSEL_LEFT, "LEFT", 0, "Before Current Frame", ""},
     {GRAPHKEYS_LRSEL_RIGHT, "RIGHT", 0, "After Current Frame", ""},
+    {GRAPHKEYS_LRSEL_TEST, "CHECK", 0, "Mouse Click Side", ""},
     {0, nullptr, 0, nullptr, nullptr},
 };
 
@@ -1760,29 +1760,29 @@ static wmOperatorStatus mouse_graph_keys(bAnimContext *ac,
       bezt = nvi->bezt; /* Used to check `bezt` selection is set. */
       if (select_mode == SELECT_INVERT) {
         if (nvi->hpoint == NEAREST_HANDLE_KEY) {
-          bezt->f2 ^= SELECT;
+          bezt->f2 ^= BEZT_FLAG_SELECT;
           something_was_selected = (bezt->f2 & SELECT);
         }
         else if (nvi->hpoint == NEAREST_HANDLE_LEFT) {
           /* toggle selection */
-          bezt->f1 ^= SELECT;
+          bezt->f1 ^= BEZT_FLAG_SELECT;
           something_was_selected = (bezt->f1 & SELECT);
         }
         else {
           /* toggle selection */
-          bezt->f3 ^= SELECT;
+          bezt->f3 ^= BEZT_FLAG_SELECT;
           something_was_selected = (bezt->f3 & SELECT);
         }
       }
       else {
         if (nvi->hpoint == NEAREST_HANDLE_KEY) {
-          bezt->f2 |= SELECT;
+          bezt->f2 |= BEZT_FLAG_SELECT;
         }
         else if (nvi->hpoint == NEAREST_HANDLE_LEFT) {
-          bezt->f1 |= SELECT;
+          bezt->f1 |= BEZT_FLAG_SELECT;
         }
         else {
-          bezt->f3 |= SELECT;
+          bezt->f3 |= BEZT_FLAG_SELECT;
         }
         something_was_selected = true;
       }
@@ -1841,7 +1841,8 @@ static wmOperatorStatus mouse_graph_keys(bAnimContext *ac,
   }
 
   /* Set active F-Curve when something was actually selected (so not on a deselect), except when
-   * dragging the selected keys. Needs to be called with (sipo->flag & SIPO_SELCUVERTSONLY),
+   * dragging the selected keys. Needs to be called with
+   * (U.animation_flag & USER_ANIM_ONLY_SHOW_SELECTED_CURVE_KEYS),
    * otherwise the active flag won't be set #26452. */
   if (!run_modal && (nvi->fcu->flag & FCURVE_SELECTED) && something_was_selected) {
     /* NOTE: Sync the filter flags with findnearest_fcurve_vert. */
@@ -1942,8 +1943,8 @@ static wmOperatorStatus graphkeys_mselect_column(bAnimContext *ac,
 
   /* free elements */
   MEM_delete(nvi);
-  BLI_freelistN(&ked.cfra_elem_list);
-  BLI_freelistN(&ked.time_marker_list);
+  ked.cfra_elem_list.free_no_destruct();
+  ked.time_marker_list.free_no_destruct();
   ANIM_animdata_freelist(&anim_data);
 
   return run_modal ? OPERATOR_RUNNING_MODAL : OPERATOR_FINISHED;

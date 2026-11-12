@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup shdnodes
+ */
+
 #include "node_shader_util.hh"
 
 #include "IMB_colormanagement.hh"
@@ -51,7 +55,7 @@ void register_node_type_sh_wavelength()
   ntype.enum_name_legacy = "WAVELENGTH";
   ntype.nclass = NODE_CLASS_CONVERTER;
   ntype.declare = file_ns::node_declare;
-  bke::node_type_size_preset(ntype, bke::eNodeSizePreset::Middle);
+  ntype.default_width = bke::NodeWidth::_160;
   ntype.gpu_fn = file_ns::node_shader_gpu_wavelength;
 
   bke::node_register_type(ntype);

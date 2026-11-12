@@ -10,7 +10,7 @@
 
 #include <optional>
 
-#include "BLI_compiler_compat.h"
+#include "BLI_compiler_compat.hh"
 #include "BLI_span.hh"
 
 #include "BKE_node_socket_value_fwd.hh"
@@ -107,7 +107,7 @@ struct bNodeSocketTemplate {
   float min, max;
   /** Would use PropertySubType but this is a bad level include to use RNA. */
   int subtype;
-  int flag;
+  eNodeSocketFlag flag;
 
   /* After this line is used internal only. */
 
@@ -217,6 +217,7 @@ struct bNodeSocketType {
 
   SocketMakeNodesInputSrnaFunction make_geometry_nodes_input_srna = nullptr;
   SocketMakeNodesInputSrnaFunction make_compositor_nodes_input_srna = nullptr;
+  SocketMakeNodesInputSrnaFunction make_scene_compositor_effect_input_srna = nullptr;
 };
 
 using NodeInitExecFunction = void *(*)(bNodeExecContext * context,
@@ -237,6 +238,24 @@ struct NodeInsertLinkParams {
   bContext *C = nullptr;
 };
 
+/** Common node widths for easy search-ability. */
+struct NodeWidth {
+  /* Generally a multiple of 20 is used because it matches the grid width.
+   * Also see #NODE_GRID_STEP_SIZE. */
+  static constexpr int _140 = 140;
+  static constexpr int _160 = 160;
+  static constexpr int _180 = 180;
+  static constexpr int _200 = 200;
+  static constexpr int _220 = 220;
+  static constexpr int _240 = 240;
+  static constexpr int _320 = 320;
+
+  static constexpr int Default = 140;
+  static constexpr int DefaultMax = 700;
+  static constexpr int DefaultMin = 100;
+  static constexpr int GroupMin = 60;
+};
+
 /**
  * \brief Defines a node type.
  *
@@ -254,9 +273,13 @@ struct bNodeType {
   /** Should usually use the idname instead, but this enum type is still exposed in Python. */
   const char *enum_name_legacy = nullptr;
 
-  float width = 0.0f, minwidth = 0.0f, maxwidth = 0.0f;
+  float default_width = NodeWidth::Default;
+  float minwidth = NodeWidth::DefaultMin;
+  float maxwidth = NodeWidth::DefaultMax;
+
   float height = 0.0f, minheight = 0.0f, maxheight = 0.0f;
-  short nclass = 0, flag = 0;
+  short nclass = 0;
+  eNode_Flag flag = {};
 
   /* templates for static sockets */
   bNodeSocketTemplate *inputs = nullptr, *outputs = nullptr;
@@ -500,8 +523,8 @@ enum class NodeColorTag {
 using bNodeClassCallback = void (*)(void *calldata, int nclass, StringRefNull name);
 
 struct bNodeTreeType {
-  int type = 0;   /* type identifier */
-  UString idname; /* identifier name */
+  eNodeTree_Type type = {}; /* type identifier */
+  UString idname;           /* identifier name */
 
   /* The ID name of group nodes for this type. */
   UString group_idname;
@@ -509,6 +532,18 @@ struct bNodeTreeType {
   std::string ui_name;
   std::string ui_description;
   int ui_icon = 0;
+
+  /**
+   * When set, menus will ignore this path prefix to determine where assets and catalogs are
+   * placed in the hierarchy. For example, setting this to "My Nodes" means a "My Nodes/Utils"
+   * catalog path will be treated as if it was just "Utils". This way the catalog hierarchy can
+   * still have some high level categorization, without affecting menus.
+   *
+   * Note that multiple path segments can be defined to skip multiple parents, for example
+   * "Nodes/Geometry Nodes" to treat assets and catalogs under "Nodes/Geometry Nodes" as root
+   * level.
+   */
+  std::optional<std::string> asset_catalog_path_prefix;
 
   /* callbacks */
   /* Iteration over all node classes. */
@@ -671,10 +706,10 @@ std::optional<StringRefNull> node_static_socket_label(int type, int subtype);
 
 Span<bNodeSocketType *> node_socket_types_get();
 
-bNodeSocket *node_find_socket(bNode &node, eNodeSocketInOut in_out, StringRef identifier);
+bNodeSocket *node_find_socket(bNode &node, eNodeSocketInOut in_out, UString identifier);
 const bNodeSocket *node_find_socket(const bNode &node,
                                     eNodeSocketInOut in_out,
-                                    StringRef identifier);
+                                    UString identifier);
 bNodeSocket *node_add_socket(bNodeTree &ntree,
                              bNode &node,
                              eNodeSocketInOut in_out,
@@ -717,7 +752,6 @@ void node_remove_node(
 
 float2 node_dimensions_get(const bNode &node);
 void node_tag_update_id(bNode &node);
-void node_internal_links(bNode &node, bNodeLink **r_links, int *r_len);
 
 /**
  * Also used via RNA API, so we check for proper input output direction.
@@ -867,8 +901,8 @@ void node_type_storage(bNodeType &ntype,
  *
  * FOREACH_NODETREE_BEGIN(bmain, nodetree, id) {
  *     if (nodetree->idname == "ShaderNodeTree")
- *         printf("This is a shader node tree);
- *     if (GS(id) == ID_MA)
+ *         printf("This is a shader node tree");
+ *     if (GS(id->name) == ID_MA)
  *         printf(" and it's owned by a material");
  * } FOREACH_NODETREE_END;
  * \endcode
@@ -909,7 +943,7 @@ bool node_tree_iterator_step(NodeTreeIterStore *ntreeiter, bNodeTree **r_nodetre
 
 /* -------------------------------------------------------------------- */
 /** \name Node Tree
- */
+ * \{ */
 
 void node_tree_remove_layer_n(bNodeTree *ntree, Scene *scene, int layer_index);
 
@@ -940,7 +974,7 @@ void node_tree_update_all_new(Main &main);
 IDProperty *node_create_asset_meta_data_properties(const bNodeTree &node_tree);
 void node_update_asset_metadata(bNodeTree &node_tree);
 
-void node_tree_node_flag_set(bNodeTree &ntree, int flag, bool enable);
+void node_tree_node_flag_set(bNodeTree &ntree, eNode_Flag flag, bool enable);
 
 /**
  * \note `ntree` itself has been read!
@@ -974,10 +1008,10 @@ void node_rebuild_id_vector(bNodeTree &node_tree);
 
 /**
  * \note keeps socket list order identical, for copying links.
- * \param dst_name: The name of the copied node. This is expected to be unique in the destination
- *   tree if provided. If not provided, the src name is used and is made unique unless
- *   allow_duplicate_names is true.
- * \param dst_identifier: Same ad dst_name, but for the identifier.
+ * \param dst_unique_name: The name of the copied node.
+ * This is expected to be unique in the destination tree if provided. If not provided,
+ * the src name is used and is made unique unless allow_duplicate_names is true.
+ * \param dst_unique_identifier: Same ad dst_name, but for the identifier.
  */
 bNode *node_copy_with_mapping(bNodeTree *dst_tree,
                               const bNode &node_src,
@@ -998,6 +1032,100 @@ void node_socket_move_default_value(Main &bmain,
                                     bNodeTree &tree,
                                     bNodeSocket &src,
                                     bNodeSocket &dst);
+
+/** Initialize an already-allocated #bNodeSocketValue*. */
+void socket_value_init(eNodeSocketDatatype type, void *data, int subtype = 0);
+
+/** Create a new socket value. Returns null if the socket type does not have a value. */
+void *socket_value_new(eNodeSocketDatatype type, int subtype = 0);
+
+/** Copy a socket value struct with optional user counting. */
+void *socket_value_copy(eNodeSocketDatatype type, const void *src, bool do_id_user);
+
+/** Free a socket value with optional user counting. */
+void socket_value_free(eNodeSocketDatatype type, void *data, bool do_id_user);
+
+/** Copy a socket value in an existing buffer with optional user counting */
+void socket_value_copy_content(eNodeSocketDatatype type,
+                               void *dst,
+                               const void *src,
+                               bool do_id_user);
+
+void socket_value_id_user_increment(eNodeSocketDatatype type, void *data);
+void socket_value_id_user_decrement(eNodeSocketDatatype type, void *data);
+
+template<typename Fn>
+inline bool socket_data_to_static_type(const eNodeSocketDatatype type, Fn &&fn)
+{
+  switch (type) {
+    case SOCK_FLOAT:
+      fn.template operator()<bNodeSocketValueFloat>();
+      return true;
+    case SOCK_INT:
+      fn.template operator()<bNodeSocketValueInt>();
+      return true;
+    case SOCK_BOOLEAN:
+      fn.template operator()<bNodeSocketValueBoolean>();
+      return true;
+    case SOCK_ROTATION:
+      fn.template operator()<bNodeSocketValueRotation>();
+      return true;
+    case SOCK_VECTOR:
+      fn.template operator()<bNodeSocketValueVector>();
+      return true;
+    case SOCK_RGBA:
+      fn.template operator()<bNodeSocketValueRGBA>();
+      return true;
+    case SOCK_STRING:
+      fn.template operator()<bNodeSocketValueString>();
+      return true;
+    case SOCK_OBJECT:
+      fn.template operator()<bNodeSocketValueObject>();
+      return true;
+    case SOCK_IMAGE:
+      fn.template operator()<bNodeSocketValueImage>();
+      return true;
+    case SOCK_COLLECTION:
+      fn.template operator()<bNodeSocketValueCollection>();
+      return true;
+    case SOCK_TEXTURE:
+      fn.template operator()<bNodeSocketValueTexture>();
+      return true;
+    case SOCK_MATERIAL:
+      fn.template operator()<bNodeSocketValueMaterial>();
+      return true;
+    case SOCK_FONT:
+      fn.template operator()<bNodeSocketValueFont>();
+      return true;
+    case SOCK_SCENE:
+      fn.template operator()<bNodeSocketValueScene>();
+      return true;
+    case SOCK_TEXT_ID:
+      fn.template operator()<bNodeSocketValueText>();
+      return true;
+    case SOCK_MASK:
+      fn.template operator()<bNodeSocketValueMask>();
+      return true;
+    case SOCK_SOUND:
+      fn.template operator()<bNodeSocketValueSound>();
+      return true;
+    case SOCK_MENU:
+      fn.template operator()<bNodeSocketValueMenu>();
+      return true;
+    case SOCK_INT_VECTOR:
+      fn.template operator()<bNodeSocketValueIntVector>();
+      return true;
+
+    case SOCK_CUSTOM:
+    case SOCK_SHADER:
+    case SOCK_MATRIX:
+    case SOCK_GEOMETRY:
+    case SOCK_BUNDLE:
+    case SOCK_CLOSURE:
+      return true;
+  }
+  return false;
+}
 
 /**
  * Free the node itself.
@@ -1087,7 +1215,7 @@ bNode *node_get_active_paint_canvas(bNodeTree &ntree);
 /**
  * \brief Does the given node supports the sub active flag.
  *
- * \param sub_active: The active flag to check. #NODE_ACTIVE_TEXTURE / #NODE_ACTIVE_PAINT_CANVAS.
+ * \param sub_activity: The active flag to check. #NODE_ACTIVE_TEXTURE / #NODE_ACTIVE_PAINT_CANVAS.
  */
 bool node_supports_active_flag(const bNode &node, int sub_activity);
 
@@ -1111,28 +1239,7 @@ bool node_declaration_ensure_on_outdated_node(bNodeTree &ntree, bNode &node);
  */
 void node_socket_declarations_update(bNode *node);
 
-/* Node Previews */
-bool node_preview_used(const bNode &node);
-
-struct bNodePreview {
-  ImBuf *ibuf = nullptr;
-
-  bNodePreview() = default;
-  bNodePreview(const bNodePreview &other);
-  bNodePreview(bNodePreview &&other);
-  ~bNodePreview();
-};
-
-/* Ensure that a node preview of the given size exists in the given previews map for the node with
- * the given instance key. */
-bNodePreview *node_ensure_preview(Map<bNodeInstanceKey, bNodePreview> &previews,
-                                  bNodeInstanceKey key,
-                                  int xsize,
-                                  int ysize);
-
-void node_preview_remove_unused(bNodeTree *ntree);
-
-void node_preview_merge_tree(bNodeTree *to_ntree, bNodeTree *from_ntree, bool remove_old);
+/** \} */
 
 /* -------------------------------------------------------------------- */
 /** \name Node Type Access
@@ -1169,16 +1276,7 @@ void node_type_socket_templates(bNodeType *ntype,
                                 bNodeSocketTemplate *inputs,
                                 bNodeSocketTemplate *outputs);
 
-void node_type_size(bNodeType &ntype, int width, int minwidth, int maxwidth);
-
-enum class eNodeSizePreset : int8_t {
-  Default,
-  Small,
-  Middle,
-  Large,
-};
-
-void node_type_size_preset(bNodeType &ntype, eNodeSizePreset size);
+/** \} */
 
 /* -------------------------------------------------------------------- */
 /** \name Node Generic Functions
@@ -1248,6 +1346,8 @@ inline bool bNodeType::is_type(const UString query_idname) const
   return this->idname == query_idname;
 }
 
+/** \} */
+
 }  // namespace bke
 
 #define NODE_STORAGE_FUNCS(StorageT) \
@@ -1259,10 +1359,5 @@ inline bool bNodeType::is_type(const UString query_idname) const
   { \
     return *static_cast<const StorageT *>(node.storage); \
   }
-
-constexpr int NODE_DEFAULT_MAX_WIDTH = 700;
-constexpr int GROUP_NODE_DEFAULT_WIDTH = 140;
-constexpr int GROUP_NODE_MAX_WIDTH = NODE_DEFAULT_MAX_WIDTH;
-constexpr int GROUP_NODE_MIN_WIDTH = 60;
 
 }  // namespace blender

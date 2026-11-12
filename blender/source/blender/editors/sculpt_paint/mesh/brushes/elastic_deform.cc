@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup edsculpt
+ */
+
 #include "editors/sculpt_paint/mesh/brushes/brushes.hh"
 
 #include "DNA_brush_types.h"
@@ -44,6 +48,7 @@ BLI_NOINLINE static void calc_translations(const Brush &brush,
                                            const Span<float3> positions,
                                            const MutableSpan<float3> translations)
 {
+  PRF_scope(ProfileCategory::Editor);
   switch (eBrushElasticDeformType(brush.elastic_deform_type)) {
     case BRUSH_ELASTIC_DEFORM_GRAB: {
       for (const int i : positions.index_range()) {
@@ -93,7 +98,6 @@ static void calc_faces(const Depsgraph &depsgraph,
                        const MeshAttributeData &attribute_data,
                        const bke::pbvh::MeshNode &node,
                        Object &object,
-                       LocalData &tls,
                        const PositionDeformData &position_data)
 {
   SculptSession &ss = *object.runtime->sculpt_session;
@@ -102,15 +106,13 @@ static void calc_faces(const Depsgraph &depsgraph,
   const OrigPositionData orig_data = orig_position_data_get_mesh(object, node);
   const Span<int> verts = node.verts();
 
-  tls.factors.resize(verts.size());
-  const MutableSpan<float> factors = tls.factors;
+  Array<float, bke::pbvh::MESH_LEAF_LIMIT> factors(verts.size());
   fill_factor_from_hide_and_mask(attribute_data.hide_vert, attribute_data.mask, verts, factors);
   filter_region_clip_factors(ss, orig_data.positions, factors);
 
   auto_mask::calc_vert_factors(depsgraph, object, cache.automasking.get(), node, verts, factors);
 
-  tls.translations.resize(verts.size());
-  const MutableSpan<float3> translations = tls.translations;
+  Array<float3, bke::pbvh::MESH_LEAF_LIMIT> translations(verts.size());
   calc_translations(brush,
                     cache,
                     kelvinet_params,
@@ -209,6 +211,7 @@ void do_elastic_deform_brush(const Depsgraph &depsgraph,
                              Object &object,
                              const IndexMask &node_mask)
 {
+  PRF_scope(ProfileCategory::Editor);
   const SculptSession &ss = *object.runtime->sculpt_session;
   bke::pbvh::Tree &pbvh = *bke::object::pbvh_get(object);
   const Brush &brush = *BKE_paint_brush_for_read(&sd.paint);
@@ -245,7 +248,6 @@ void do_elastic_deform_brush(const Depsgraph &depsgraph,
       MutableSpan<bke::pbvh::MeshNode> nodes = pbvh.nodes<bke::pbvh::MeshNode>();
       node_mask.foreach_index(
           [&](const int i) {
-            LocalData &tls = all_tls.local();
             calc_faces(depsgraph,
                        sd,
                        brush,
@@ -254,7 +256,6 @@ void do_elastic_deform_brush(const Depsgraph &depsgraph,
                        attribute_data,
                        nodes[i],
                        object,
-                       tls,
                        position_data);
             bke::pbvh::update_node_bounds_mesh(position_data.eval, nodes[i]);
           },

@@ -18,7 +18,7 @@
 #include "UnaryFunction0D/BPy_UnaryFunction0DDouble.h"
 #include "UnaryFunction1D/BPy_UnaryFunction1DVoid.h"
 
-#include "BLI_sys_types.h"
+#include "BLI_sys_types.hh"
 
 #include <sstream>
 
@@ -63,15 +63,20 @@ PyDoc_STRVAR(
     "   Selects the ViewEdges of the ViewMap verifying a specified\n"
     "   condition.\n"
     "\n"
-    "   :arg pred: The predicate expressing this condition.\n"
+    "   :param pred: The predicate expressing this condition.\n"
     "   :type pred: :class:`UnaryPredicate1D`\n");
 static PyObject *Operators_select(BPy_Operators * /*self*/, PyObject *args, PyObject *kwds)
 {
   static const char *kwlist[] = {"pred", nullptr};
   PyObject *obj = nullptr;
 
-  if (!PyArg_ParseTupleAndKeywords(
-          args, kwds, "O!", (char **)kwlist, &UnaryPredicate1D_Type, &obj))
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "O!" /* `pred` */
+                                   ":select",
+                                   (char **)kwlist,
+                                   &UnaryPredicate1D_Type,
+                                   &obj))
   {
     return nullptr;
   }
@@ -92,8 +97,12 @@ static PyObject *Operators_select(BPy_Operators * /*self*/, PyObject *args, PyOb
 PyDoc_STRVAR(
     /* Wrap. */
     Operators_chain_doc,
-    ".. staticmethod:: chain(it, pred, modifier)\n"
-    "                  chain(it, pred)\n"
+    ".. staticmethod:: chain(*args)\n"
+    "\n"
+    "   Accepted call signatures:\n"
+    "\n"
+    "   - ``chain(it, pred, modifier)``\n"
+    "   - ``chain(it, pred)``\n"
     "\n"
     "   Builds a set of chains from the current set of ViewEdges. Each\n"
     "   ViewEdge of the current list starts a new chain. The chaining\n"
@@ -101,13 +110,13 @@ PyDoc_STRVAR(
     "   user specified iterator. This operator only iterates using the\n"
     "   increment operator and is therefore unidirectional.\n"
     "\n"
-    "   :arg it: The iterator on the ViewEdges of the ViewMap. It contains\n"
+    "   :param it: The iterator on the ViewEdges of the ViewMap. It contains\n"
     "      the chaining rule.\n"
     "   :type it: :class:`ViewEdgeIterator`\n"
-    "   :arg pred: The predicate on the ViewEdge that expresses the\n"
+    "   :param pred: The predicate on the ViewEdge that expresses the\n"
     "      stopping condition.\n"
     "   :type pred: :class:`UnaryPredicate1D`\n"
-    "   :arg modifier: A function that takes a ViewEdge as argument and\n"
+    "   :param modifier: A function that takes a ViewEdge as argument and\n"
     "      that is used to modify the processed ViewEdge state (the\n"
     "      timestamp incrementation is a typical illustration of such a modifier).\n"
     "      If this argument is not given, the time stamp is automatically managed.\n"
@@ -119,7 +128,11 @@ static PyObject *Operators_chain(BPy_Operators * /*self*/, PyObject *args, PyObj
 
   if (!PyArg_ParseTupleAndKeywords(args,
                                    kwds,
-                                   "O!O!|O!",
+                                   "O!" /* `it` */
+                                   "O!" /* `pred` */
+                                   "|"  /* Optional arguments. */
+                                   "O!" /* `modifier` */
+                                   ":chain",
                                    (char **)kwlist,
                                    &ChainingIterator_Type,
                                    &obj1,
@@ -172,8 +185,12 @@ static PyObject *Operators_chain(BPy_Operators * /*self*/, PyObject *args, PyObj
 PyDoc_STRVAR(
     /* Wrap. */
     Operators_bidirectional_chain_doc,
-    ".. staticmethod:: bidirectional_chain(it, pred)\n"
-    "                  bidirectional_chain(it)\n"
+    ".. staticmethod:: bidirectional_chain(*args)\n"
+    "\n"
+    "   Accepted call signatures:\n"
+    "\n"
+    "   - ``bidirectional_chain(it, pred)``\n"
+    "   - ``bidirectional_chain(it)``\n"
     "\n"
     "   Builds a set of chains from the current set of ViewEdges. Each\n"
     "   ViewEdge of the current list potentially starts a new chain. The\n"
@@ -187,10 +204,10 @@ PyDoc_STRVAR(
     "   chaining time stamp is incremented. This allows you to keep track of\n"
     "   the number of chains to which a ViewEdge belongs to.\n"
     "\n"
-    "   :arg it: The ChainingIterator on the ViewEdges of the ViewMap. It\n"
+    "   :param it: The ChainingIterator on the ViewEdges of the ViewMap. It\n"
     "      contains the chaining rule.\n"
     "   :type it: :class:`ChainingIterator`\n"
-    "   :arg pred: The predicate on the ViewEdge that expresses the stopping condition.\n"
+    "   :param pred: The predicate on the ViewEdge that expresses the stopping condition.\n"
     "      This parameter is optional, you make not want to pass a stopping criterion\n"
     "      when the stopping criterion is already contained in the iterator definition.\n"
     "   :type pred: :class:`UnaryPredicate1D`\n");
@@ -203,7 +220,10 @@ static PyObject *Operators_bidirectional_chain(BPy_Operators * /*self*/,
 
   if (!PyArg_ParseTupleAndKeywords(args,
                                    kwds,
-                                   "O!|O!",
+                                   "O!" /* `it` */
+                                   "|"  /* Optional arguments. */
+                                   "O!" /* `pred` */
+                                   ":bidirectional_chain",
                                    (char **)kwlist,
                                    &ChainingIterator_Type,
                                    &obj1,
@@ -248,8 +268,12 @@ static PyObject *Operators_bidirectional_chain(BPy_Operators * /*self*/,
 PyDoc_STRVAR(
     /* Wrap. */
     Operators_sequential_split_doc,
-    ".. staticmethod:: sequential_split(starting_pred, stopping_pred, sampling=0.0)\n"
-    "                  sequential_split(pred, sampling=0.0)\n"
+    ".. staticmethod:: sequential_split(*args, **kwargs)\n"
+    "\n"
+    "   Accepted call signatures:\n"
+    "\n"
+    "   - ``sequential_split(starting_pred, stopping_pred, sampling=0.0)``\n"
+    "   - ``sequential_split(pred, sampling=0.0)``\n"
     "\n"
     "   Splits each chain of the current set of chains in a sequential way.\n"
     "   The points of each chain are processed (with a specified sampling)\n"
@@ -262,17 +286,17 @@ PyDoc_STRVAR(
     "      By specifying a starting and stopping predicate allows\n"
     "      the chains to overlap rather than chains partitioning.\n"
     "\n"
-    "   :arg starting_pred: The predicate on a point that expresses the\n"
+    "   :param starting_pred: The predicate on a point that expresses the\n"
     "      starting condition. Each time this condition is verified, a new chain begins\n"
     "   :type starting_pred: :class:`UnaryPredicate0D`\n"
-    "   :arg stopping_pred: The predicate on a point that expresses the\n"
+    "   :param stopping_pred: The predicate on a point that expresses the\n"
     "      stopping condition. The chain ends as soon as this predicate is verified.\n"
     "   :type stopping_pred: :class:`UnaryPredicate0D`\n"
-    "   :arg pred: The predicate on a point that expresses the splitting condition.\n"
+    "   :param pred: The predicate on a point that expresses the splitting condition.\n"
     "      Each time the condition is verified, the chain is split into two chains.\n"
     "      The resulting set of chains is a partition of the initial chain\n"
     "   :type pred: :class:`UnaryPredicate0D`\n"
-    "   :arg sampling: The resolution used to sample the chain for the\n"
+    "   :param sampling: The resolution used to sample the chain for the\n"
     "      predicates evaluation. (The chain is not actually resampled;\n"
     "      a virtual point only progresses along the curve using this\n"
     "      resolution.)\n"
@@ -288,7 +312,11 @@ static PyObject *Operators_sequential_split(BPy_Operators * /*self*/,
 
   if (PyArg_ParseTupleAndKeywords(args,
                                   kwds,
-                                  "O!O!|f",
+                                  "O!" /* `starting_pred` */
+                                  "O!" /* `stopping_pred` */
+                                  "|"  /* Optional arguments. */
+                                  "f"  /* `sampling` */
+                                  ":sequential_split",
                                   (char **)kwlist_1,
                                   &UnaryPredicate0D_Type,
                                   &obj1,
@@ -320,8 +348,16 @@ static PyObject *Operators_sequential_split(BPy_Operators * /*self*/,
   }
   else if ((void)PyErr_Clear(),
            (void)(f = 0.0f),
-           PyArg_ParseTupleAndKeywords(
-               args, kwds, "O!|f", (char **)kwlist_2, &UnaryPredicate0D_Type, &obj1, &f))
+           PyArg_ParseTupleAndKeywords(args,
+                                       kwds,
+                                       "O!" /* `pred` */
+                                       "|"  /* Optional arguments. */
+                                       "f"  /* `sampling` */
+                                       ":sequential_split",
+                                       (char **)kwlist_2,
+                                       &UnaryPredicate0D_Type,
+                                       &obj1,
+                                       &f))
   {
     if (!((BPy_UnaryPredicate0D *)obj1)->up0D) {
       PyErr_SetString(
@@ -346,8 +382,12 @@ static PyObject *Operators_sequential_split(BPy_Operators * /*self*/,
 PyDoc_STRVAR(
     /* Wrap. */
     Operators_recursive_split_doc,
-    ".. staticmethod:: recursive_split(func, pred_1d, sampling=0.0)\n"
-    "                  recursive_split(func, pred_0d, pred_1d, sampling=0.0)\n"
+    ".. staticmethod:: recursive_split(*args, **kwargs)\n"
+    "\n"
+    "   Accepted call signatures:\n"
+    "\n"
+    "   - ``recursive_split(func, pred_1d, sampling=0.0)``\n"
+    "   - ``recursive_split(func, pred_0d, pred_1d, sampling=0.0)``\n"
     "\n"
     "   Splits the current set of chains in a recursive way. We process the\n"
     "   points of each chain (with a specified sampling) to find the point\n"
@@ -360,21 +400,21 @@ PyDoc_STRVAR(
     "   that can potentially be split. A point that doesn't verify the 0D\n"
     "   predicate won't be candidate in realizing the min.\n"
     "\n"
-    "   :arg func: The Unary Function evaluated at each point of the chain.\n"
+    "   :param func: The Unary Function evaluated at each point of the chain.\n"
     "     The splitting point is the point minimizing this function.\n"
     "   :type func: :class:`UnaryFunction0DDouble`\n"
-    "   :arg pred_0d: The Unary Predicate 0D used to select the candidate\n"
+    "   :param pred_0d: The Unary Predicate 0D used to select the candidate\n"
     "      points where the split can occur. For example, it is very likely\n"
     "      that would rather have your chain splitting around its middle\n"
     "      point than around one of its extremities. A 0D predicate working\n"
     "      on the curvilinear abscissa allows to add this kind of constraints.\n"
     "   :type pred_0d: :class:`UnaryPredicate0D`\n"
-    "   :arg pred_1d: The Unary Predicate expressing the recursivity stopping\n"
+    "   :param pred_1d: The Unary Predicate expressing the recursivity stopping\n"
     "      condition. This predicate is evaluated for each curve before it\n"
     "      actually gets split. If pred_1d(chain) is true, the curve won't be\n"
     "      split anymore.\n"
     "   :type pred_1d: :class:`UnaryPredicate1D`\n"
-    "   :arg sampling: The resolution used to sample the chain for the\n"
+    "   :param sampling: The resolution used to sample the chain for the\n"
     "      predicates evaluation. (The chain is not actually resampled; a\n"
     "      virtual point only progresses along the curve using this\n"
     "      resolution.)\n"
@@ -390,7 +430,11 @@ static PyObject *Operators_recursive_split(BPy_Operators * /*self*/,
 
   if (PyArg_ParseTupleAndKeywords(args,
                                   kwds,
-                                  "O!O!|f",
+                                  "O!" /* `func` */
+                                  "O!" /* `pred_1d` */
+                                  "|"  /* Optional arguments. */
+                                  "f"  /* `sampling` */
+                                  ":recursive_split",
                                   (char **)kwlist_1,
                                   &UnaryFunction0DDouble_Type,
                                   &obj1,
@@ -424,7 +468,12 @@ static PyObject *Operators_recursive_split(BPy_Operators * /*self*/,
            (void)(f = 0.0f),
            PyArg_ParseTupleAndKeywords(args,
                                        kwds,
-                                       "O!O!O!|f",
+                                       "O!" /* `func` */
+                                       "O!" /* `pred_0d` */
+                                       "O!" /* `pred_1d` */
+                                       "|"  /* Optional arguments. */
+                                       "f"  /* `sampling` */
+                                       ":recursive_split",
                                        (char **)kwlist_2,
                                        &UnaryFunction0DDouble_Type,
                                        &obj1,
@@ -478,15 +527,20 @@ PyDoc_STRVAR(
     "   Sorts the current set of chains (or viewedges) according to the\n"
     "   comparison predicate given as argument.\n"
     "\n"
-    "   :arg pred: The binary predicate used for the comparison.\n"
+    "   :param pred: The binary predicate used for the comparison.\n"
     "   :type pred: :class:`BinaryPredicate1D`\n");
 static PyObject *Operators_sort(BPy_Operators * /*self*/, PyObject *args, PyObject *kwds)
 {
   static const char *kwlist[] = {"pred", nullptr};
   PyObject *obj = nullptr;
 
-  if (!PyArg_ParseTupleAndKeywords(
-          args, kwds, "O!", (char **)kwlist, &BinaryPredicate1D_Type, &obj))
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "O!" /* `pred` */
+                                   ":sort",
+                                   (char **)kwlist,
+                                   &BinaryPredicate1D_Type,
+                                   &obj))
   {
     return nullptr;
   }
@@ -512,18 +566,26 @@ PyDoc_STRVAR(
     "   Creates and shades the strokes from the current set of chains. A\n"
     "   predicate can be specified to make a selection pass on the chains.\n"
     "\n"
-    "   :arg pred: The predicate that a chain must verify in order to be\n"
+    "   :param pred: The predicate that a chain must verify in order to be\n"
     "      transform as a stroke.\n"
     "   :type pred: :class:`UnaryPredicate1D`\n"
-    "   :arg shaders: The list of shaders used to shade the strokes.\n"
+    "   :param shaders: The list of shaders used to shade the strokes.\n"
     "   :type shaders: list[:class:`StrokeShader`]\n");
 static PyObject *Operators_create(BPy_Operators * /*self*/, PyObject *args, PyObject *kwds)
 {
   static const char *kwlist[] = {"pred", "shaders", nullptr};
   PyObject *obj1 = nullptr, *obj2 = nullptr;
 
-  if (!PyArg_ParseTupleAndKeywords(
-          args, kwds, "O!O!", (char **)kwlist, &UnaryPredicate1D_Type, &obj1, &PyList_Type, &obj2))
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "O!" /* `pred` */
+                                   "O!" /* `shaders` */
+                                   ":create",
+                                   (char **)kwlist,
+                                   &UnaryPredicate1D_Type,
+                                   &obj1,
+                                   &PyList_Type,
+                                   &obj2))
   {
     return nullptr;
   }
@@ -569,13 +631,21 @@ PyDoc_STRVAR(
     "   Resets the line stylization process to the initial state. The results of\n"
     "   stroke creation are accumulated if **delete_strokes** is set to False.\n"
     "\n"
-    "   :arg delete_strokes: Delete the strokes that are currently stored.\n"
+    "   :param delete_strokes: Delete the strokes that are currently stored.\n"
     "   :type delete_strokes: bool\n");
 static PyObject *Operators_reset(BPy_Operators * /*self*/, PyObject *args, PyObject *kwds)
 {
   static const char *kwlist[] = {"delete_strokes", nullptr};
   PyObject *obj1 = nullptr;
-  if (PyArg_ParseTupleAndKeywords(args, kwds, "|O!", (char **)kwlist, &PyBool_Type, &obj1)) {
+  if (PyArg_ParseTupleAndKeywords(args,
+                                  kwds,
+                                  "|"  /* Optional arguments. */
+                                  "O!" /* `delete_strokes` */
+                                  ":reset",
+                                  (char **)kwlist,
+                                  &PyBool_Type,
+                                  &obj1))
+  {
     // true is the default
     Operators::reset(obj1 ? bool_from_PyBool(obj1) : true);
   }
@@ -593,7 +663,7 @@ PyDoc_STRVAR(
     "\n"
     "   Returns the ViewEdge at the index in the current set of ViewEdges.\n"
     "\n"
-    "   :arg i: index (0 <= i < Operators.get_view_edges_size()).\n"
+    "   :param i: index (0 <= i < Operators.get_view_edges_size()).\n"
     "   :type i: int\n"
     "   :return: The ViewEdge object.\n"
     "   :rtype: :class:`ViewEdge`\n");
@@ -604,7 +674,13 @@ static PyObject *Operators_get_viewedge_from_index(BPy_Operators * /*self*/,
   static const char *kwlist[] = {"i", nullptr};
   uint i;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "I", (char **)kwlist, &i)) {
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "I" /* `i` */
+                                   ":get_viewedge_from_index",
+                                   (char **)kwlist,
+                                   &i))
+  {
     return nullptr;
   }
   if (i >= Operators::getViewEdgesSize()) {
@@ -621,7 +697,7 @@ PyDoc_STRVAR(
     "\n"
     "   Returns the Chain at the index in the current set of Chains.\n"
     "\n"
-    "   :arg i: index (0 <= i < Operators.get_chains_size()).\n"
+    "   :param i: index (0 <= i < Operators.get_chains_size()).\n"
     "   :type i: int\n"
     "   :return: The Chain object.\n"
     "   :rtype: :class:`Chain`\n");
@@ -632,7 +708,13 @@ static PyObject *Operators_get_chain_from_index(BPy_Operators * /*self*/,
   static const char *kwlist[] = {"i", nullptr};
   uint i;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "I", (char **)kwlist, &i)) {
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "I" /* `i` */
+                                   ":get_chain_from_index",
+                                   (char **)kwlist,
+                                   &i))
+  {
     return nullptr;
   }
   if (i >= Operators::getChainsSize()) {
@@ -649,7 +731,7 @@ PyDoc_STRVAR(
     "\n"
     "   Returns the Stroke at the index in the current set of Strokes.\n"
     "\n"
-    "   :arg i: index (0 <= i < Operators.get_strokes_size()).\n"
+    "   :param i: index (0 <= i < Operators.get_strokes_size()).\n"
     "   :type i: int\n"
     "   :return: The Stroke object.\n"
     "   :rtype: :class:`Stroke`\n");
@@ -660,7 +742,13 @@ static PyObject *Operators_get_stroke_from_index(BPy_Operators * /*self*/,
   static const char *kwlist[] = {"i", nullptr};
   uint i;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "I", (char **)kwlist, &i)) {
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "I" /* `i` */
+                                   ":get_stroke_from_index",
+                                   (char **)kwlist,
+                                   &i))
+  {
     return nullptr;
   }
   if (i >= Operators::getStrokesSize()) {

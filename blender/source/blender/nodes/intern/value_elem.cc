@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup nodes
+ */
+
 #include "NOD_value_elem_eval.hh"
 
 namespace blender::nodes::value_elem {
@@ -30,8 +34,8 @@ std::optional<ElemVariant> convert_socket_elem(const bNodeSocket &old_socket,
                                                const bNodeSocket &new_socket,
                                                const ElemVariant &old_elem)
 {
-  const eNodeSocketDatatype old_type = eNodeSocketDatatype(old_socket.type);
-  const eNodeSocketDatatype new_type = eNodeSocketDatatype(new_socket.type);
+  const eNodeSocketDatatype old_type = old_socket.type;
+  const eNodeSocketDatatype new_type = new_socket.type;
   if (old_type == new_type) {
     return old_elem;
   }

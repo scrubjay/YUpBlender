@@ -2,13 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
-#include "atomic_ops.h"
-
 #include "BLI_array.hh"
 #include "BLI_array_utils.hh"
 #include "BLI_atomic_disjoint_set.hh"
 #include "BLI_math_matrix.hh"
-#include "BLI_sort.hh"
 #include "BLI_task.hh"
 #include "BLI_virtual_array.hh"
 
@@ -48,16 +45,20 @@ static void node_declare(NodeDeclarationBuilder &b)
   b.add_input<decl::Geometry>("Geometry"_ustr)
       .supported_type(GeometryComponent::Type::Mesh)
       .description("Geometry to scale elements of");
-  b.add_output<decl::Geometry>("Geometry"_ustr).propagate_all().align_with_previous();
-  b.add_input<decl::Bool>("Selection"_ustr).default_value(true).hide_value().field_on_all();
+  b.add_output<decl::Geometry>("Geometry"_ustr).propagate_all_geometry().align_with_previous();
+  b.add_input<decl::Bool>("Selection"_ustr)
+      .default_value(true)
+      .hide_value()
+      .evaluated_geometry_field();
 
   b.add_input<decl::Float>("Scale"_ustr, "Scale"_ustr)
       .default_value(1.0f)
       .min(0.0f)
-      .field_on_all();
+      .evaluated_geometry_field();
   b.add_input<decl::Vector>("Center"_ustr)
       .subtype(PROP_TRANSLATION)
-      .implicit_field_on_all(NODE_DEFAULT_INPUT_POSITION_FIELD)
+      .evaluated_geometry_field()
+      .default_input_type(NODE_DEFAULT_INPUT_POSITION_FIELD)
       .description(
           "Origin of the scaling for each element. If multiple elements are connected, their "
           "center is averaged");
@@ -67,7 +68,7 @@ static void node_declare(NodeDeclarationBuilder &b)
       .optional_label();
   b.add_input<decl::Vector>("Axis"_ustr)
       .default_value({1.0f, 0.0f, 0.0f})
-      .field_on_all()
+      .evaluated_geometry_field()
       .description("Direction in which to scale the element")
       .usage_by_single_menu(GEO_NODE_SCALE_ELEMENTS_SINGLE_AXIS);
 };
@@ -82,83 +83,9 @@ static void node_init(bNodeTree * /*tree*/, bNode *node)
   node->custom1 = int16_t(AttrDomain::Face);
 }
 
-static Span<int> front_indices_to_same_value(const Span<int> indices, const Span<int> values)
-{
-  const int value = values[indices.first()];
-  const int &first_other = *std::find_if(
-      indices.begin(), indices.end(), [&](const int index) { return values[index] != value; });
-  return indices.take_front(&first_other - indices.begin());
-}
-
-static void from_indices_large_groups(const Span<int> group_indices,
-                                      MutableSpan<int> r_counts_to_offset,
-                                      MutableSpan<int> r_indices)
-{
-  constexpr const int segment_size = 1024;
-  constexpr const IndexRange segment(segment_size);
-  const bool last_small_segmet = bool(group_indices.size() % segment_size);
-  const int total_segments = group_indices.size() / segment_size + int(last_small_segmet);
-
-  Array<int> src_indices(group_indices.size());
-  threading::parallel_for_each(IndexRange(total_segments), [&](const int segment_index) {
-    const IndexRange range = segment.shift(segment_size * segment_index);
-    MutableSpan<int> segment_indices = src_indices.as_mutable_span().slice_safe(range);
-    std::iota(segment_indices.begin(), segment_indices.end(), segment_size * segment_index);
-    parallel_sort(segment_indices.begin(), segment_indices.end(), [&](const int a, const int b) {
-      return group_indices[a] < group_indices[b];
-    });
-
-    for (Span<int> indices = segment_indices; !indices.is_empty();) {
-      const int group = group_indices[indices.first()];
-      const int step_size = front_indices_to_same_value(indices, group_indices).size();
-      atomic_add_and_fetch_int32(&r_counts_to_offset[group], step_size);
-      indices = indices.drop_front(step_size);
-    }
-  });
-
-  const OffsetIndices<int> offset = offset_indices::accumulate_counts_to_offsets(
-      r_counts_to_offset);
-  Array<int> counts(offset.size(), 0);
-  threading::parallel_for_each(IndexRange(total_segments), [&](const int segment_index) {
-    const IndexRange range = segment.shift(segment_size * segment_index);
-    const Span<int> segment_indices = src_indices.as_span().slice_safe(range);
-    for (Span<int> indices = segment_indices; !indices.is_empty();) {
-      const Span<int> indices_of_current_group = front_indices_to_same_value(indices,
-                                                                             group_indices);
-      const int step_size = indices_of_current_group.size();
-      const int group = group_indices[indices.first()];
-      const int start = atomic_add_and_fetch_int32(&counts[group], step_size) - step_size;
-      const IndexRange dst_range = offset[group].slice(start, step_size);
-      array_utils::copy(indices_of_current_group, r_indices.slice(dst_range));
-      indices = indices.drop_front(step_size);
-    }
-  });
-}
-
-static GroupedSpan<int> gather_groups(const Span<int> group_indices,
-                                      const int groups_num,
-                                      Array<int> &r_offsets,
-                                      Array<int> &r_indices)
-{
-  if (group_indices.size() / groups_num > 1000) {
-    r_offsets.reinitialize(groups_num + 1);
-    r_offsets.as_mutable_span().fill(0);
-    r_indices.reinitialize(group_indices.size());
-    from_indices_large_groups(group_indices, r_offsets, r_indices);
-  }
-  else {
-    offset_indices::build_groups_from_indices(group_indices, groups_num, r_offsets, r_indices);
-  }
-  return {OffsetIndices<int>(r_offsets), r_indices};
-}
-
 template<typename T> static T gather_mean(const VArray<T> &values, const Span<int> indices)
 {
   BLI_assert(!indices.is_empty());
-  if (const std::optional<T> value = values.get_if_single()) {
-    return *value;
-  }
-
   using MeanAccumulator = std::pair<T, int>;
   const auto join_accumulators = [](const MeanAccumulator a,
                                     const MeanAccumulator b) -> MeanAccumulator {
@@ -184,6 +111,28 @@ template<typename T> static T gather_mean(const VArray<T> &values, const Span<in
   return value;
 }
 
+template<typename T>
+static void gather_means(const VArray<T> &values, GroupedSpan<int> groups, MutableSpan<T> means)
+{
+  threading::parallel_for(groups.index_range(), 512, [&](const IndexRange range) {
+    for (const int group : range) {
+      means[group] = gather_mean<T>(values, groups[group]);
+    }
+  });
+}
+
+template<typename T> static Array<T> gather_means(const VArray<T> &values, GroupedSpan<int> groups)
+{
+  if (const std::optional<T> value = values.get_if_single()) {
+    return Array<T>(groups.size(), *value);
+  }
+  Array<T> means(groups.size());
+  /* NOTE: This could also be implemented with #attribute_math::mix_groups if #values is a span and
+   * all the group sizes are below the grain size. */
+  gather_means<T>(values, groups, means);
+  return means;
+}
+
 static float3 transform_with_uniform_scale(const float3 &position,
                                            const float3 &center,
                                            const float scale)
@@ -200,6 +149,8 @@ static void scale_uniformly(const GroupedSpan<int> elem_islands,
                             const VArray<float3> &center_varray,
                             Mesh &mesh)
 {
+  const Array<float> scales = gather_means(scale_varray, elem_islands);
+  const Array<float3> centers = gather_means(center_varray, elem_islands);
   MutableSpan<float3> positions = mesh.vert_positions_for_write();
   threading::parallel_for(
       elem_islands.index_range(),
@@ -207,11 +158,8 @@ static void scale_uniformly(const GroupedSpan<int> elem_islands,
       [&](const IndexRange range) {
         for (const int island_index : range) {
           const Span<int> vert_island = vert_islands[island_index];
-          const Span<int> elem_island = elem_islands[island_index];
-
-          const float scale = gather_mean<float>(scale_varray, elem_island);
-          const float3 center = gather_mean<float3>(center_varray, elem_island);
-
+          const float scale = scales[island_index];
+          const float3 center = centers[island_index];
           threading::parallel_for(vert_island.index_range(), 2048, [&](const IndexRange range) {
             for (const int vert_i : vert_island.slice(range)) {
               positions[vert_i] = transform_with_uniform_scale(positions[vert_i], center, scale);
@@ -271,6 +219,9 @@ static void scale_on_axis(const GroupedSpan<int> elem_islands,
                           const VArray<float3> &axis_varray,
                           Mesh &mesh)
 {
+  const Array<float> scales = gather_means(scale_varray, elem_islands);
+  const Array<float3> centers = gather_means(center_varray, elem_islands);
+  const Array<float3> axes = gather_means(axis_varray, elem_islands);
   MutableSpan<float3> positions = mesh.vert_positions_for_write();
   threading::parallel_for(
       elem_islands.index_range(),
@@ -278,13 +229,10 @@ static void scale_on_axis(const GroupedSpan<int> elem_islands,
       [&](const IndexRange range) {
         for (const int island_index : range) {
           const Span<int> vert_island = vert_islands[island_index];
-          const Span<int> elem_island = elem_islands[island_index];
-
-          const float scale = gather_mean<float>(scale_varray, elem_island);
-          const float3 center = gather_mean<float3>(center_varray, elem_island);
-          const float3 axis = gather_mean<float3>(axis_varray, elem_island);
+          const float scale = scales[island_index];
+          const float3 center = centers[island_index];
+          const float3 axis = axes[island_index];
           const float3 fixed_axis = math::is_zero(axis) ? float3(1.0f, 0.0f, 0.0f) : axis;
-
           const float4x4 transform = create_single_axis_transform(center, fixed_axis, scale);
           threading::parallel_for(vert_island.index_range(), 2048, [&](const IndexRange range) {
             for (const int vert_i : vert_island.slice(range)) {
@@ -352,8 +300,10 @@ static void gather_face_islands(const Mesh &mesh,
       mesh, face_mask, vert_mask, face_island_indices, vert_island_indices);
 
   /* Group gathered vertices and faces. */
-  gather_groups(vert_island_indices, total_islands, r_vert_offsets, r_vert_indices);
-  gather_groups(face_island_indices, total_islands, r_item_offsets, r_item_indices);
+  offset_indices::build_groups_from_indices(
+      vert_island_indices, total_islands, r_vert_offsets, r_vert_indices);
+  offset_indices::build_groups_from_indices(
+      face_island_indices, total_islands, r_item_offsets, r_item_indices);
 
   /* If result indices is for gathered array, map than back into global indices. */
   if (face_mask.size() != mesh.faces_num) {
@@ -423,8 +373,10 @@ static void gather_edge_islands(const Mesh &mesh,
       mesh, edge_mask, vert_mask, edge_island_indices, vert_island_indices);
 
   /* Group gathered vertices and edges. */
-  gather_groups(vert_island_indices, total_islands, r_vert_offsets, r_vert_indices);
-  gather_groups(edge_island_indices, total_islands, r_item_offsets, r_item_indices);
+  offset_indices::build_groups_from_indices(
+      vert_island_indices, total_islands, r_vert_offsets, r_vert_indices);
+  offset_indices::build_groups_from_indices(
+      edge_island_indices, total_islands, r_item_offsets, r_item_indices);
 
   /* If result indices is for gathered array, map than back into global indices. */
   if (edge_mask.size() != mesh.edges_num) {

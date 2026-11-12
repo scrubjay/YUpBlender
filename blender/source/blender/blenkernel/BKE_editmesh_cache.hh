@@ -17,6 +17,7 @@
 namespace blender {
 
 struct BMEditMesh;
+struct BMesh;
 
 namespace bke {
 
@@ -28,12 +29,12 @@ struct EditMeshData {
   Array<float3> vert_positions;
 
   /**
-   * Lazily initialized vertex normal cache (used when `vert_positions` is set.
+   * Lazily initialized vertex normal cache (used when `vert_positions` is set).
    * Access via #BKE_editmesh_cache_ensure_vert_normals instead of directly.
    */
   Array<float3> vert_normals;
   /**
-   * Lazily initialized face normal cache (used when `vert_positions` is set.
+   * Lazily initialized face normal cache (used when `vert_positions` is set).
    * Access via #BKE_editmesh_cache_ensure_face_normals instead of directly.
    */
   Array<float3> face_normals;
@@ -46,12 +47,12 @@ struct EditMeshData {
 
 }  // namespace bke
 
-Span<float3> BKE_editmesh_cache_ensure_face_normals(BMEditMesh &em, bke::EditMeshData &emd);
-Span<float3> BKE_editmesh_cache_ensure_vert_normals(BMEditMesh &em, bke::EditMeshData &emd);
+Span<float3> BKE_editmesh_cache_ensure_face_normals(BMesh &bm, bke::EditMeshData &emd);
+Span<float3> BKE_editmesh_cache_ensure_vert_normals(BMesh &bm, bke::EditMeshData &emd);
 
-Span<float3> BKE_editmesh_cache_ensure_face_centers(BMEditMesh &em, bke::EditMeshData &emd);
+Span<float3> BKE_editmesh_cache_ensure_face_centers(BMesh &bm, bke::EditMeshData &emd);
 
-std::optional<Bounds<float3>> BKE_editmesh_cache_calc_minmax(const BMEditMesh &em,
+std::optional<Bounds<float3>> BKE_editmesh_cache_calc_minmax(BMesh &bm,
                                                              const bke::EditMeshData &emd);
 
 }  // namespace blender

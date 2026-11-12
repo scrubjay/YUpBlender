@@ -18,13 +18,13 @@ static void node_declare(NodeDeclarationBuilder &b)
       .default_value(0.01f)
       .min(0.0f)
       .subtype(PROP_DISTANCE)
-      .supports_field()
+      .structure_type(StructureType::Field)
       .description(
           "The distance a point can be from the surface before the face is no longer "
           "considered planar");
   b.add_output<decl::Bool>("Planar"_ustr)
       .translation_context(BLT_I18NCONTEXT_ID_NODETREE)
-      .field_source();
+      .structure_type(StructureType::Field);
 }
 
 class PlanarFieldInput final : public bke::MeshFieldInput {
@@ -90,6 +90,11 @@ class PlanarFieldInput final : public bke::MeshFieldInput {
   std::optional<AttrDomain> preferred_domain(const Mesh & /*mesh*/) const override
   {
     return AttrDomain::Face;
+  }
+
+  bke::NativeFieldDomain native_domain_info(const Mesh & /*mesh*/) const override
+  {
+    return bke::NativeFieldDomain::Domain{AttrDomain::Face};
   }
 };
 

@@ -15,10 +15,10 @@
 #include "MEM_guardedalloc.h"
 
 #include "BLI_bounds.hh"
-#include "BLI_math_geom.h"
-#include "BLI_math_matrix.h"
-#include "BLI_string_utf8.h"
-#include "BLI_utildefines.h"
+#include "BLI_math_geom_c.hh"
+#include "BLI_math_matrix_c.hh"
+#include "BLI_string_utf8.hh"
+#include "BLI_utildefines.hh"
 
 #include "DNA_object_types.h"
 #include "DNA_userdef_types.h"
@@ -326,7 +326,8 @@ static void voxel_size_edit_draw(const bContext *C, ARegion * /*region*/, void *
   Scene *scene = CTX_data_scene(C);
   const UnitSettings &unit = scene->unit;
 
-  BKE_unit_value_as_string_scaled(str, sizeof(str), cd->voxel_size, -3, B_UNIT_LENGTH, unit, true);
+  BKE_unit_value_as_string_scaled(
+      str, sizeof(str), cd->voxel_size, -3, B_UNIT_LENGTH, unit, true, true);
   strdrawlen = BLI_strlen_utf8(str);
 
   immUnbindProgram();
@@ -795,8 +796,8 @@ static Mesh *remesh_symmetry_bisect(Mesh *mesh, eSymmetryAxes symmetry_axes)
     eSymmetryAxes symm_it = eSymmetryAxes(1 << i);
     if (symmetry_axes & symm_it) {
       axis = i;
-      mmd.flag = 0;
-      mmd.flag &= MOD_MIR_BISECT_AXIS_X << i;
+      mmd.flag = {};
+      mmd.flag &= MirrorModifierFlag(int(MOD_MIR_BISECT_AXIS_X) << i);
       zero_v3(plane_no);
       plane_no[axis] = -1.0f;
       mesh_bisect_temp = mesh_bisect;
@@ -827,8 +828,8 @@ static Mesh *remesh_symmetry_mirror(Object *ob, Mesh *mesh, eSymmetryAxes symmet
     eSymmetryAxes symm_it = eSymmetryAxes(1 << i);
     if (symmetry_axes & symm_it) {
       axis = i;
-      mmd.flag = 0;
-      mmd.flag &= MOD_MIR_AXIS_X << i;
+      mmd.flag = {};
+      mmd.flag &= MirrorModifierFlag(int(MOD_MIR_AXIS_X) << i);
       mesh_mirror_temp = mesh_mirror;
       mesh_mirror = BKE_mesh_mirror_apply_mirror_on_axis_for_modifier(
           &mmd, ob, mesh_mirror, axis, true, nullptr, nullptr);
@@ -928,7 +929,7 @@ static void quadriflow_end_job(void *customdata)
   Object *ob = qj->owner;
 
   if (qj->is_nonblocking_job) {
-    WM_locked_interface_set(static_cast<wmWindowManager *>(G_MAIN->wm.first), false);
+    WM_locked_interface_set(G_MAIN->wm.first(), false);
   }
 
   ReportList *reports = qj->worker_status->reports;
@@ -991,7 +992,7 @@ static wmOperatorStatus quadriflow_remesh_exec(bContext *C, wmOperator *op)
   }
   else {
     job->use_mesh_symmetry = false;
-    job->symmetry_axes = eSymmetryAxes(0);
+    job->symmetry_axes = eSymmetryAxes{};
   }
 
   eQuadreFlowStatus status = QUADRIFLOW_STATUS_SUCCESS;

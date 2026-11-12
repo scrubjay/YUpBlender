@@ -50,24 +50,26 @@ ccl_device_template_spec float volume_attribute_value(const float4 value)
   return average(make_float3(value));
 }
 
-ccl_device_template_spec float2 volume_attribute_value(const float4 /*value*/)
+ccl_device_template_spec float2 volume_attribute_value(const float4 value)
 {
-  kernel_assert(!"Float2 attribute not supported for volumes");
-  return zero_float2();
+  return make_float2(value.x, value.y);
 }
 
 ccl_device_template_spec float3 volume_attribute_value(const float4 value)
 {
-  if (value.w > 1e-6f && value.w != 1.0f) {
-    /* For RGBA colors, unpremultiply after interpolation. */
-    return make_float3(value) / value.w;
-  }
   return make_float3(value);
 }
 
 ccl_device_template_spec float4 volume_attribute_value(const float4 value)
 {
   return value;
+}
+
+ccl_device_template_spec Quaternion volume_attribute_value(const float4 value)
+{
+  /* Attribute sampling code uses float4 as an intermediate format, and quaternion in stored as
+   * make_float4(q.w, q.x, q.y, q.z). */
+  return make_quaternion(value.x, value.y, value.z, value.w);
 }
 
 ccl_device float volume_attribute_alpha(const float4 value)
@@ -81,7 +83,29 @@ ccl_device float4 volume_attribute_float4(KernelGlobals kg,
                                           const bool stochastic)
 {
   if (desc.element & (ATTR_ELEMENT_OBJECT | ATTR_ELEMENT_MESH)) {
-    return kernel_data_fetch(attributes_float4, desc.offset);
+    switch (desc.type) {
+      case NODE_ATTR_FLOAT: {
+        const float f = kernel_data_fetch(attributes_float, desc.offset);
+        return make_float4(f, f, f, 1.0f);
+      }
+      case NODE_ATTR_FLOAT2: {
+        const float2 f = kernel_data_fetch(attributes_float2, desc.offset);
+        return make_float4(f.x, f.y, 0.0f, 1.0f);
+      }
+      case NODE_ATTR_FLOAT3: {
+        const float3 f = kernel_data_fetch(attributes_float3, desc.offset);
+        return make_float4(f.x, f.y, f.z, 1.0f);
+      }
+      case NODE_ATTR_FLOAT4:
+      case NODE_ATTR_RGBA:
+        return kernel_data_fetch(attributes_float4, desc.offset);
+      case NODE_ATTR_QUATERNION:
+        return make_float4(kernel_data_fetch(attributes_quaternion, desc.offset));
+      case NODE_ATTR_SPHERICAL_HARMONICS_REST:
+        return make_float4(0.0f, 0.0f, 0.0f, 1.0f);
+      case NODE_ATTR_MATRIX:
+        return zero_float4();
+    }
   }
   if (desc.element & ATTR_ELEMENT_VOXEL) {
     /* todo: optimize this so we don't have to transform both here and in
@@ -89,9 +113,14 @@ ccl_device float4 volume_attribute_float4(KernelGlobals kg,
      * common case where transform is translation/scale only. */
     float3 P = sd->P;
     object_inverse_position_transform(kg, sd, &P);
-    const InterpolationType interp = (sd->flag & SD_VOLUME_CUBIC) ? INTERPOLATION_CUBIC :
-                                                                    INTERPOLATION_NONE;
-    return kernel_image_interp_3d(kg, sd, desc.offset, P, interp, stochastic);
+    const InterpolationType interp = (sd->shader_flag & SD_VOLUME_CUBIC) ? INTERPOLATION_CUBIC :
+                                                                           INTERPOLATION_NONE;
+    const float4 value = kernel_image_interp_3d(kg, sd, desc.offset, P, interp, stochastic);
+    if (value.w > 1e-6f && value.w != 1.0f) {
+      /* For RGBA colors, unpremultiply after interpolation. */
+      return make_float4(make_float3(value) / value.w, value.w);
+    }
+    return value;
   }
   return zero_float4();
 }

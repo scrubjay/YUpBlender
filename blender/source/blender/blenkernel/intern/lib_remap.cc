@@ -11,7 +11,7 @@
 #include "CLG_log.h"
 
 #include "BLI_array.hh"
-#include "BLI_utildefines.h"
+#include "BLI_utildefines.hh"
 
 #include "DNA_collection_types.h"
 #include "DNA_object_types.h"
@@ -374,7 +374,7 @@ static void libblock_remap_data_postprocess_object_update(Main *bmain,
   }
 
   if (old_ob == nullptr) {
-    for (Object *ob = static_cast<Object *>(bmain->objects.first); ob != nullptr;
+    for (Object *ob = bmain->objects.first(); ob != nullptr;
          ob = static_cast<Object *>(ob->id.next))
     {
       if (ob->type == OB_MBALL && BKE_mball_is_basis(ob)) {
@@ -383,7 +383,7 @@ static void libblock_remap_data_postprocess_object_update(Main *bmain,
     }
   }
   else {
-    for (Object *ob = static_cast<Object *>(bmain->objects.first); ob != nullptr;
+    for (Object *ob = bmain->objects.first(); ob != nullptr;
          ob = static_cast<Object *>(ob->id.next))
     {
       if (ob->type == OB_MBALL && BKE_mball_is_basis_for(ob, old_ob)) {
@@ -492,10 +492,9 @@ static void libblock_remap_reset_remapping_status_fn(ID *old_id, ID *new_id)
  * post-process/depsgraph update won't happen).
  * \param id: the data-block to operate on
  * (can be nullptr, in which case we operate over all IDs from given bmain).
- * \param old_id: the data-block to dereference (may be nullptr if \a id is non-nullptr).
- * \param new_id: the new data-block to replace \a old_id references with (may be nullptr).
- * \param r_id_remap_data: if non-nullptr, the IDRemap struct to use
- * (useful to retrieve info about remapping process).
+ * \param remap_type: remap or cleanup mode (see #eIDRemapType).
+ * \param id_remapper: the `old_id` -> `new_id` mappings to apply.
+ * \param remap_flags: combination of #ID_REMAP_* flags.
  */
 static void libblock_remap_data(
     Main *bmain, ID *id, eIDRemapType remap_type, IDRemapper &id_remapper, const int remap_flags)
@@ -629,9 +628,7 @@ static void libblock_remap_foreach_idpair(ID *old_id, ID *new_id, Main *bmain, i
     case ID_PT:
     case ID_VO:
       if (new_id) { /* Only affects us in case obdata was relinked (changed). */
-        for (Object *ob = static_cast<Object *>(bmain->objects.first); ob;
-             ob = static_cast<Object *>(ob->id.next))
-        {
+        for (Object *ob = bmain->objects.first(); ob; ob = static_cast<Object *>(ob->id.next)) {
           libblock_remap_data_postprocess_obdata_relink(bmain, ob, new_id);
         }
       }

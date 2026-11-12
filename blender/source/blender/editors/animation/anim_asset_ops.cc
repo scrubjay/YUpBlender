@@ -2,7 +2,11 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
-#include "BLI_listbase.h"
+/** \file
+ * \ingroup edanimation
+ */
+
+#include "BLI_listbase.hh"
 
 #include "BKE_asset.hh"
 #include "BKE_asset_edit.hh"
@@ -62,7 +66,8 @@ static const EnumPropertyItem *rna_asset_library_reference_itemf(bContext * /*C*
   const EnumPropertyItem *items = ed::asset::library_reference_to_rna_enum_itemf(
       /*include_readonly=*/false,
       /*include_current_file=*/true,
-      /*include_remote_libraries=*/false);
+      /*include_remote_libraries=*/false,
+      /*include_separate_online_essentials=*/false);
   *r_free = true;
   BLI_assert(items != nullptr);
   return items;
@@ -116,6 +121,7 @@ static blender::animrig::Action &extract_pose(Main &bmain, const Span<Object *> 
    * slots on the same action. */
 
   using namespace blender::animrig;
+  using blender::animrig::Strip;
   Action &action = action_add(bmain, "pose_create");
   Layer &layer = action.layer_add("pose");
   Strip &strip = layer.strip_add(action, Strip::Type::Keyframe);
@@ -135,13 +141,15 @@ static blender::animrig::Action &extract_pose(Main &bmain, const Span<Object *> 
       const slot_handle_t pose_object_slot = pose_object->adt->slot_handle;
       foreach_fcurve_in_action_slot(
           pose_object_action, pose_object_slot, [&](const FCurve &fcurve) {
-            RNAPath existing_path = {fcurve.rna_path, std::nullopt, fcurve.array_index};
+            RNAPath existing_path = {fcurve.rna_path(), std::nullopt, fcurve.array_index};
             existing_paths.add(existing_path);
           });
     }
 
     for (bPoseChannel &pose_bone : pose_object->pose->chanbase) {
-      if (!blender::animrig::bone_is_selected(armature, &pose_bone)) {
+      if (!blender::animrig::bone_is_selected(armature,
+                                              {&pose_bone, pose_bone.bone_get(*pose_object)}))
+      {
         continue;
       }
       PointerRNA bone_pointer = RNA_pointer_create_discrete(
@@ -197,7 +205,7 @@ static void ensure_asset_ui_visible(bContext &C)
     const bScreen *screen = WM_window_get_active_screen(&win);
     for (ScrArea &area : screen->areabase) {
       if (area.type->spaceid == SPACE_FILE) {
-        SpaceFile *sfile = reinterpret_cast<SpaceFile *>(area.spacedata.first);
+        SpaceFile *sfile = area.spacedata.first_as<SpaceFile>();
         if (sfile->browse_mode == FILE_BROWSE_MODE_ASSETS) {
           /* Asset Browser is open. */
           return;
@@ -277,7 +285,8 @@ static wmOperatorStatus create_pose_asset_local(bContext *C,
    * Just being defensive here. */
   BLI_assert(library);
   if (catalog_path_c[0] && library) {
-    const asset_system::AssetCatalogPath catalog_path(catalog_path_c);
+    const asset_system::AssetCatalogPath catalog_path =
+        asset_system::AssetCatalogPath::from_user_input(catalog_path_c);
     asset_system::AssetCatalog &catalog = asset::library_ensure_catalogs_in_path(*library,
                                                                                  catalog_path);
     BKE_asset_metadata_catalog_id_set(&meta_data, catalog.catalog_id, catalog.simple_name.c_str());
@@ -338,7 +347,8 @@ static wmOperatorStatus create_pose_asset_user_library(bContext *C,
 
   AssetMetaData &meta_data = *pose_action.id.asset_data;
   if (catalog_path_c[0]) {
-    const asset_system::AssetCatalogPath catalog_path(catalog_path_c);
+    const asset_system::AssetCatalogPath catalog_path =
+        asset_system::AssetCatalogPath::from_user_input(catalog_path_c);
     const asset_system::AssetCatalog &catalog = asset::library_ensure_catalogs_in_path(
         *library, catalog_path);
     BKE_asset_metadata_catalog_id_set(&meta_data, catalog.catalog_id, catalog.simple_name.c_str());
@@ -453,6 +463,7 @@ void POSELIB_OT_create_pose_asset(wmOperatorType *ot)
 
   PropertyRNA *prop = RNA_def_property(ot->srna, "asset_library_reference", PROP_ENUM, PROP_NONE);
   RNA_def_enum_funcs(prop, rna_asset_library_reference_itemf);
+  RNA_def_property_enum_default(prop, ASSET_LIBRARY_LOCAL);
   RNA_def_property_ui_text(prop, "Library", "Asset library used to store the new pose");
 
   prop = RNA_def_string(
@@ -570,7 +581,9 @@ static Vector<PathValue> generate_path_values(Object &pose_object)
   Vector<PathValue> path_values;
   const bArmature *armature = id_cast<bArmature *>(pose_object.data);
   for (bPoseChannel &pose_bone : pose_object.pose->chanbase) {
-    if (!blender::animrig::bone_is_selected(armature, &pose_bone)) {
+    if (!blender::animrig::bone_is_selected(armature,
+                                            {&pose_bone, pose_bone.bone_get(pose_object)}))
+    {
       continue;
     }
     PointerRNA bone_pointer = RNA_pointer_create_discrete(
@@ -642,7 +655,7 @@ static void update_pose_action_from_scene(Main *bmain,
 
   Set<RNAPath> existing_paths;
   foreach_fcurve_in_action_slot(pose_action, slot.handle, [&](const FCurve &fcurve) {
-    existing_paths.add({fcurve.rna_path, std::nullopt, fcurve.array_index});
+    existing_paths.add({fcurve.rna_path(), std::nullopt, fcurve.array_index});
   });
 
   switch (mode) {
@@ -694,7 +707,7 @@ static void update_pose_action_from_scene(Main *bmain,
       Map<RNAPath, FCurve *> fcurve_map;
       foreach_fcurve_in_action_slot(
           pose_action, pose_action.slot_array[0]->handle, [&](FCurve &fcurve) {
-            fcurve_map.add({fcurve.rna_path, std::nullopt, fcurve.array_index}, &fcurve);
+            fcurve_map.add({fcurve.rna_path(), std::nullopt, fcurve.array_index}, &fcurve);
           });
       for (const PathValue &path_value : path_values) {
         if (existing_paths.contains(path_value.rna_path)) {
@@ -710,7 +723,10 @@ static void update_pose_action_from_scene(Main *bmain,
 static wmOperatorStatus pose_asset_modify_exec(bContext *C, wmOperator *op)
 {
   bAction *action = get_action_of_selected_asset(C);
-  BLI_assert_msg(action, "Poll should have checked action exists");
+  if (!action) {
+    BKE_report(op->reports, RPT_ERROR, "Failed to load pose asset");
+    return OPERATOR_CANCELLED;
+  }
 
   if (ID_IS_LINKED(action) && !is_pose_asset_blend_editable(*action, op->reports)) {
     return OPERATOR_CANCELLED;

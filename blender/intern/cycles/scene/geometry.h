@@ -44,21 +44,27 @@ enum {
   ATTR_FLOAT4_MODIFIED = (1 << 6),
   ATTR_UCHAR4_MODIFIED = (1 << 7),
   ATTR_NORMAL_MODIFIED = (1 << 8),
+  ATTR_QUATERNION_MODIFIED = (1 << 9),
+  ATTR_SPHERICAL_HARMONICS_REST_MODIFIED = (1 << 10),
 
-  CURVE_DATA_NEED_REALLOC = (1 << 9),
-  MESH_DATA_NEED_REALLOC = (1 << 10),
-  POINT_DATA_NEED_REALLOC = (1 << 11),
+  CURVE_DATA_NEED_REALLOC = (1 << 11),
+  MESH_DATA_NEED_REALLOC = (1 << 12),
+  POINT_DATA_NEED_REALLOC = (1 << 13),
 
-  ATTR_FLOAT_NEEDS_REALLOC = (1 << 12),
-  ATTR_FLOAT2_NEEDS_REALLOC = (1 << 13),
-  ATTR_FLOAT3_NEEDS_REALLOC = (1 << 14),
-  ATTR_FLOAT4_NEEDS_REALLOC = (1 << 15),
-  ATTR_UCHAR4_NEEDS_REALLOC = (1 << 16),
-  ATTR_NORMAL_NEEDS_REALLOC = (1 << 17),
+  ATTR_FLOAT_NEEDS_REALLOC = (1 << 14),
+  ATTR_FLOAT2_NEEDS_REALLOC = (1 << 15),
+  ATTR_FLOAT3_NEEDS_REALLOC = (1 << 16),
+  ATTR_FLOAT4_NEEDS_REALLOC = (1 << 17),
+  ATTR_UCHAR4_NEEDS_REALLOC = (1 << 18),
+  ATTR_NORMAL_NEEDS_REALLOC = (1 << 19),
+  ATTR_QUATERNION_NEEDS_REALLOC = (1 << 20),
+  ATTR_SPHERICAL_HARMONICS_REST_NEEDS_REALLOC = (1 << 21),
 
   ATTRS_NEED_REALLOC = (ATTR_FLOAT_NEEDS_REALLOC | ATTR_FLOAT2_NEEDS_REALLOC |
                         ATTR_FLOAT3_NEEDS_REALLOC | ATTR_FLOAT4_NEEDS_REALLOC |
-                        ATTR_UCHAR4_NEEDS_REALLOC | ATTR_NORMAL_NEEDS_REALLOC),
+                        ATTR_UCHAR4_NEEDS_REALLOC | ATTR_NORMAL_NEEDS_REALLOC |
+                        ATTR_QUATERNION_NEEDS_REALLOC |
+                        ATTR_SPHERICAL_HARMONICS_REST_NEEDS_REALLOC),
   DEVICE_MESH_DATA_NEEDS_REALLOC = (MESH_DATA_NEED_REALLOC | ATTRS_NEED_REALLOC),
   DEVICE_POINT_DATA_NEEDS_REALLOC = (POINT_DATA_NEED_REALLOC | ATTRS_NEED_REALLOC),
   DEVICE_CURVE_DATA_NEEDS_REALLOC = (CURVE_DATA_NEED_REALLOC | ATTRS_NEED_REALLOC),
@@ -113,6 +119,18 @@ class Geometry : public Node {
   /* Shader Properties */
   bool has_volume;         /* Set in the device_update_flags(). */
   bool has_surface_bssrdf; /* Set in the device_update_flags(). */
+
+  /* Position attribute. */
+  const packed_float3 *get_position() const;
+  packed_float3 *get_position_for_write();
+  void tag_position_modified();
+  bool position_is_modified() const;
+
+  /* Radius attribute. */
+  const float *get_radius() const;
+  float *get_radius_for_write();
+  void tag_radius_modified();
+  bool radius_is_modified() const;
 
   /* Update Flags */
   bool need_update_rebuild;
@@ -250,6 +268,8 @@ class GeometryManager {
   /* Constructor/Destructor */
   GeometryManager();
   ~GeometryManager();
+
+  void update_interactive_motion(Scene *scene);
 
   /* Device Updates */
   void device_update_preprocess(Device *device, Scene *scene, Progress &progress);

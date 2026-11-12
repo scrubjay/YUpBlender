@@ -22,12 +22,12 @@
 #include "CLG_log.h"
 
 #include "BLI_path_utils.hh"
-#include "BLI_string.h"
-#include "BLI_string_utf8.h"
-#include "BLI_threads.h"
-#include "BLI_utildefines.h"
+#include "BLI_string.hh"
+#include "BLI_string_utf8.hh"
+#include "BLI_threads.hh"
+#include "BLI_utildefines.hh"
 #ifdef WITH_PYTHON_MODULE
-#  include "BLI_string.h"
+#  include "BLI_string.hh"
 #endif
 
 #include "BLT_translation.hh"
@@ -44,6 +44,9 @@
 
 #include "bpy_app_translations.hh"
 
+#include "DNA_freestyle_types.h"
+#include "DNA_layer_types.h"
+#include "DNA_scene_types.h"
 #include "DNA_text_types.h"
 
 #include "BKE_appdir.hh"
@@ -93,7 +96,7 @@ static bool py_use_user_env = false;
 // #define TIME_PY_RUN /* Simple python tests. prints on exit. */
 
 #ifdef TIME_PY_RUN
-#  include "BLI_time.h"
+#  include "BLI_time.hh"
 static int bpy_timer_count = 0;
 /** Time since python starts. */
 static double bpy_timer;
@@ -122,12 +125,13 @@ void BPY_context_update(bContext *C)
  * Wrap `bpy_context_set` & `bpy_context_set_allow_null`.
  *
  * \param allow_null_context: Ideally we would phase this out,
- * however some code uses a null context, see: `bpy_context_set_allow_null` doc-string for details.
+ * however some code uses a null context, see: `bpy_context_set_allow_null` docstring for details.
  */
-static void bpy_context_set_ex(bContext *C,
+static bool bpy_context_set_ex(bContext *C,
                                PyGILState_STATE *gilstate,
                                const bool allow_null_context)
 {
+  bool context_set = false;
   py_call_level++;
 
   if (gilstate) {
@@ -140,6 +144,7 @@ static void bpy_context_set_ex(bContext *C,
     }
 
     BPY_context_update(C);
+    context_set = true;
 
     if (C != nullptr) {
       pyrna_context_init(C);
@@ -156,16 +161,18 @@ static void bpy_context_set_ex(bContext *C,
     bpy_timer_count++;
 #endif
   }
+
+  return context_set;
 }
 
-void bpy_context_set(bContext *C, PyGILState_STATE *gilstate)
+bool bpy_context_set(bContext *C, PyGILState_STATE *gilstate)
 {
-  bpy_context_set_ex(C, gilstate, false);
+  return bpy_context_set_ex(C, gilstate, false);
 }
 
-void bpy_context_set_allow_null(bContext *C, PyGILState_STATE *gilstate)
+bool bpy_context_set_allow_null(bContext *C, PyGILState_STATE *gilstate)
 {
-  bpy_context_set_ex(C, gilstate, true);
+  return bpy_context_set_ex(C, gilstate, true);
 }
 
 void bpy_context_clear(bContext *C, const PyGILState_STATE *gilstate)
@@ -200,7 +207,7 @@ void bpy_context_clear(bContext *C, const PyGILState_STATE *gilstate)
 
 static void bpy_context_end(bContext *C)
 {
-  if (UNLIKELY(C == nullptr)) {
+  if (C == nullptr) [[unlikely]] {
     return;
   }
   CTX_wm_operator_poll_msg_clear(C);
@@ -359,7 +366,7 @@ static _inittab bpy_internal_modules[] = {
  */
 static void pystatus_exit_on_error(const PyStatus &status)
 {
-  if (UNLIKELY(PyStatus_Exception(status))) {
+  if (PyStatus_Exception(status)) [[unlikely]] {
     fputs("Internal error initializing Python!\n", stderr);
     /* This calls `exit`. */
     Py_ExitStatusException(status);
@@ -822,9 +829,24 @@ void BPY_modules_load_user(bContext *C)
 
   bpy_context_set(C, &gilstate);
 
-  for (text = static_cast<Text *>(bmain->texts.first); text;
-       text = static_cast<Text *>(text->id.next))
+  if (!(G.f & (G_FLAG_SCRIPT_AUTOEXEC | G_FLAG_SCRIPT_AUTOEXEC_FAIL |
+               G_FLAG_SCRIPT_AUTOEXEC_FAIL_QUIET)))
   {
+    for (Scene &scene : bmain->scenes) {
+      for (ViewLayer &view_layer : scene.view_layers) {
+        for (const FreestyleModuleConfig &module_conf : view_layer.freestyle_config.modules) {
+          if (module_conf.script) {
+            G.f |= G_FLAG_SCRIPT_AUTOEXEC_FAIL;
+            SNPRINTF_UTF8(G.autoexec_fail,
+                          RPT_("Freestyle style module '%s'"),
+                          module_conf.script->id.name + 2);
+          }
+        }
+      }
+    }
+  }
+
+  for (text = bmain->texts.first(); text; text = static_cast<Text *>(text->id.next)) {
     if (text->flags & TXT_ISSCRIPT) {
       if (!(G.f & G_FLAG_SCRIPT_AUTOEXEC)) {
         if (!(G.f & G_FLAG_SCRIPT_AUTOEXEC_FAIL_QUIET)) {
@@ -846,6 +868,7 @@ void BPY_modules_load_user(bContext *C)
       }
     }
   }
+
   bpy_context_clear(C, &gilstate);
 }
 
@@ -1164,6 +1187,16 @@ PyMODINIT_FUNC PyInit_bpy()
     return nullptr; /* The error has been set. */
   }
 
+  /* Assign dummy type. */
+  dealloc_obj_Type.tp_name = "dealloc_obj";
+  dealloc_obj_Type.tp_basicsize = sizeof(dealloc_obj);
+  dealloc_obj_Type.tp_dealloc = dealloc_obj_dealloc;
+  dealloc_obj_Type.tp_flags = Py_TPFLAGS_DEFAULT;
+
+  if (PyType_Ready(&dealloc_obj_Type) < 0) {
+    return nullptr;
+  }
+
   PyObject *bpy_proxy = PyModule_Create(&bpy_proxy_def);
 
   /* Problem:
@@ -1182,16 +1215,6 @@ PyMODINIT_FUNC PyInit_bpy()
 
   /* Assign an object which is freed after `__file__` is assigned. */
   dealloc_obj *dob;
-
-  /* Assign dummy type. */
-  dealloc_obj_Type.tp_name = "dealloc_obj";
-  dealloc_obj_Type.tp_basicsize = sizeof(dealloc_obj);
-  dealloc_obj_Type.tp_dealloc = dealloc_obj_dealloc;
-  dealloc_obj_Type.tp_flags = Py_TPFLAGS_DEFAULT;
-
-  if (PyType_Ready(&dealloc_obj_Type) < 0) {
-    return nullptr;
-  }
 
   dob = (dealloc_obj *)dealloc_obj_Type.tp_alloc(&dealloc_obj_Type, 0);
   dob->mod = bpy_proxy;                                       /* borrow */

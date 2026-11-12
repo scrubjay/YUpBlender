@@ -86,7 +86,7 @@ PyDoc_STRVAR(
     "   Returns an orientedViewEdgeIterator pointing to the ViewEdge given\n"
     "   as argument.\n"
     "\n"
-    "   :arg edge: A ViewEdge object.\n"
+    "   :param edge: A ViewEdge object.\n"
     "   :type edge: :class:`ViewEdge`\n"
     "   :return: An orientedViewEdgeIterator pointing to the given ViewEdge.\n"
     "   :rtype: :class:`orientedViewEdgeIterator`\n");
@@ -95,7 +95,14 @@ static PyObject *ViewVertex_edges_iterator(BPy_ViewVertex *self, PyObject *args,
   static const char *kwlist[] = {"edge", nullptr};
   PyObject *py_ve;
 
-  if (PyArg_ParseTupleAndKeywords(args, kwds, "O!", (char **)kwlist, &ViewEdge_Type, &py_ve)) {
+  if (PyArg_ParseTupleAndKeywords(args,
+                                  kwds,
+                                  "O!" /* `edge` */
+                                  ":edges_iterator",
+                                  (char **)kwlist,
+                                  &ViewEdge_Type,
+                                  &py_ve))
+  {
     return nullptr;
   }
   ViewEdge *ve = ((BPy_ViewEdge *)py_ve)->ve;

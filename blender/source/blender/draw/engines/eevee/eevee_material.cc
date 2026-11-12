@@ -6,15 +6,15 @@
  * \ingroup eevee
  */
 
-#include "BLI_time.h"
+#include "BLI_time.hh"
 #include "DNA_material_types.h"
 
 #include "BKE_lib_id.hh"
 #include "BKE_material.hh"
 #include "BKE_node.hh"
 #include "BKE_node_legacy_types.hh"
-
-#include "NOD_shader.h"
+#include "BKE_node_tree_update.hh"
+#include "BKE_scene.hh"
 
 #include "eevee_instance.hh"
 #include "eevee_material.hh"
@@ -36,18 +36,19 @@ MaterialModule::MaterialModule(Instance &inst) : inst_(inst)
     /* Use 0.18 as it is close to middle gray. Middle gray is typically defined as 18% reflectance
      * of visible light and commonly used for VFX balls. */
     bNode *bsdf = bke::node_add_static_node(nullptr, *ntree, SH_NODE_BSDF_DIFFUSE);
-    bNodeSocket *base_color = bke::node_find_socket(*bsdf, SOCK_IN, "Color");
+    bNodeSocket *base_color = bke::node_find_socket(*bsdf, SOCK_IN, "Color"_ustr);
     copy_v3_fl((static_cast<bNodeSocketValueRGBA *>(base_color->default_value))->value, 0.18f);
 
     bNode *output = bke::node_add_static_node(nullptr, *ntree, SH_NODE_OUTPUT_MATERIAL);
 
     bke::node_add_link(*ntree,
                        *bsdf,
-                       *bke::node_find_socket(*bsdf, SOCK_OUT, "BSDF"),
+                       *bke::node_find_socket(*bsdf, SOCK_OUT, "BSDF"_ustr),
                        *output,
-                       *bke::node_find_socket(*output, SOCK_IN, "Surface"));
+                       *bke::node_find_socket(*output, SOCK_IN, "Surface"_ustr));
 
     bke::node_set_active(*ntree, *output);
+    BKE_ntree_update_without_main(*ntree);
   }
   {
     metallic_mat = BKE_id_new_nomain<blender::Material>("EEVEE default metal");
@@ -55,20 +56,21 @@ MaterialModule::MaterialModule(Instance &inst) : inst_(inst)
     metallic_mat->surface_render_method = MA_SURFACE_METHOD_FORWARD;
 
     bNode *bsdf = bke::node_add_static_node(nullptr, *ntree, SH_NODE_BSDF_GLOSSY);
-    bNodeSocket *base_color = bke::node_find_socket(*bsdf, SOCK_IN, "Color");
+    bNodeSocket *base_color = bke::node_find_socket(*bsdf, SOCK_IN, "Color"_ustr);
     copy_v3_fl((static_cast<bNodeSocketValueRGBA *>(base_color->default_value))->value, 1.0f);
-    bNodeSocket *roughness = bke::node_find_socket(*bsdf, SOCK_IN, "Roughness");
+    bNodeSocket *roughness = bke::node_find_socket(*bsdf, SOCK_IN, "Roughness"_ustr);
     (static_cast<bNodeSocketValueFloat *>(roughness->default_value))->value = 0.0f;
 
     bNode *output = bke::node_add_static_node(nullptr, *ntree, SH_NODE_OUTPUT_MATERIAL);
 
     bke::node_add_link(*ntree,
                        *bsdf,
-                       *bke::node_find_socket(*bsdf, SOCK_OUT, "BSDF"),
+                       *bke::node_find_socket(*bsdf, SOCK_OUT, "BSDF"_ustr),
                        *output,
-                       *bke::node_find_socket(*output, SOCK_IN, "Surface"));
+                       *bke::node_find_socket(*output, SOCK_IN, "Surface"_ustr));
 
     bke::node_set_active(*ntree, *output);
+    BKE_ntree_update_without_main(*ntree);
   }
   {
     default_surface = reinterpret_cast<blender::Material *>(BKE_id_copy_ex(
@@ -82,7 +84,7 @@ MaterialModule::MaterialModule(Instance &inst) : inst_(inst)
 
     /* Use emission and output material to be compatible with both World and Material. */
     bNode *bsdf = bke::node_add_static_node(nullptr, *ntree, SH_NODE_EMISSION);
-    bNodeSocket *color = bke::node_find_socket(*bsdf, SOCK_IN, "Color");
+    bNodeSocket *color = bke::node_find_socket(*bsdf, SOCK_IN, "Color"_ustr);
     copy_v3_fl3(
         (static_cast<bNodeSocketValueRGBA *>(color->default_value))->value, 1.0f, 0.0f, 1.0f);
 
@@ -90,11 +92,12 @@ MaterialModule::MaterialModule(Instance &inst) : inst_(inst)
 
     bke::node_add_link(*ntree,
                        *bsdf,
-                       *bke::node_find_socket(*bsdf, SOCK_OUT, "Emission"),
+                       *bke::node_find_socket(*bsdf, SOCK_OUT, "Emission"_ustr),
                        *output,
-                       *bke::node_find_socket(*output, SOCK_IN, "Surface"));
+                       *bke::node_find_socket(*output, SOCK_IN, "Surface"_ustr));
 
     bke::node_set_active(*ntree, *output);
+    BKE_ntree_update_without_main(*ntree);
   }
 }
 
@@ -109,6 +112,17 @@ MaterialModule::~MaterialModule()
 
 void MaterialModule::begin_sync()
 {
+  float frame = BKE_scene_frame_get(inst_.scene);
+
+  Scene *scene = inst_.scene;
+  bool frame_change = assign_if_different(material_frame, frame);
+  bool time_change = assign_if_different(material_time, float(FRA2TIME(frame)));
+
+  material_time_changed = (time_change || frame_change);
+
+  inst_.uniform_data.data.scene.time = material_time;
+  inst_.uniform_data.data.scene.frame = material_frame;
+
   queued_shaders_count = 0;
   queued_textures_count = 0;
   queued_optimize_shaders_count = 0;
@@ -119,83 +133,8 @@ void MaterialModule::begin_sync()
   gpu_pass_last_update_ = gpu_pass_next_update_;
   gpu_pass_next_update_ = next_update;
 
-  texture_loading_queue_.clear();
   material_map_.clear();
   shader_map_.clear();
-}
-
-void MaterialModule::queue_texture_loading(GPUMaterial *material)
-{
-  ListBaseT<GPUMaterialTexture> textures = GPU_material_textures(material);
-  for (GPUMaterialTexture *tex : ListBaseWrapper<GPUMaterialTexture>(textures)) {
-    if (tex->ima) {
-      const bool use_tile_mapping = tex->tiled_mapping_name[0];
-      ImageUser *iuser = tex->iuser_available ? &tex->iuser : nullptr;
-      ImageGPUTextures gputex = BKE_image_get_gpu_material_texture_try(
-          tex->ima, iuser, use_tile_mapping);
-      if (*gputex.texture == nullptr) {
-        texture_loading_queue_.append(tex);
-      }
-    }
-  }
-}
-
-void MaterialModule::end_sync()
-{
-  if (texture_loading_queue_.is_empty()) {
-    return;
-  }
-
-  if (inst_.is_viewport()) {
-    /* Avoid ghosting of textures. */
-    inst_.sampling.reset();
-  }
-
-  GPU_debug_group_begin("Texture Loading");
-
-  /* Load files from disk in a multithreaded manner. Allow better parallelism. */
-  threading::parallel_for(texture_loading_queue_.index_range(), 1, [&](const IndexRange range) {
-    for (auto i : range) {
-      GPUMaterialTexture *tex = texture_loading_queue_[i];
-      ImageUser *iuser = tex->iuser_available ? &tex->iuser : nullptr;
-      BKE_image_get_tile(tex->ima, 0);
-      threading::isolate_task([&]() {
-        ImBuf *imbuf = BKE_image_acquire_ibuf(tex->ima, iuser, nullptr);
-        BKE_image_release_ibuf(tex->ima, imbuf, nullptr);
-      });
-    }
-  });
-
-  /* Tag time is not thread-safe. */
-  for (GPUMaterialTexture *tex : texture_loading_queue_) {
-    BKE_image_tag_time(tex->ima);
-  }
-
-  /* Avoid any leftover bind before BKE_image_get_gpu_material_texture which could cause assert
-   * about missing specialization constants. */
-  GPU_shader_unbind();
-
-  /* Upload to the GPU (create gpu::Texture). This part still requires a valid GPU context and
-   * is not easily parallelized. */
-  for (GPUMaterialTexture *tex : texture_loading_queue_) {
-    BLI_assert(tex->ima);
-    GPU_debug_group_begin(tex->ima->id.name);
-
-    const bool use_tile_mapping = tex->tiled_mapping_name[0];
-    ImageUser *iuser = tex->iuser_available ? &tex->iuser : nullptr;
-    ImageGPUTextures gputex = BKE_image_get_gpu_material_texture(
-        tex->ima, iuser, use_tile_mapping);
-
-    /* Acquire the textures since they were not existing inside `PassBase::material_set()`. */
-    inst_.manager->acquire_texture(*gputex.texture);
-    if (gputex.tile_mapping) {
-      inst_.manager->acquire_texture(*gputex.tile_mapping);
-    }
-
-    GPU_debug_group_end();
-  }
-  GPU_debug_group_end();
-  texture_loading_queue_.clear();
 }
 
 MaterialPass MaterialModule::material_pass_get(Object *ob,
@@ -216,8 +155,6 @@ MaterialPass MaterialModule::material_pass_get(Object *ob,
   MaterialPass matpass = MaterialPass();
   matpass.gpumat = inst_.shaders.material_shader_get(
       blender_mat, ntree, pipeline_type, geometry_type, use_deferred_compilation, default_mat);
-
-  queue_texture_loading(matpass.gpumat);
 
   const bool is_forward = ELEM(pipeline_type,
                                MAT_PIPE_FORWARD,
@@ -250,7 +187,8 @@ MaterialPass MaterialModule::material_pass_get(Object *ob,
 
   inst_.manager->register_layer_attributes(matpass.gpumat);
 
-  const bool is_transparent = GPU_material_flag_get(matpass.gpumat, GPU_MATFLAG_TRANSPARENT);
+  const bool is_transparent = GPU_material_flag_get(matpass.gpumat, GPU_MATFLAG_TRANSPARENT) ||
+                              geometry_type == MAT_GEOM_GSPLAT;
 
   bool pass_updated = GPU_material_compilation_timestamp(matpass.gpumat) > gpu_pass_last_update_;
 
@@ -275,7 +213,8 @@ MaterialPass MaterialModule::material_pass_get(Object *ob,
     matpass.sub_pass = nullptr;
   }
   else {
-    ShaderKey shader_key(matpass.gpumat, blender_mat, probe_capture);
+    const bool hide_from_raycast = ob->visibility_flag & OB_HIDE_RAYCAST;
+    ShaderKey shader_key(matpass.gpumat, blender_mat, probe_capture, hide_from_raycast);
 
     PassMain::Sub *shader_sub = shader_map_.lookup_or_add_cb(shader_key, [&]() {
       /* First time encountering this shader. Create a sub that will contain materials using it. */
@@ -332,11 +271,14 @@ Material &MaterialModule::material_sync(const ObjectHandle &ob_handle,
     prepass_pipe = has_motion ? MAT_PIPE_PREPASS_DEFERRED_VELOCITY : MAT_PIPE_PREPASS_DEFERRED;
   }
 
-  /** NOTE: Use prepass_pipe instead of surface_pipe, since surface_pipe doesn't take velocity
+  /**
+   * NOTE: Use prepass_pipe instead of surface_pipe, since surface_pipe doesn't take velocity
    * variants into account, causing all users of the same material to use velocity or not based on
    * the first object that was synced.
-   * Note that prepass already takes deferrend vs forward into account. */
-  /** TODO: Find a cleaner solution. */
+   * Note that prepass already takes deferred vs forward into account.
+   *
+   * TODO: Find a cleaner solution.
+   */
   MaterialKey material_key(blender_mat, geometry_type, prepass_pipe, ob->visibility_flag);
 
   Material &mat = material_map_.lookup_or_add_cb(material_key, [&]() {
@@ -411,6 +353,12 @@ blender::Material *MaterialModule::material_from_slot(Object *ob, int slot)
   if (ma == nullptr) {
     if (ob->type == OB_VOLUME) {
       return BKE_material_default_volume();
+    }
+    if (ob->type == OB_POINTCLOUD) {
+      PointCloud &pointcloud = DRW_object_get_data_for_drawing<PointCloud>(*ob);
+      if (pointcloud.type == PointCloudType::GSplat) {
+        return BKE_material_default_gsplat();
+      }
     }
     return BKE_material_default_surface();
   }

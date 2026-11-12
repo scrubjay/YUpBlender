@@ -24,6 +24,7 @@
 #include "scene/pointcloud.h"
 #include "scene/procedural.h"
 #include "scene/scene.h"
+#include "scene/scene_attributes.h"
 #include "scene/shader.h"
 #include "scene/svm.h"
 #include "scene/tables.h"
@@ -75,6 +76,7 @@ Scene ::Scene(const SceneParams &params_, Device *device)
   film = create_node<Film>();
   background = create_node<Background>();
   integrator = create_node<Integrator>();
+  scene_attribute = create_node<SceneAttributes>();
 
   ccl::Film::add_default(this);
   ccl::ShaderManager::add_default(this);
@@ -111,17 +113,20 @@ void Scene::free_memory(bool final)
     film->device_free(device, &dscene, this);
     background->device_free(device, &dscene);
     integrator->device_free(device, &dscene, true);
+    scene_attribute->device_free(device, &dscene, true);
   }
 
   if (final) {
     cameras.clear();
     integrators.clear();
+    scene_attributes.clear();
     films.clear();
     backgrounds.clear();
 
     camera = nullptr;
     dicing_camera = nullptr;
     integrator = nullptr;
+    scene_attribute = nullptr;
     film = nullptr;
     background = nullptr;
   }
@@ -228,7 +233,7 @@ void Scene::device_update(Device *device_, Progress &progress)
      *
      * This does mean the scene might have gotten updated in the meantime, in which case
      * we have to redo the first part of the scene update. */
-    const uint kernel_features = dscene.data.kernel_features;
+    const uint64_t kernel_features = dscene.data.kernel_features;
     scene_updated_while_loading_kernels = false;
     if (!kernels_loaded || loaded_kernel_features != kernel_features) {
       mutex.unlock();
@@ -261,6 +266,13 @@ void Scene::device_update(Device *device_, Progress &progress)
 
   progress.set_status("Updating Background");
   background->device_update(device, &dscene, this);
+
+  if (progress.get_cancel() || device->have_error()) {
+    return;
+  }
+
+  progress.set_status("Updating Scene Attribute");
+  scene_attribute->device_update(device, &dscene, this);
 
   if (progress.get_cancel() || device->have_error()) {
     return;
@@ -395,6 +407,13 @@ void Scene::device_update(Device *device_, Progress &progress)
 
   device->optimize_for_scene(this);
 
+  if (need_motion() == MOTION_PASS_INTERACTIVE) {
+    /* Swap current camera/object/vertex positions to previous positions for next frame. */
+    camera->update_interactive_motion();
+    object_manager->update_interactive_motion(this);
+    geometry_manager->update_interactive_motion(this);
+  }
+
   if (print_stats) {
     const size_t mem_used = util_guarded_get_mem_used();
     const size_t mem_peak = util_guarded_get_mem_peak();
@@ -412,15 +431,22 @@ Scene::MotionType Scene::need_motion() const
   if (integrator->get_motion_blur()) {
     return MOTION_BLUR;
   }
-  if (Pass::contains(passes, PASS_MOTION)) {
-    return MOTION_PASS;
+  const DenoiserPassMask denoiser_motion_passes = DENOISER_PASS_BACKWARD_MOTION |
+                                                  DENOISER_PASS_SPECULAR_MOTION;
+  const bool denoiser_motion = (integrator->get_use_denoise()) &&
+                               (integrator->get_denoiser_passes() & denoiser_motion_passes) != 0;
+  if (denoiser_motion || (Pass::contains(passes, PASS_MOTION) ||
+                          Pass::contains(passes, PASS_DENOISING_BACKWARD_MOTION) ||
+                          Pass::contains(passes, PASS_DENOISING_SPECULAR_MOTION)))
+  {
+    return params.background ? MOTION_PASS : MOTION_PASS_INTERACTIVE;
   }
   return MOTION_NONE;
 }
 
 float Scene::motion_shutter_time()
 {
-  if (need_motion() == Scene::MOTION_PASS) {
+  if (need_motion() == Scene::MOTION_PASS || need_motion() == Scene::MOTION_PASS_INTERACTIVE) {
     return 2.0f;
   }
   return camera->get_shuttertime();
@@ -430,9 +456,6 @@ bool Scene::need_global_attribute(AttributeStandard std) const
 {
   if (std == ATTR_STD_UV) {
     return Pass::contains(passes, PASS_UV);
-  }
-  if (std == ATTR_STD_MOTION_VERTEX_POSITION) {
-    return need_motion() != MOTION_NONE;
   }
   if (std == ATTR_STD_VOLUME_VELOCITY || std == ATTR_STD_VOLUME_VELOCITY_X ||
       std == ATTR_STD_VOLUME_VELOCITY_Y || std == ATTR_STD_VOLUME_VELOCITY_Z)
@@ -450,6 +473,10 @@ void Scene::need_global_attributes(AttributeRequestSet &attributes)
       attributes.add((AttributeStandard)std);
     }
   }
+
+  for (const Shader *shader : shaders) {
+    attributes.add(shader->global_attributes);
+  }
 }
 
 bool Scene::need_update()
@@ -459,12 +486,12 @@ bool Scene::need_update()
 
 bool Scene::need_data_update()
 {
-  return (background->is_modified() || image_manager->need_update() ||
-          object_manager->need_update() || geometry_manager->need_update() ||
-          light_manager->need_update() || lookup_tables->need_update() ||
-          integrator->is_modified() || shader_manager->need_update() ||
-          particle_system_manager->need_update() || bake_manager->need_update() ||
-          film->is_modified() || procedural_manager->need_update());
+  return (
+      background->is_modified() || image_manager->need_update() || object_manager->need_update() ||
+      geometry_manager->need_update() || light_manager->need_update() ||
+      lookup_tables->need_update() || integrator->is_modified() || shader_manager->need_update() ||
+      particle_system_manager->need_update() || bake_manager->need_update() ||
+      film->is_modified() || procedural_manager->need_update() || scene_attribute->is_modified());
 }
 
 bool Scene::need_reset(const bool check_camera)
@@ -485,6 +512,7 @@ void Scene::reset()
 
   background->tag_update(this);
   integrator->tag_update(this, Integrator::UPDATE_ALL);
+  scene_attribute->tag_update(this, SceneAttributes::UPDATE_ALL);
   object_manager->tag_update(this, ObjectManager::UPDATE_ALL);
   geometry_manager->tag_update(this, GeometryManager::UPDATE_ALL);
   light_manager->tag_update(this, LightManager::UPDATE_ALL);
@@ -518,7 +546,7 @@ void Scene::update_kernel_features()
 
   /* These features are not being tweaked as often as shaders,
    * so could be done selective magic for the viewport as well. */
-  uint kernel_features = shader_manager->get_kernel_features(this);
+  uint64_t kernel_features = shader_manager->get_kernel_features(this);
 
   const bool use_motion = need_motion() == Scene::MotionType::MOTION_BLUR;
   kernel_features |= KERNEL_FEATURE_PATH_TRACING;
@@ -557,9 +585,12 @@ void Scene::update_kernel_features()
       kernel_max_prim_count = max(kernel_max_prim_count, hair->num_segments());
     }
     else if (geom->is_pointcloud()) {
+      const PointCloud *pointcloud = static_cast<const PointCloud *>(geom);
       kernel_features |= KERNEL_FEATURE_POINTCLOUD;
-      kernel_max_prim_count = max(kernel_max_prim_count,
-                                  static_cast<PointCloud *>(geom)->num_points());
+      if (pointcloud->primitive_type() & PRIMITIVE_GSPLAT) {
+        kernel_features |= KERNEL_FEATURE_GSPLATS;
+      }
+      kernel_max_prim_count = max(kernel_max_prim_count, pointcloud->num_points());
     }
     else if (geom->is_mesh()) {
       kernel_max_prim_count = max(kernel_max_prim_count,
@@ -580,7 +611,8 @@ void Scene::update_kernel_features()
   }
 
   dscene.data.integrator.use_caustics = false;
-  if (device->info.has_mnee && has_caustics_caster && has_caustics_receiver && has_caustics_light)
+  if (device->info.has_mnee() && has_caustics_caster && has_caustics_receiver &&
+      has_caustics_light)
   {
     dscene.data.integrator.use_caustics = true;
     kernel_features |= KERNEL_FEATURE_MNEE;
@@ -653,7 +685,7 @@ bool Scene::update_camera_resolution(Progress &progress, int width, int height)
   return update_data;
 }
 
-static void log_kernel_features(const uint features)
+static void log_kernel_features(const uint64_t features)
 {
   LOG_INFO << "Requested features:";
   LOG_INFO << "Use BSDF " << string_from_bool(features & KERNEL_FEATURE_NODE_BSDF);
@@ -674,6 +706,9 @@ static void log_kernel_features(const uint features)
   LOG_INFO << "Use Volume " << string_from_bool(features & KERNEL_FEATURE_VOLUME);
   LOG_INFO << "Use Shadow Catcher " << string_from_bool(features & KERNEL_FEATURE_SHADOW_CATCHER);
   LOG_INFO << "Use Portal Node " << string_from_bool(features & KERNEL_FEATURE_NODE_PORTAL);
+  LOG_INFO << "Use Light Linking " << string_from_bool(features & KERNEL_FEATURE_LIGHT_LINKING);
+  LOG_INFO << "Use Shadow Linking " << string_from_bool(features & KERNEL_FEATURE_SHADOW_LINKING);
+  LOG_INFO << "Use Gaussian Splats " << string_from_bool(features & KERNEL_FEATURE_GSPLATS);
 }
 
 bool Scene::load_kernels(Progress &progress)
@@ -682,7 +717,7 @@ bool Scene::load_kernels(Progress &progress)
 
   const scoped_timer timer;
 
-  const uint kernel_features = dscene.data.kernel_features;
+  const uint64_t kernel_features = dscene.data.kernel_features;
   log_kernel_features(kernel_features);
   if (!device->load_kernels(kernel_features)) {
     string message = device->error_message();
@@ -970,6 +1005,15 @@ template<> Integrator *Scene::create_node<Integrator>()
   return node_ptr;
 }
 
+template<> SceneAttributes *Scene::create_node<SceneAttributes>()
+{
+  unique_ptr<SceneAttributes> node = make_unique<SceneAttributes>();
+  SceneAttributes *node_ptr = node.get();
+  node->set_owner(this);
+  scene_attributes.push_back(std::move(node));
+  return node_ptr;
+}
+
 template<> Background *Scene::create_node<Background>()
 {
   unique_ptr<Background> node = make_unique<Background>();
@@ -1140,5 +1184,12 @@ template<> void Scene::delete_nodes(const set<Pass *> &nodes, const NodeOwner *o
   passes.erase_in_set(nodes);
   film->tag_modified();
 }
+
+/* Template instantiations so we don't have to inline functions. */
+template PointLight *Scene::create_light_node<PointLight>();
+template SpotLight *Scene::create_light_node<SpotLight>();
+template AreaLight *Scene::create_light_node<AreaLight>();
+template SunLight *Scene::create_light_node<SunLight>();
+template BackgroundLight *Scene::create_light_node<BackgroundLight>();
 
 CCL_NAMESPACE_END

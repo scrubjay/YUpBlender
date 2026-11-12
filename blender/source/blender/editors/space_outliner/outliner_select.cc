@@ -10,22 +10,22 @@
 
 #include "DNA_armature_types.h"
 #include "DNA_gpencil_legacy_types.h"
-#include "DNA_gpencil_modifier_types.h"
+#include "DNA_grease_pencil_modifier_types.h"
 #include "DNA_modifier_types.h"
 #include "DNA_object_types.h"
 #include "DNA_scene_types.h"
 #include "DNA_sequence_types.h"
 #include "DNA_shader_fx_types.h"
 
-#include "BLI_listbase.h"
-#include "BLI_utildefines.h"
+#include "BLI_listbase.hh"
+#include "BLI_utildefines.hh"
 
+#include "BKE_annotations.h"
 #include "BKE_armature.hh"
 #include "BKE_collection.hh"
 #include "BKE_constraint.h"
 #include "BKE_context.hh"
 #include "BKE_deform.hh"
-#include "BKE_gpencil_legacy.h"
 #include "BKE_grease_pencil.hh"
 #include "BKE_layer.hh"
 #include "BKE_lib_id.hh"
@@ -163,7 +163,7 @@ static void do_outliner_item_mode_toggle_generic(bContext *C,
                                                  const TreeViewContext &tvc,
                                                  Base *base)
 {
-  const eObjectMode active_mode = eObjectMode(tvc.obact->mode);
+  const eObjectMode active_mode = tvc.obact->mode;
   ED_undo_group_begin(C);
 
   if (object::mode_set(C, OB_MODE_OBJECT)) {
@@ -207,7 +207,10 @@ void outliner_item_mode_toggle(bContext *C,
       do_outliner_item_mode_toggle_generic(C, tvc, base);
     }
     else if (tvc.ob_edit && OB_TYPE_SUPPORT_EDITMODE(ob->type)) {
-      do_outliner_item_editmode_toggle(C, tvc.scene, base);
+      /* Grease Pencil does not support multi-object editing yet. */
+      if (ob->type != OB_GREASE_PENCIL) {
+        do_outliner_item_editmode_toggle(C, tvc.scene, base);
+      }
     }
     else if (tvc.ob_pose && ob->type == OB_ARMATURE) {
       do_outliner_item_posemode_toggle(C, tvc.scene, base);
@@ -218,7 +221,7 @@ void outliner_item_mode_toggle(bContext *C,
 /** \} */
 
 /* -------------------------------------------------------------------- */
-/** \name Outliner Element Selection/Activation on Click Operator
+/** \name Element Activation
  * \{ */
 
 static void tree_element_viewlayer_activate(bContext *C, TreeElement *te)
@@ -333,7 +336,7 @@ static void tree_element_object_activate(bContext *C,
   if (scene->toolsettings->object_flag & SCE_OBJECT_MODE_LOCK) {
     if (base != nullptr) {
       Object *obact = BKE_view_layer_active_object_get(view_layer);
-      const eObjectMode object_mode = obact ? eObjectMode(obact->mode) : OB_MODE_OBJECT;
+      const eObjectMode object_mode = obact ? obact->mode : OB_MODE_OBJECT;
       if (base && !BKE_object_is_mode_compat(base->object, object_mode)) {
         if (object_mode == OB_MODE_OBJECT) {
           Depsgraph *depsgraph = CTX_data_ensure_evaluated_depsgraph(C);
@@ -445,7 +448,7 @@ static void tree_element_camera_activate(bContext *C, Scene *scene, TreeElement 
   scene->camera = ob;
 
   Main *bmain = CTX_data_main(C);
-  wmWindowManager *wm = static_cast<wmWindowManager *>(bmain->wm.first);
+  wmWindowManager *wm = bmain->wm.first();
 
   WM_windows_scene_data_sync(&wm->windows, scene);
   DEG_id_tag_update(&scene->id, ID_RECALC_SYNC_TO_EVAL);
@@ -490,7 +493,7 @@ static void tree_element_gplayer_activate(bContext *C, TreeElement *te, TreeStor
   /* We can only have a single "active" layer at a time
    * and there must always be an active layer... */
   if (gpl) {
-    BKE_gpencil_layer_active_set(gpd, gpl);
+    BKE_annotations_layer_active_set(gpd, gpl);
     DEG_id_tag_update(&gpd->id, ID_RECALC_GEOMETRY);
     WM_event_add_notifier(C, NC_GPENCIL | ND_DATA | NA_SELECTED, gpd);
   }
@@ -578,19 +581,20 @@ static void tree_element_posechannel_activate(bContext *C,
     }
   }
 
+  Bone *bone = pchan->bone_get(*ob);
   if ((set == OL_SETSEL_EXTEND) && (pchan->flag & POSE_SELECTED)) {
     animrig::bone_deselect(pchan);
   }
   else {
-    if (animrig::bone_is_visible(arm, pchan)) {
+    if (animrig::bone_is_visible(arm, {pchan, bone})) {
       animrig::bone_select(pchan);
     }
-    arm->act_bone = pchan->bone;
+    arm->act_bone = bone;
   }
 
   if (recursive) {
     /* Recursive select/deselect */
-    do_outliner_bone_select_recursive(arm, pchan->bone, (pchan->flag & POSE_SELECTED) != 0);
+    do_outliner_bone_select_recursive(arm, bone, (pchan->flag & POSE_SELECTED) != 0);
   }
 
   WM_event_add_notifier(C, NC_OBJECT | ND_BONE_ACTIVE, ob);
@@ -614,7 +618,7 @@ static void tree_element_bone_activate(bContext *C,
   if (ob) {
     if (set != OL_SETSEL_EXTEND) {
       /* single select forces all other bones to get unselected */
-      for (Bone *bone_iter = static_cast<Bone *>(arm->bonebase.first); bone_iter != nullptr;
+      for (Bone *bone_iter = arm->bonebase.first(); bone_iter != nullptr;
            bone_iter = bone_iter->next)
       {
         bone_iter->flag &= ~(BONE_TIPSEL | BONE_SELECTED | BONE_ROOTSEL);
@@ -778,7 +782,7 @@ static void tree_element_strip_dup_activate(WorkSpace *workspace, TreeElement * 
 #if 0
   select_single_seq(strip, 1);
 #endif
-  Strip *p = static_cast<Strip *>(ed->current_strips()->first);
+  Strip *p = ed->current_strips()->first();
   while (p) {
     if ((!p->data) || (!p->data->stripdata) || (p->data->stripdata->filename[0] == '\0')) {
       p = p->next;
@@ -798,7 +802,7 @@ static void tree_element_master_collection_activate(const bContext *C)
 {
   ViewLayer *view_layer = CTX_data_view_layer(C);
   LayerCollection *layer_collection = static_cast<LayerCollection *>(
-      view_layer->layer_collections.first);
+      view_layer->layer_collections.first_);
   BKE_layer_collection_activate(view_layer, layer_collection);
   /* A very precise notifier - ND_LAYER alone is quite vague, we want to avoid unnecessary work
    * when only the active collection changes. */
@@ -821,8 +825,6 @@ static void tree_element_text_activate(bContext *C, TreeElement *te)
   Text *text = reinterpret_cast<Text *>(te->store_elem->id);
   ED_text_activate_in_screen(C, text);
 }
-
-/* ---------------------------------------------- */
 
 void tree_element_activate(bContext *C,
                            const TreeViewContext &tvc,
@@ -851,6 +853,21 @@ void tree_element_activate(bContext *C,
     case ID_TXT:
       tree_element_text_activate(C, te);
       break;
+  }
+}
+
+static void tree_elemment_shapekey_active_set(bContext *C, TreeElement *te)
+{
+  if (TreeElement *parent_te = outliner_search_back_te(te, ID_OB)) {
+    TreeStoreElem *parent_tselem = TREESTORE(parent_te);
+    Object *ob = id_cast<Object *>(parent_tselem->id);
+
+    if (ob) {
+      PointerRNA object_ptr = RNA_pointer_create_discrete(&ob->id, RNA_Object, ob);
+      PropertyRNA *prop = RNA_struct_find_property(&object_ptr, "active_shape_key_index");
+      RNA_property_int_set(&object_ptr, prop, te->index);
+      RNA_property_update(C, &object_ptr, prop);
+    }
   }
 }
 
@@ -915,8 +932,19 @@ void tree_element_type_active_set(bContext *C,
     case TSE_LAYER_COLLECTION:
       tree_element_layer_collection_activate(C, te);
       break;
+    case TSE_SHAPE_KEY_BLOCK:
+      tree_elemment_shapekey_active_set(C, te);
+      break;
+    default:
+      break;
   }
 }
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Element Active State Query
+ * \{ */
 
 static eOLDrawState tree_element_defgroup_state_get(const Main &bmain,
                                                     const Scene *scene,
@@ -1081,7 +1109,7 @@ static eOLDrawState tree_element_grease_pencil_node_state_get(const TreeElement 
 static eOLDrawState tree_element_master_collection_state_get(
     const ViewLayer *view_layer, const LayerCollection *layer_collection)
 {
-  if (layer_collection == view_layer->layer_collections.first) {
+  if (layer_collection == view_layer->layer_collections.first_) {
     return OL_DRAWSEL_NORMAL;
   }
   return OL_DRAWSEL_NONE;
@@ -1187,6 +1215,18 @@ eOLDrawState tree_element_active_state_get(const TreeViewContext &tvc,
   return OL_DRAWSEL_NONE;
 }
 
+static eOLDrawState tree_element_shapekey_state_get(const TreeElement *te)
+{
+  if (const Object *ob = id_cast<Object *>(
+          outliner_search_back(const_cast<TreeElement *>(te), ID_OB)))
+  {
+    if (ob->shapenr == te->index + 1) {
+      return OL_DRAWSEL_NORMAL;
+    }
+  }
+  return OL_DRAWSEL_NONE;
+}
+
 eOLDrawState tree_element_type_active_state_get(const TreeViewContext &tvc,
                                                 const TreeElement *te,
                                                 const TreeStoreElem *tselem)
@@ -1229,6 +1269,10 @@ eOLDrawState tree_element_type_active_state_get(const TreeViewContext &tvc,
       return tree_element_layer_collection_state_get(tvc.layer_collection, te);
     case TSE_BONE_COLLECTION:
       return tree_element_bone_collection_state_get(te, tselem);
+    case TSE_SHAPE_KEY_BLOCK:
+      return tree_element_shapekey_state_get(te);
+    default:
+      break;
   }
   return OL_DRAWSEL_NONE;
 }
@@ -1250,9 +1294,15 @@ bPoseChannel *outliner_find_parent_bone(TreeElement *te, TreeElement **r_bone_te
   return nullptr;
 }
 
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Properties Editor Sync
+ * \{ */
+
 static void outliner_sync_to_properties_editors(const bContext *C,
                                                 PointerRNA *ptr,
-                                                const int context)
+                                                const eSpaceButtons_Context context)
 {
   bScreen *screen = CTX_wm_screen(C);
 
@@ -1261,7 +1311,7 @@ static void outliner_sync_to_properties_editors(const bContext *C,
       continue;
     }
 
-    SpaceProperties *sbuts = static_cast<SpaceProperties *>(area.spacedata.first);
+    SpaceProperties *sbuts = area.spacedata.first_as<SpaceProperties>();
     if (ED_buttons_should_sync_with_outliner(C, sbuts, &area)) {
       ED_buttons_set_context(C, sbuts, ptr, context);
     }
@@ -1271,7 +1321,7 @@ static void outliner_sync_to_properties_editors(const bContext *C,
 static void outliner_set_properties_tab(bContext *C, TreeElement *te, TreeStoreElem *tselem)
 {
   PointerRNA ptr = {};
-  int context = 0;
+  eSpaceButtons_Context context = eSpaceButtons_Context(0);
 
   /* ID Types */
   if (tselem->type == TSE_SOME_ID) {
@@ -1307,14 +1357,19 @@ static void outliner_set_properties_tab(bContext *C, TreeElement *te, TreeStoreE
       case ID_WO:
         context = BCONTEXT_WORLD;
         break;
-      case ID_KE:
-        context = BCONTEXT_DATA;
-        ptr = RNA_id_pointer_create(te->parent->store_elem->id);
-        break;
     }
   }
   else {
     switch (tselem->type) {
+      case TSE_SHAPE_KEY_BASE:
+      case TSE_SHAPE_KEY_BLOCK:
+        if (TreeElement *parent_te = outliner_search_back_te(te, ID_OB)) {
+          TreeStoreElem *parent_tselem = TREESTORE(parent_te);
+          Object *ob = id_cast<Object *>(parent_tselem->id);
+          ptr = RNA_id_pointer_create(static_cast<ID *>(ob->data));
+          context = BCONTEXT_DATA;
+        }
+        break;
       case TSE_DEFGROUP_BASE:
       case TSE_DEFGROUP:
         ptr = RNA_id_pointer_create(tselem->id);
@@ -1348,7 +1403,7 @@ static void outliner_set_properties_tab(bContext *C, TreeElement *te, TreeStoreE
         if (tselem->type != TSE_MODIFIER_BASE) {
           ModifierData *md = static_cast<ModifierData *>(te->directdata);
 
-          switch (ModifierType(md->type)) {
+          switch (md->type) {
             case eModifierType_ParticleSystem:
               context = BCONTEXT_PARTICLE;
               break;
@@ -1445,15 +1500,21 @@ static void outliner_set_properties_tab(bContext *C, TreeElement *te, TreeStoreE
         ptr = RNA_pointer_create_discrete(tselem->id, RNA_Collection, te->directdata);
         context = BCONTEXT_COLLECTION;
         break;
+      default:
+        break;
     }
   }
 
-  if (ptr.data) {
+  if (ptr) {
     outliner_sync_to_properties_editors(C, &ptr, context);
   }
 }
 
-/* ================================================ */
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Outliner Element Selection/Activation on Click Operator
+ * \{ */
 
 /**
  * Action when clicking to activate an item (typically under the mouse cursor),
@@ -1575,7 +1636,8 @@ void outliner_item_select(bContext *C,
   const bool recursive = select_flag & OL_ITEM_RECURSIVE;
 
   /* Clear previous active when activating and clear selection when not extending selection */
-  const short clear_flag = (activate ? TSE_ACTIVE : 0) | (extend ? 0 : TSE_SELECTED);
+  const eTreeStoreElem_Flag clear_flag = (activate ? TSE_ACTIVE : eTreeStoreElem_Flag{}) |
+                                         (extend ? eTreeStoreElem_Flag{} : TSE_SELECTED);
 
   /* Do not clear the active and select flag when selecting hierarchies. */
   if (clear_flag && !recursive) {
@@ -1721,7 +1783,8 @@ static void do_outliner_range_select(bContext *C,
                                      const bool recurse,
                                      Collection *in_collection)
 {
-  TreeElement *active = outliner_find_element_with_flag(&space_outliner->tree, TSE_ACTIVE);
+  TreeElement *active = outliner_find_element_with_flag(&space_outliner->runtime->tree,
+                                                        TSE_ACTIVE);
 
   /* If no active element exists, activate the element under the cursor */
   if (!active) {
@@ -1752,7 +1815,7 @@ static void do_outliner_range_select(bContext *C,
   }
 
   do_outliner_range_select_recursive(
-      &space_outliner->tree, active, cursor, false, recurse, in_collection);
+      &space_outliner->runtime->tree, active, cursor, false, recurse, in_collection);
 
   if (recurse) {
     do_outliner_select_recursive(&cursor->subtree, true, in_collection);
@@ -1820,7 +1883,9 @@ static wmOperatorStatus outliner_item_do_activate_from_cursor(bContext *C,
     return OPERATOR_CANCELLED;
   }
 
-  if (!(te = outliner_find_item_at_y(space_outliner, &space_outliner->tree, view_mval[1]))) {
+  if (!(te = outliner_find_item_at_y(
+            space_outliner, &space_outliner->runtime->tree, view_mval[1])))
+  {
     if (deselect_all) {
       changed |= outliner_flag_set(*space_outliner, TSE_SELECTED, false);
     }
@@ -2030,7 +2095,8 @@ static wmOperatorStatus outliner_box_select_invoke(bContext *C,
   ui::view2d_region_to_view(&region->v2d, mval[0], mval[1], &view_mval[0], &view_mval[1]);
 
   /* Find element clicked on */
-  TreeElement *te = outliner_find_item_at_y(space_outliner, &space_outliner->tree, view_mval[1]);
+  TreeElement *te = outliner_find_item_at_y(
+      space_outliner, &space_outliner->runtime->tree, view_mval[1]);
 
   /* Pass through if click is over name or icons, or not tweak event */
   if (te && tweak && outliner_item_is_co_over_name_icons(te, view_mval[0])) {
@@ -2083,9 +2149,9 @@ void OUTLINER_OT_select_box(wmOperatorType *ot)
 static TreeElement *outliner_find_rightmost_visible_child(SpaceOutliner *space_outliner,
                                                           TreeElement *te)
 {
-  while (te->subtree.last) {
+  while (te->subtree.last()) {
     if (TSELEM_OPEN(TREESTORE(te), space_outliner)) {
-      te = static_cast<TreeElement *>(te->subtree.last);
+      te = te->subtree.last();
     }
     else {
       break;
@@ -2128,8 +2194,8 @@ static TreeElement *outliner_find_next_element(SpaceOutliner *space_outliner, Tr
 {
   TreeStoreElem *tselem = TREESTORE(te);
 
-  if (TSELEM_OPEN(tselem, space_outliner) && te->subtree.first) {
-    te = static_cast<TreeElement *>(te->subtree.first);
+  if (TSELEM_OPEN(tselem, space_outliner) && te->subtree.first()) {
+    te = te->subtree.first();
   }
   else if (te->next) {
     te = te->next;
@@ -2165,8 +2231,8 @@ static TreeElement *outliner_walk_right(SpaceOutliner *space_outliner,
   TreeStoreElem *tselem = TREESTORE(te);
 
   /* Only walk down a level if the element is open and not toggling expand */
-  if (!toggle_all && TSELEM_OPEN(tselem, space_outliner) && !BLI_listbase_is_empty(&te->subtree)) {
-    te = static_cast<TreeElement *>(te->subtree.first);
+  if (!toggle_all && TSELEM_OPEN(tselem, space_outliner) && !te->subtree.is_empty()) {
+    te = te->subtree.first();
   }
   else {
     outliner_item_openclose(te, true, toggle_all);
@@ -2212,12 +2278,13 @@ static TreeElement *do_outliner_select_walk(SpaceOutliner *space_outliner,
  * Changed is set to true if the active element is found, or false if it was set */
 static TreeElement *find_walk_select_start_element(SpaceOutliner *space_outliner, bool *r_changed)
 {
-  TreeElement *active_te = outliner_find_element_with_flag(&space_outliner->tree, TSE_ACTIVE);
+  TreeElement *active_te = outliner_find_element_with_flag(&space_outliner->runtime->tree,
+                                                           TSE_ACTIVE);
   *r_changed = false;
 
   /* If no active element exists, use the first element in the tree */
   if (!active_te) {
-    active_te = static_cast<TreeElement *>(space_outliner->tree.first);
+    active_te = space_outliner->runtime->tree.first();
     *r_changed = true;
   }
 

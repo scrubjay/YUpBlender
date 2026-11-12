@@ -29,7 +29,7 @@ PyDoc_STRVAR(
     "\n"
     "   Builds a BlenderTextureShader object.\n"
     "\n"
-    "   :arg texture: A line style texture slot or a shader node tree to define "
+    "   :param texture: A line style texture slot or a shader node tree to define "
     "a set of textures.\n"
     "   :type texture: :class:`bpy.types.LineStyleTextureSlot` | "
     ":class:`bpy.types.ShaderNodeTree`\n"
@@ -39,7 +39,7 @@ PyDoc_STRVAR(
     "   Assigns a blender texture slot to the stroke  shading in order to\n"
     "   simulate marks.\n"
     "\n"
-    "   :arg stroke: A Stroke object.\n"
+    "   :param stroke: A Stroke object.\n"
     "   :type stroke: :class:`freestyle.types.Stroke`\n");
 static int BlenderTextureShader___init__(BPy_BlenderTextureShader *self,
                                          PyObject *args,
@@ -50,7 +50,13 @@ static int BlenderTextureShader___init__(BPy_BlenderTextureShader *self,
   blender::MTex *_mtex;
   blender::bNodeTree *_nodetree;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O", (char **)kwlist, &obj)) {
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "O" /* `texture` */
+                                   ":__init__",
+                                   (char **)kwlist,
+                                   &obj))
+  {
     return -1;
   }
   _mtex = (blender::MTex *)blender::PyC_RNA_AsPointer(obj, "LineStyleTextureSlot");

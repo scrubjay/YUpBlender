@@ -24,9 +24,9 @@
 #include "BKE_screen.hh"
 
 #include "BLI_bounds.hh"
-#include "BLI_listbase.h"
+#include "BLI_listbase.hh"
 #include "BLI_map.hh"
-#include "BLI_rect.h"
+#include "BLI_rect.hh"
 
 #include "ED_screen.hh"
 
@@ -298,9 +298,9 @@ AbstractViewItem *region_views_find_item_at(const ARegion &region, const int xy[
   return item_but->view_item;
 }
 
-AbstractViewItem *region_views_find_active_item(const ARegion *region)
+AbstractViewItem *region_views_find_active_item(const ARegion *region, const AbstractView *view)
 {
-  auto *item_but = static_cast<ButtonViewItem *>(view_item_find_active(region));
+  auto *item_but = static_cast<ButtonViewItem *>(view_item_find_active(region, view));
   if (!item_but) {
     return nullptr;
   }
@@ -343,21 +343,23 @@ std::unique_ptr<DropTargetInterface> region_views_find_drop_target_at(const AReg
    * extra padding (UI_UNIT_Y). */
   if (AbstractView *view = region_view_find_at(region, xy, UI_UNIT_Y)) {
     /* If we are above a tree, but not hovering any specific element, dropping something should
-     * insert it after the last item. */
+     * insert it before first or after last visible item depends on the mouse position. */
     if (AbstractTreeView *tree_view = dynamic_cast<AbstractTreeView *>(view)) {
-      /* Find the last item which we want to drop below. */
-      AbstractTreeViewItem *last_item = nullptr;
+      /* Find the first or last item which we want to drop below. */
+      AbstractTreeViewItem *first_or_last_visible = nullptr;
       tree_view->foreach_root_item([&](AbstractTreeViewItem &item) {
         if (!item.is_interactive()) {
           return;
         }
-        last_item = &item;
-      });
-      if (last_item) {
-        std::optional<rctf> rct = last_item->get_win_rect(*region);
-        if (rct && xy[1] < rct->ymin) {
-          return last_item->create_item_drop_target();
+        std::optional<rctf> rct = item.get_win_rect(*region);
+        if (rct.has_value()) {
+          if ((!first_or_last_visible && (xy[1] > rct->ymax)) || (xy[1] < rct->ymin)) {
+            first_or_last_visible = &item;
+          }
         }
+      });
+      if (first_or_last_visible) {
+        return first_or_last_visible->create_item_drop_target();
       }
     }
   }

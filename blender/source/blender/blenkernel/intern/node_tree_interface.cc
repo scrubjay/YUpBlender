@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup bke
+ */
+
 #include <queue>
 
 #include "BKE_context.hh"
@@ -15,9 +19,9 @@
 #include "BKE_node_tree_interface_convert.hh"
 #include "BKE_node_tree_update.hh"
 
-#include "BLI_math_vector.h"
+#include "BLI_math_vector_c.hh"
 #include "BLI_stack.hh"
-#include "BLI_string.h"
+#include "BLI_string.hh"
 
 #include "BLO_read_write.hh"
 
@@ -65,208 +69,16 @@ static bool is_supported_socket_type(const StringRef socket_type)
 }
 
 /* -------------------------------------------------------------------- */
-/** \name ID User Increment in Socket Data
+/** \name Allocate Socket Data
  * \{ */
-
-template<typename T> void socket_data_id_user_increment(T & /*data*/) {}
-template<> void socket_data_id_user_increment(bNodeSocketValueObject &data)
-{
-  id_us_plus(reinterpret_cast<ID *>(data.value));
-}
-template<> void socket_data_id_user_increment(bNodeSocketValueImage &data)
-{
-  id_us_plus(reinterpret_cast<ID *>(data.value));
-}
-template<> void socket_data_id_user_increment(bNodeSocketValueCollection &data)
-{
-  id_us_plus(reinterpret_cast<ID *>(data.value));
-}
-template<> void socket_data_id_user_increment(bNodeSocketValueTexture &data)
-{
-  id_us_plus(reinterpret_cast<ID *>(data.value));
-}
-template<> void socket_data_id_user_increment(bNodeSocketValueMaterial &data)
-{
-  id_us_plus(reinterpret_cast<ID *>(data.value));
-}
-template<> void socket_data_id_user_increment(bNodeSocketValueFont &data)
-{
-  id_us_plus(reinterpret_cast<ID *>(data.value));
-}
-template<> void socket_data_id_user_increment(bNodeSocketValueScene &data)
-{
-  id_us_plus(reinterpret_cast<ID *>(data.value));
-}
-template<> void socket_data_id_user_increment(bNodeSocketValueText &data)
-{
-  id_us_plus(reinterpret_cast<ID *>(data.value));
-}
-template<> void socket_data_id_user_increment(bNodeSocketValueMask &data)
-{
-  id_us_plus(reinterpret_cast<ID *>(data.value));
-}
-template<> void socket_data_id_user_increment(bNodeSocketValueSound &data)
-{
-  id_us_plus(reinterpret_cast<ID *>(data.value));
-}
-
-/** \} */
-
-/* -------------------------------------------------------------------- */
-/** \name ID User Decrement in Socket Data
- * \{ */
-
-template<typename T> void socket_data_id_user_decrement(T & /*data*/) {}
-template<> void socket_data_id_user_decrement(bNodeSocketValueObject &data)
-{
-  id_us_min(reinterpret_cast<ID *>(data.value));
-}
-template<> void socket_data_id_user_decrement(bNodeSocketValueImage &data)
-{
-  id_us_min(reinterpret_cast<ID *>(data.value));
-}
-template<> void socket_data_id_user_decrement(bNodeSocketValueCollection &data)
-{
-  id_us_min(reinterpret_cast<ID *>(data.value));
-}
-template<> void socket_data_id_user_decrement(bNodeSocketValueTexture &data)
-{
-  id_us_min(reinterpret_cast<ID *>(data.value));
-}
-template<> void socket_data_id_user_decrement(bNodeSocketValueMaterial &data)
-{
-  id_us_min(reinterpret_cast<ID *>(data.value));
-}
-template<> void socket_data_id_user_decrement(bNodeSocketValueFont &data)
-{
-  id_us_min(reinterpret_cast<ID *>(data.value));
-}
-template<> void socket_data_id_user_decrement(bNodeSocketValueScene &data)
-{
-  id_us_min(reinterpret_cast<ID *>(data.value));
-}
-template<> void socket_data_id_user_decrement(bNodeSocketValueText &data)
-{
-  id_us_min(reinterpret_cast<ID *>(data.value));
-}
-template<> void socket_data_id_user_decrement(bNodeSocketValueMask &data)
-{
-  id_us_min(reinterpret_cast<ID *>(data.value));
-}
-template<> void socket_data_id_user_decrement(bNodeSocketValueSound &data)
-{
-  id_us_min(reinterpret_cast<ID *>(data.value));
-}
-
-/** \} */
-
-/* -------------------------------------------------------------------- */
-/** \name Initialize Socket Data
- * \{ */
-
-template<typename T> void socket_data_init_impl(T & /*data*/) {}
-template<> void socket_data_init_impl(bNodeSocketValueFloat &data)
-{
-  data.subtype = PROP_NONE;
-  data.value = 0.0f;
-  data.min = -FLT_MAX;
-  data.max = FLT_MAX;
-}
-template<> void socket_data_init_impl(bNodeSocketValueInt &data)
-{
-  data.subtype = PROP_NONE;
-  data.value = 0;
-  data.min = INT_MIN;
-  data.max = INT_MAX;
-}
-template<> void socket_data_init_impl(bNodeSocketValueBoolean &data)
-{
-  data.value = false;
-}
-template<> void socket_data_init_impl(bNodeSocketValueRotation & /*data*/) {}
-template<> void socket_data_init_impl(bNodeSocketValueVector &data)
-{
-  static float default_value[] = {0.0f, 0.0f, 0.0f};
-  data.subtype = PROP_NONE;
-  data.dimensions = 3;
-  copy_v3_v3(data.value, default_value);
-  data.min = -FLT_MAX;
-  data.max = FLT_MAX;
-}
-template<> void socket_data_init_impl(bNodeSocketValueIntVector &data)
-{
-  data.subtype = PROP_NONE;
-  data.dimensions = 3;
-  zero_v3_int(data.value);
-  data.min = INT_MIN;
-  data.max = INT_MAX;
-}
-template<> void socket_data_init_impl(bNodeSocketValueRGBA &data)
-{
-  static float default_value[] = {0.0f, 0.0f, 0.0f, 1.0f};
-  copy_v4_v4(data.value, default_value);
-}
-template<> void socket_data_init_impl(bNodeSocketValueString &data)
-{
-  data.subtype = PROP_NONE;
-  data.value[0] = '\0';
-}
-template<> void socket_data_init_impl(bNodeSocketValueObject &data)
-{
-  data.value = nullptr;
-}
-template<> void socket_data_init_impl(bNodeSocketValueImage &data)
-{
-  data.value = nullptr;
-}
-template<> void socket_data_init_impl(bNodeSocketValueCollection &data)
-{
-  data.value = nullptr;
-}
-template<> void socket_data_init_impl(bNodeSocketValueTexture &data)
-{
-  data.value = nullptr;
-}
-template<> void socket_data_init_impl(bNodeSocketValueMaterial &data)
-{
-  data.value = nullptr;
-}
-template<> void socket_data_init_impl(bNodeSocketValueFont &data)
-{
-  data.value = nullptr;
-}
-template<> void socket_data_init_impl(bNodeSocketValueScene &data)
-{
-  data.value = nullptr;
-}
-template<> void socket_data_init_impl(bNodeSocketValueText &data)
-{
-  data.value = nullptr;
-}
-template<> void socket_data_init_impl(bNodeSocketValueMask &data)
-{
-  data.value = nullptr;
-}
-template<> void socket_data_init_impl(bNodeSocketValueSound &data)
-{
-  data.value = nullptr;
-}
-template<> void socket_data_init_impl(bNodeSocketValueMenu &data)
-{
-  data.value = -1;
-  data.enum_items = nullptr;
-  data.runtime_flag = 0;
-}
 
 static void *make_socket_data(const StringRef socket_type)
 {
-  void *socket_data = nullptr;
-  socket_data_to_static_type(socket_type, [&socket_data]<typename SocketDataType>() {
-    SocketDataType *new_socket_data = MEM_new<SocketDataType>(__func__);
-    socket_data_init_impl(*new_socket_data);
-    socket_data = new_socket_data;
-  });
-  return socket_data;
+  const bNodeSocketType *stype = node_socket_type_find(socket_type);
+  if (!stype) {
+    return nullptr;
+  }
+  return socket_value_new(stype->type, stype->subtype);
 }
 
 /** \} */
@@ -275,28 +87,15 @@ static void *make_socket_data(const StringRef socket_type)
 /** \name Free Allocated Socket Data
  * \{ */
 
-template<typename T> void socket_data_free_impl(T *data, const bool /*do_id_user*/)
-{
-  MEM_delete(data);
-}
-template<> void socket_data_free_impl(bNodeSocketValueMenu *data, const bool /*do_id_user*/)
-{
-  if (data->enum_items) {
-    /* Release shared data pointer. */
-    data->enum_items->remove_user_and_delete_if_last();
-  }
-  MEM_delete(data);
-}
-
 static void socket_data_free(bNodeTreeInterfaceSocket &socket, const bool do_id_user)
 {
-  socket_data_to_static_type(socket.socket_type, [&]<typename SocketDataType>() {
-    if (do_id_user) {
-      socket_data_id_user_decrement(get_socket_data_as<SocketDataType>(socket));
-    }
-    socket_data_free_impl(&get_socket_data_as<SocketDataType>(socket), do_id_user);
-    socket.socket_data = nullptr;
-  });
+  if (socket.socket_data == nullptr) {
+    return;
+  }
+  if (const bNodeSocketType *stype = socket.socket_typeinfo()) {
+    socket_value_free(stype->type, socket.socket_data, do_id_user);
+  }
+  socket.socket_data = nullptr;
 }
 
 /** \} */
@@ -305,32 +104,14 @@ static void socket_data_free(bNodeTreeInterfaceSocket &socket, const bool do_id_
 /** \name Copy Allocated Socket Data
  * \{ */
 
-template<typename T> T *socket_data_copy_impl(const T &src)
-{
-  return MEM_new<T>(__func__, src);
-}
-template<> bNodeSocketValueMenu *socket_data_copy_impl(const bNodeSocketValueMenu &src)
-{
-  bNodeSocketValueMenu *dst = MEM_new<bNodeSocketValueMenu>(__func__, src);
-  /* Copy of shared data pointer. */
-  if (dst->enum_items) {
-    dst->enum_items->add_user();
-  }
-  return dst;
-}
-
 static void socket_data_copy(bNodeTreeInterfaceSocket &dst,
                              const bNodeTreeInterfaceSocket &src,
                              int flag)
 {
-  socket_data_to_static_type(dst.socket_type, [&]<typename SocketDataType>() {
-    if (src.socket_data) {
-      dst.socket_data = socket_data_copy_impl(get_socket_data_as<SocketDataType>(src));
-    }
-    if ((flag & LIB_ID_CREATE_NO_USER_REFCOUNT) == 0) {
-      socket_data_id_user_increment(get_socket_data_as<SocketDataType>(dst));
-    }
-  });
+  const bool do_id_user = (flag & LIB_ID_CREATE_NO_USER_REFCOUNT) == 0;
+  if (const bNodeSocketType *stype = src.socket_typeinfo()) {
+    dst.socket_data = socket_value_copy(stype->type, src.socket_data, do_id_user);
+  }
 }
 
 /* Copy socket data from a raw pointer, e.g. from a #bNodeSocket. */
@@ -338,19 +119,14 @@ static void socket_data_copy_ptr(bNodeTreeInterfaceSocket &dst,
                                  const void *src_socket_data,
                                  int flag)
 {
-  socket_data_to_static_type(dst.socket_type, [&]<typename SocketDataType>() {
-    if (dst.socket_data != nullptr) {
-      socket_data_free(dst, true);
-    }
+  if (dst.socket_data != nullptr) {
+    socket_data_free(dst, true);
+  }
 
-    if (src_socket_data) {
-      dst.socket_data = socket_data_copy_impl(
-          *static_cast<const SocketDataType *>(src_socket_data));
-    }
-    if ((flag & LIB_ID_CREATE_NO_USER_REFCOUNT) == 0) {
-      socket_data_id_user_increment(get_socket_data_as<SocketDataType>(dst));
-    }
-  });
+  const bool do_id_user = (flag & LIB_ID_CREATE_NO_USER_REFCOUNT) == 0;
+  if (const bNodeSocketType *stype = dst.socket_typeinfo()) {
+    dst.socket_data = socket_value_copy(stype->type, src_socket_data, do_id_user);
+  }
 }
 
 /** \} */
@@ -453,18 +229,27 @@ static void socket_data_write(BlendWriter *writer, bNodeTreeInterfaceSocket &soc
 
 template<typename T> void socket_data_read_data_impl(BlendDataReader *reader, T **data)
 {
-  /* FIXME Avoid using low-level untyped read function here. Cannot use the BLO_read_struct
-   * currently (macro expansion would process `T` instead of the actual type). */
-  BLO_read_data_address(reader, data);
+  BLO_read_struct(reader, T, data);
 }
 template<> void socket_data_read_data_impl(BlendDataReader *reader, bNodeSocketValueMenu **data)
 {
-  /* FIXME Avoid using low-level untyped read function here. No type info available here currently.
-   */
-  BLO_read_data_address(reader, data);
+  BLO_read_struct(reader, bNodeSocketValueMenu, data);
   /* Clear runtime data. */
   (*data)->enum_items = nullptr;
   (*data)->runtime_flag = 0;
+}
+
+static const Map<StringRef, StringRef> &subtype_none_to_pixel()
+{
+  static const Map<StringRef, StringRef> map = {
+      {"NodeSocketFloat", "NodeSocketFloatPixel"},
+      {"NodeSocketVector", "NodeSocketVectorPixel"},
+      {"NodeSocketVector2D", "NodeSocketVectorPixel2D"},
+      {"NodeSocketVector4D", "NodeSocketVectorPixel4D"},
+      {"NodeSocketInt", "NodeSocketIntPixel"},
+      {"NodeSocketIntVector2D", "NodeSocketIntVectorPixel2D"},
+      {"NodeSocketIntVector3D", "NodeSocketIntVectorPixel3D"}};
+  return map;
 }
 
 static void socket_data_read_data(BlendDataReader *reader, bNodeTreeInterfaceSocket &socket)
@@ -472,6 +257,24 @@ static void socket_data_read_data(BlendDataReader *reader, bNodeTreeInterfaceSoc
   bool data_read = false;
   socket_data_to_static_type(socket.socket_type, [&]<typename SocketDataType>() {
     socket_data_read_data_impl(reader, reinterpret_cast<SocketDataType **>(&socket.socket_data));
+
+    /* Pixel subtype was set to None to ensure forward compatibility.
+     * So the pixel subtype is restored here. */
+    if (socket.is_pixel_socket_forward_compat) {
+      const Map<StringRef, StringRef> &subtype_none_to_pixel_map = subtype_none_to_pixel();
+      const StringRef *pixel_type = subtype_none_to_pixel_map.lookup_ptr(socket.socket_type);
+      if (pixel_type != nullptr) {
+        MEM_SAFE_DELETE(socket.socket_type);
+        socket.socket_type = BLI_strdupn(pixel_type->data(), pixel_type->size());
+        SocketDataType *socket_data = reinterpret_cast<SocketDataType *>(socket.socket_data);
+        if constexpr (requires { socket_data->subtype; }) {
+          if (socket_data) {
+            socket_data->subtype = PROP_PIXEL;
+          }
+        }
+      }
+    }
+
     data_read = true;
   });
   if (!data_read && socket.socket_data) {
@@ -678,15 +481,15 @@ static void item_copy(bNodeTreeInterfaceItem &dst,
                       const int flag,
                       UidGeneratorFn generate_uid)
 {
-  switch (eNodeTreeInterfaceItemType(dst.item_type)) {
-    case NODE_INTERFACE_SOCKET: {
+  switch (dst.item_type) {
+    case NodeTreeInterfaceItemType::Socket: {
       bNodeTreeInterfaceSocket &dst_socket = reinterpret_cast<bNodeTreeInterfaceSocket &>(dst);
       const bNodeTreeInterfaceSocket &src_socket =
           reinterpret_cast<const bNodeTreeInterfaceSocket &>(src);
       BLI_assert(src_socket.socket_type != nullptr);
 
-      dst_socket.name = BLI_strdup_null(src_socket.name);
-      dst_socket.description = BLI_strdup_null(src_socket.description);
+      dst_socket.name_ = BLI_strdup_null(src_socket.name_);
+      dst_socket.description_ = BLI_strdup_null(src_socket.description_);
       dst_socket.socket_type = BLI_strdup(src_socket.socket_type);
       dst_socket.default_attribute_name = BLI_strdup_null(src_socket.default_attribute_name);
       dst_socket.identifier = generate_uid ? BLI_sprintfN("Socket_%d", generate_uid()) :
@@ -699,13 +502,13 @@ static void item_copy(bNodeTreeInterfaceItem &dst,
       }
       break;
     }
-    case NODE_INTERFACE_PANEL: {
+    case NodeTreeInterfaceItemType::Panel: {
       bNodeTreeInterfacePanel &dst_panel = reinterpret_cast<bNodeTreeInterfacePanel &>(dst);
       const bNodeTreeInterfacePanel &src_panel = reinterpret_cast<const bNodeTreeInterfacePanel &>(
           src);
 
-      dst_panel.name = BLI_strdup_null(src_panel.name);
-      dst_panel.description = BLI_strdup_null(src_panel.description);
+      dst_panel.name_ = BLI_strdup_null(src_panel.name_);
+      dst_panel.description_ = BLI_strdup_null(src_panel.description_);
       dst_panel.identifier = generate_uid ? generate_uid() : src_panel.identifier;
 
       panel_init(dst_panel, src_panel.items(), flag, generate_uid);
@@ -716,31 +519,30 @@ static void item_copy(bNodeTreeInterfaceItem &dst,
 
 static void item_free(bNodeTreeInterfaceItem &item, const bool do_id_user)
 {
-  switch (eNodeTreeInterfaceItemType(item.item_type)) {
-    case NODE_INTERFACE_SOCKET: {
+  switch (item.item_type) {
+    case NodeTreeInterfaceItemType::Socket: {
       bNodeTreeInterfaceSocket &socket = reinterpret_cast<bNodeTreeInterfaceSocket &>(item);
 
       if (socket.socket_data != nullptr) {
         socket_types::socket_data_free(socket, do_id_user);
       }
 
-      MEM_SAFE_DELETE(socket.name);
-      MEM_SAFE_DELETE(socket.description);
+      MEM_SAFE_DELETE(socket.name_);
+      MEM_SAFE_DELETE(socket.description_);
       MEM_SAFE_DELETE(socket.socket_type);
       MEM_SAFE_DELETE(socket.default_attribute_name);
       MEM_SAFE_DELETE(socket.identifier);
       if (socket.properties) {
-        IDP_FreePropertyContent_ex(socket.properties, do_id_user);
-        MEM_delete(socket.properties);
+        IDP_FreeProperty_ex(socket.properties, do_id_user);
       }
       break;
     }
-    case NODE_INTERFACE_PANEL: {
+    case NodeTreeInterfaceItemType::Panel: {
       bNodeTreeInterfacePanel &panel = reinterpret_cast<bNodeTreeInterfacePanel &>(item);
 
       panel.clear(do_id_user);
-      MEM_SAFE_DELETE(panel.name);
-      MEM_SAFE_DELETE(panel.description);
+      MEM_SAFE_DELETE(panel.name_);
+      MEM_SAFE_DELETE(panel.description_);
       break;
     }
   }
@@ -752,12 +554,12 @@ void item_write_struct(BlendWriter *writer, bNodeTreeInterfaceItem &item);
 
 static void item_write_data(BlendWriter *writer, bNodeTreeInterfaceItem &item)
 {
-  switch (eNodeTreeInterfaceItemType(item.item_type)) {
-    case NODE_INTERFACE_SOCKET: {
+  switch (item.item_type) {
+    case NodeTreeInterfaceItemType::Socket: {
       bNodeTreeInterfaceSocket &socket = reinterpret_cast<bNodeTreeInterfaceSocket &>(item);
-      writer->write_string(socket.name);
+      writer->write_string(socket.name_);
       writer->write_string(socket.identifier);
-      writer->write_string(socket.description);
+      writer->write_string(socket.description_);
       writer->write_string(socket.socket_type);
       writer->write_string(socket.default_attribute_name);
       if (socket.properties) {
@@ -767,10 +569,10 @@ static void item_write_data(BlendWriter *writer, bNodeTreeInterfaceItem &item)
       socket_types::socket_data_write(writer, socket);
       break;
     }
-    case NODE_INTERFACE_PANEL: {
+    case NodeTreeInterfaceItemType::Panel: {
       bNodeTreeInterfacePanel &panel = reinterpret_cast<bNodeTreeInterfacePanel &>(item);
-      writer->write_string(panel.name);
-      writer->write_string(panel.description);
+      writer->write_string(panel.name_);
+      writer->write_string(panel.description_);
       writer->write_pointer_array(panel.items_num, panel.items_array);
       for (bNodeTreeInterfaceItem *child_item : panel.items()) {
         item_write_struct(writer, *child_item);
@@ -780,35 +582,103 @@ static void item_write_data(BlendWriter *writer, bNodeTreeInterfaceItem &item)
   }
 }
 
+static const Map<StringRef, StringRef> &subtype_pixel_to_none()
+{
+  static const Map<StringRef, StringRef> map = {
+      {"NodeSocketFloatPixel", "NodeSocketFloat"},
+      {"NodeSocketVectorPixel", "NodeSocketVector"},
+      {"NodeSocketVectorPixel2D", "NodeSocketVector2D"},
+      {"NodeSocketVectorPixel4D", "NodeSocketVector4D"},
+      {"NodeSocketIntPixel", "NodeSocketInt"},
+      {"NodeSocketIntVectorPixel2D", "NodeSocketIntVector2D"},
+      {"NodeSocketIntVectorPixel3D", "NodeSocketIntVector3D"}};
+  return map;
+}
+
+static void socket_set_subtype(bNodeTreeInterfaceSocket &socket, const PropertySubType subtype)
+{
+  socket_types::socket_data_to_static_type(socket.socket_type, [&]<typename SocketDataType>() {
+    SocketDataType *socket_data = reinterpret_cast<SocketDataType *>(socket.socket_data);
+    if constexpr (requires { socket_data->subtype; }) {
+      if (socket_data) {
+        socket_data->subtype = subtype;
+      }
+    }
+  });
+}
+
+static void pixel_subtype_forward_compat(BlendWriter *writer, bNodeTreeInterfaceItem &item)
+{
+  /* The Pixel subtype is written as None subtype to ensure forward compatibility. */
+  bNodeTreeInterfaceSocket &socket = get_item_as<bNodeTreeInterfaceSocket>(item);
+  const Map<StringRef, StringRef> &subtype_pixel_to_none_map = subtype_pixel_to_none();
+  const StringRef new_type = subtype_pixel_to_none_map.lookup(socket.socket_type);
+  /* Sockets with and without Pixel subtype share the same socket storage, so socket_type can
+   * be assigned safely. */
+  char *original_type = BLI_strdup(socket.socket_type);
+  BLI_assert(new_type.size() <= StringRef(original_type).size());
+  new_type.copy_unsafe(socket.socket_type);
+  socket_set_subtype(socket, PROP_NONE);
+
+  socket.is_pixel_socket_forward_compat = true;
+
+  writer->write_struct_cast<bNodeTreeInterfaceSocket>(&item);
+  item_write_data(writer, item);
+
+  /* Restore type and subtype. */
+  StringRef(original_type).copy_unsafe(socket.socket_type);
+  socket_set_subtype(socket, PROP_PIXEL);
+  socket.is_pixel_socket_forward_compat = false;
+  MEM_SAFE_DELETE(original_type);
+}
+
 void item_write_struct(BlendWriter *writer, bNodeTreeInterfaceItem &item)
 {
-  switch (eNodeTreeInterfaceItemType(item.item_type)) {
-    case NODE_INTERFACE_SOCKET: {
+  switch (item.item_type) {
+    case NodeTreeInterfaceItemType::Socket: {
       /* Forward compatible writing of older single value only flag. To be removed in 5.0. */
       bNodeTreeInterfaceSocket &socket = get_item_as<bNodeTreeInterfaceSocket>(item);
       SET_FLAG_FROM_TEST(socket.flag,
-                         socket.structure_type == NODE_INTERFACE_SOCKET_STRUCTURE_TYPE_SINGLE,
+                         socket.structure_type == NodeSocketInterfaceStructureType::Single,
                          NODE_INTERFACE_SOCKET_SINGLE_VALUE_ONLY_LEGACY);
 
-      writer->write_struct_cast<bNodeTreeInterfaceSocket>(&item);
+      /* Todo(#140111): Forward compatible writing of Pixel subtype. To be removed in 6.0. */
+      if (!writer->is_undo() && subtype_pixel_to_none().contains(socket.socket_type)) {
+        pixel_subtype_forward_compat(writer, item);
+      }
+      else {
+        writer->write_struct_cast<bNodeTreeInterfaceSocket>(&item);
+        item_write_data(writer, item);
+      }
+
       break;
     }
-    case NODE_INTERFACE_PANEL: {
+    case NodeTreeInterfaceItemType::Panel: {
       writer->write_struct_cast<bNodeTreeInterfacePanel>(&item);
+      item_write_data(writer, item);
       break;
     }
   }
+}
 
-  item_write_data(writer, item);
+static size_t item_struct_size(const bNodeTreeInterfaceItem &item)
+{
+  switch (item.item_type) {
+    case NodeTreeInterfaceItemType::Socket:
+      return sizeof(bNodeTreeInterfaceSocket);
+    case NodeTreeInterfaceItemType::Panel:
+      return sizeof(bNodeTreeInterfacePanel);
+  }
+  return sizeof(bNodeTreeInterfaceItem);
 }
 
 static void item_read_data(BlendDataReader *reader, bNodeTreeInterfaceItem &item)
 {
-  switch (eNodeTreeInterfaceItemType(item.item_type)) {
-    case NODE_INTERFACE_SOCKET: {
+  switch (item.item_type) {
+    case NodeTreeInterfaceItemType::Socket: {
       bNodeTreeInterfaceSocket &socket = reinterpret_cast<bNodeTreeInterfaceSocket &>(item);
-      BLO_read_string(reader, &socket.name);
-      BLO_read_string(reader, &socket.description);
+      BLO_read_string(reader, &socket.name_);
+      BLO_read_string(reader, &socket.description_);
       BLO_read_string(reader, &socket.socket_type);
       BLO_read_string(reader, &socket.default_attribute_name);
       BLO_read_string(reader, &socket.identifier);
@@ -826,17 +696,17 @@ static void item_read_data(BlendDataReader *reader, bNodeTreeInterfaceItem &item
       socket_types::socket_data_read_data(reader, socket);
       break;
     }
-    case NODE_INTERFACE_PANEL: {
+    case NodeTreeInterfaceItemType::Panel: {
       bNodeTreeInterfacePanel &panel = reinterpret_cast<bNodeTreeInterfacePanel &>(item);
-      BLO_read_string(reader, &panel.name);
-      BLO_read_string(reader, &panel.description);
-      BLO_read_pointer_array(
-          reader, panel.items_num, reinterpret_cast<void **>(&panel.items_array));
+      BLO_read_string(reader, &panel.name_);
+      BLO_read_string(reader, &panel.description_);
+      BLO_read_pointer_array_and_validate_size(reader, &panel.items_array, &panel.items_num);
 
       /* Read the direct-data for each interface item if possible. The pointer becomes null if the
-       * struct type is not known. */
+       * struct type is not known, or the data is too small for its type. */
       for (const int i : IndexRange(panel.items_num)) {
-        BLO_read_struct(reader, bNodeTreeInterfaceItem, &panel.items_array[i]);
+        BLO_read_struct_with_type_size<bNodeTreeInterfaceItem>(
+            reader, &panel.items_array[i], item_struct_size);
       }
       /* Forward compatibility: Discard unknown tree interface item types that may be introduced in
        * the future. Their pointer is set to null above. */
@@ -856,8 +726,8 @@ static void item_read_data(BlendDataReader *reader, bNodeTreeInterfaceItem &item
 
 static void item_foreach_id(LibraryForeachIDData *data, bNodeTreeInterfaceItem &item)
 {
-  switch (eNodeTreeInterfaceItemType(item.item_type)) {
-    case NODE_INTERFACE_SOCKET: {
+  switch (item.item_type) {
+    case NodeTreeInterfaceItemType::Socket: {
       bNodeTreeInterfaceSocket &socket = reinterpret_cast<bNodeTreeInterfaceSocket &>(item);
 
       BKE_LIB_FOREACHID_PROCESS_FUNCTION_CALL(
@@ -868,7 +738,7 @@ static void item_foreach_id(LibraryForeachIDData *data, bNodeTreeInterfaceItem &
       socket_types::socket_data_foreach_id(data, socket);
       break;
     }
-    case NODE_INTERFACE_PANEL: {
+    case NodeTreeInterfaceItemType::Panel: {
       bNodeTreeInterfacePanel &panel = reinterpret_cast<bNodeTreeInterfacePanel &>(item);
       for (bNodeTreeInterfaceItem *item : panel.items()) {
         item_foreach_id(data, *item);
@@ -881,11 +751,11 @@ static void item_foreach_id(LibraryForeachIDData *data, bNodeTreeInterfaceItem &
 /* Move all child items to the new parent. */
 static Span<bNodeTreeInterfaceItem *> item_children(bNodeTreeInterfaceItem &item)
 {
-  switch (eNodeTreeInterfaceItemType(item.item_type)) {
-    case NODE_INTERFACE_SOCKET: {
+  switch (item.item_type) {
+    case NodeTreeInterfaceItemType::Socket: {
       return {};
     }
-    case NODE_INTERFACE_PANEL: {
+    case NodeTreeInterfaceItemType::Panel: {
       bNodeTreeInterfacePanel &panel = reinterpret_cast<bNodeTreeInterfacePanel &>(item);
       return panel.items();
     }
@@ -899,9 +769,23 @@ static Span<bNodeTreeInterfaceItem *> item_children(bNodeTreeInterfaceItem &item
 
 using namespace blender::bke::node_interface;
 
+StringRefNull bNodeTreeInterfaceSocket::name() const
+{
+  return this->name_ ? this->name_ : "";
+}
+
+StringRefNull bNodeTreeInterfaceSocket::description() const
+{
+  return this->description_ ? this->description_ : "";
+}
+
 bke::bNodeSocketType *bNodeTreeInterfaceSocket::socket_typeinfo() const
 {
-  return bke::node_socket_type_find(socket_type);
+  bke::bNodeSocketType *value = bke::node_socket_type_find(socket_type);
+  if (!value) {
+    return &bke::NodeSocketTypeUndefined;
+  }
+  return value;
 }
 
 ColorGeometry4f bNodeTreeInterfaceSocket::socket_color() const
@@ -942,24 +826,27 @@ bool bNodeTreeInterfaceSocket::set_socket_type(const StringRef new_socket_type)
   const bool supports_dynamic = supports_fields || supports_grids;
   const bool supports_lists = true;
   switch (this->structure_type) {
-    case NODE_INTERFACE_SOCKET_STRUCTURE_TYPE_FIELD:
+    case NodeSocketInterfaceStructureType::Auto:
+    case NodeSocketInterfaceStructureType::Single:
+      break;
+    case NodeSocketInterfaceStructureType::Field:
       if (!supports_fields) {
-        this->structure_type = NODE_INTERFACE_SOCKET_STRUCTURE_TYPE_AUTO;
+        this->structure_type = NodeSocketInterfaceStructureType::Auto;
       }
       break;
-    case NODE_INTERFACE_SOCKET_STRUCTURE_TYPE_GRID:
+    case NodeSocketInterfaceStructureType::Grid:
       if (!supports_grids) {
-        this->structure_type = NODE_INTERFACE_SOCKET_STRUCTURE_TYPE_AUTO;
+        this->structure_type = NodeSocketInterfaceStructureType::Auto;
       }
       break;
-    case NODE_INTERFACE_SOCKET_STRUCTURE_TYPE_DYNAMIC:
+    case NodeSocketInterfaceStructureType::Dynamic:
       if (!supports_dynamic) {
-        this->structure_type = NODE_INTERFACE_SOCKET_STRUCTURE_TYPE_AUTO;
+        this->structure_type = NodeSocketInterfaceStructureType::Auto;
       }
       break;
-    case NODE_INTERFACE_SOCKET_STRUCTURE_TYPE_LIST:
+    case NodeSocketInterfaceStructureType::List:
       if (!supports_lists) {
-        this->structure_type = NODE_INTERFACE_SOCKET_STRUCTURE_TYPE_AUTO;
+        this->structure_type = NodeSocketInterfaceStructureType::Auto;
       }
       break;
   }
@@ -1018,6 +905,16 @@ void bNodeTreeInterfaceSocket::init_from_socket_instance(const bNodeSocket *sock
   this->socket_type = BLI_strdup(socket->idname);
   this->socket_data = socket_types::make_socket_data(socket->idname);
   socket_types::socket_data_copy_ptr(*this, socket->default_value, 0);
+}
+
+StringRefNull bNodeTreeInterfacePanel::name() const
+{
+  return this->name_ ? this->name_ : "";
+}
+
+StringRefNull bNodeTreeInterfacePanel::description() const
+{
+  return this->description_ ? this->description_ : "";
 }
 
 IndexRange bNodeTreeInterfacePanel::items_range() const
@@ -1109,7 +1006,7 @@ bNodeTreeInterfacePanel *bNodeTreeInterfacePanel::find_parent_recursive(
     queue.pop();
 
     for (bNodeTreeInterfaceItem *titem : parent->items()) {
-      if (titem->item_type != NODE_INTERFACE_PANEL) {
+      if (titem->item_type != NodeTreeInterfaceItemType::Panel) {
         continue;
       }
 
@@ -1136,12 +1033,16 @@ int bNodeTreeInterfacePanel::find_valid_insert_position_for_item(
                                                const bNodeTreeInterfaceItem &b) -> bool {
     /* Keep sockets above panels. */
     if (sockets_above_panels) {
-      if (a.item_type == NODE_INTERFACE_SOCKET && b.item_type == NODE_INTERFACE_PANEL) {
+      if (a.item_type == NodeTreeInterfaceItemType::Socket &&
+          b.item_type == NodeTreeInterfaceItemType::Panel)
+      {
         return true;
       }
     }
     /* Keep outputs above inputs. */
-    if (a.item_type == NODE_INTERFACE_SOCKET && b.item_type == NODE_INTERFACE_SOCKET) {
+    if (a.item_type == NodeTreeInterfaceItemType::Socket &&
+        b.item_type == NodeTreeInterfaceItemType::Socket)
+    {
       const auto &sa = reinterpret_cast<const bNodeTreeInterfaceSocket &>(a);
       const auto &sb = reinterpret_cast<const bNodeTreeInterfaceSocket &>(b);
       const bool is_output_a = sa.flag & NODE_INTERFACE_SOCKET_OUTPUT;
@@ -1288,7 +1189,7 @@ void bNodeTreeInterfacePanel::foreach_item(FunctionRef<bool(bNodeTreeInterfaceIt
         return;
       }
 
-      if (item->item_type == NODE_INTERFACE_PANEL) {
+      if (item->item_type == NodeTreeInterfaceItemType::Panel) {
         bNodeTreeInterfacePanel *panel = reinterpret_cast<bNodeTreeInterfacePanel *>(item);
         /* Reinsert remaining items. */
         if (index < current_items.size() - 1) {
@@ -1323,7 +1224,7 @@ void bNodeTreeInterfacePanel::foreach_item(
         return;
       }
 
-      if (item->item_type == NODE_INTERFACE_PANEL) {
+      if (item->item_type == NodeTreeInterfaceItemType::Panel) {
         const bNodeTreeInterfacePanel *panel = reinterpret_cast<const bNodeTreeInterfacePanel *>(
             item);
         /* Reinsert remaining items. */
@@ -1345,7 +1246,7 @@ const bNodeTreeInterfaceSocket *bNodeTreeInterfacePanel::header_toggle_socket() 
     return nullptr;
   }
   const bNodeTreeInterfaceItem *first_item = this->items().first();
-  if (first_item->item_type != NODE_INTERFACE_SOCKET) {
+  if (first_item->item_type != NodeTreeInterfaceItemType::Socket) {
     return nullptr;
   }
   const auto &socket = *reinterpret_cast<const bNodeTreeInterfaceSocket *>(first_item);
@@ -1384,11 +1285,11 @@ static bNodeTreeInterfaceSocket *make_socket(const int uid,
 
   /* Init common socket properties. */
   new_socket->identifier = BLI_sprintfN("Socket_%d", uid);
-  new_socket->item.item_type = NODE_INTERFACE_SOCKET;
-  new_socket->name = BLI_strdupn(name.data(), name.size());
-  new_socket->description = description.is_empty() ?
-                                nullptr :
-                                BLI_strdupn(description.data(), description.size());
+  new_socket->item.item_type = NodeTreeInterfaceItemType::Socket;
+  new_socket->name_ = BLI_strdupn(name.data(), name.size());
+  new_socket->description_ = description.is_empty() ?
+                                 nullptr :
+                                 BLI_strdupn(description.data(), description.size());
   new_socket->socket_type = BLI_strdupn(socket_type.data(), socket_type.size());
   new_socket->flag = flag;
 
@@ -1513,9 +1414,8 @@ bNode *create_proxy_const_input_node(const eNodeSocketDatatype socket_type,
 
     case SOCK_FLOAT: {
       bNode *node = bke::node_add_node(&C, dst_tree, "ShaderNodeValue"_ustr);
-      bNodeSocket *socket = static_cast<bNodeSocket *>(node->outputs.first);
-      *socket->default_value_typed<bNodeSocketValueFloat>() =
-          *static_cast<const bNodeSocketValueFloat *>(value);
+      bNodeSocket *socket = node->outputs.first();
+      socket_value_copy_content(SOCK_FLOAT, socket->default_value, value, true);
       anim_basepaths.append(
           {src_property_path, get_socket_property_path(dst_tree, *socket, "default_value")});
       return node;
@@ -1544,7 +1444,7 @@ bNode *create_proxy_const_input_node(const eNodeSocketDatatype socket_type,
       switch (dst_tree.type) {
         case NTREE_COMPOSIT: {
           bNode *node = bke::node_add_node(&C, dst_tree, "CompositorNodeRGB"_ustr);
-          bNodeSocket *socket = static_cast<bNodeSocket *>(node->outputs.first);
+          bNodeSocket *socket = node->outputs.first();
           *socket->default_value_typed<bNodeSocketValueFloat>() =
               *static_cast<const bNodeSocketValueFloat *>(value);
           anim_basepaths.append(
@@ -1553,7 +1453,7 @@ bNode *create_proxy_const_input_node(const eNodeSocketDatatype socket_type,
         }
         case NTREE_SHADER: {
           bNode *node = bke::node_add_node(&C, dst_tree, "ShaderNodeRGB"_ustr);
-          bNodeSocket *socket = static_cast<bNodeSocket *>(node->outputs.first);
+          bNodeSocket *socket = node->outputs.first();
           *socket->default_value_typed<bNodeSocketValueFloat>() =
               *static_cast<const bNodeSocketValueFloat *>(value);
           anim_basepaths.append(
@@ -1568,6 +1468,10 @@ bNode *create_proxy_const_input_node(const eNodeSocketDatatype socket_type,
               {src_property_path, get_node_property_path(dst_tree, *node, "value")});
           return node;
         }
+        case NTREE_TEXTURE:
+        case NTREE_UNDEFINED:
+        case NTREE_CUSTOM:
+          break;
       }
       return nullptr;
     }
@@ -1660,6 +1564,21 @@ bNode *create_proxy_const_input_node(const eNodeSocketDatatype socket_type,
   return nullptr;
 }
 
+static bNode *create_proxy_implicit_scene_frame_node(bContext &C, bNodeTree &tree)
+{
+  if (tree.type == NTREE_COMPOSIT) {
+    bNode *node = bke::node_add_node(&C, tree, "CompositorNodeSceneTime"_ustr);
+    bke::node_find_socket(*node, SOCK_OUT, "Seconds"_ustr)->flag |= SOCK_HIDDEN;
+    return node;
+  }
+  if (tree.type == NTREE_GEOMETRY) {
+    bNode *node = bke::node_add_node(&C, tree, "GeometryNodeInputSceneTime"_ustr);
+    bke::node_find_socket(*node, SOCK_OUT, "Seconds"_ustr)->flag |= SOCK_HIDDEN;
+    return node;
+  }
+  return nullptr;
+}
+
 bNode *create_proxy_implicit_input_node(const eNodeSocketDatatype socket_type,
                                         const NodeDefaultInputType default_input,
                                         bContext &C,
@@ -1667,7 +1586,6 @@ bNode *create_proxy_implicit_input_node(const eNodeSocketDatatype socket_type,
 {
   switch (socket_type) {
     case SOCK_CUSTOM:
-    case SOCK_FLOAT:
     case SOCK_RGBA:
     case SOCK_INT_VECTOR:
     case SOCK_BOOLEAN:
@@ -1675,7 +1593,6 @@ bNode *create_proxy_implicit_input_node(const eNodeSocketDatatype socket_type,
     case SOCK_SHADER:
     case SOCK_GEOMETRY:
     case SOCK_TEXTURE:
-    case SOCK_OBJECT:
     case SOCK_IMAGE:
     case SOCK_COLLECTION:
     case SOCK_MATERIAL:
@@ -1690,10 +1607,22 @@ bNode *create_proxy_implicit_input_node(const eNodeSocketDatatype socket_type,
     case SOCK_FONT:
       return nullptr;
 
+    case SOCK_OBJECT: {
+      if (default_input == NODE_DEFAULT_INPUT_SELF_OBJECT) {
+        return bke::node_add_node(&C, tree, "GeometryNodeSelfObject"_ustr);
+      }
+      return nullptr;
+    }
+    case SOCK_FLOAT: {
+      if (default_input == NODE_DEFAULT_INPUT_SCENE_FRAME) {
+        return create_proxy_implicit_scene_frame_node(C, tree);
+      }
+      return nullptr;
+    }
     case SOCK_VECTOR:
       if (default_input == NODE_DEFAULT_INPUT_NORMAL_FIELD) {
         bNode *node = bke::node_add_node(&C, tree, "GeometryNodeInputNormal"_ustr);
-        bke::node_find_socket(*node, SOCK_OUT, "True Normal")->flag |= SOCK_HIDDEN;
+        bke::node_find_socket(*node, SOCK_OUT, "True Normal"_ustr)->flag |= SOCK_HIDDEN;
         return node;
       }
       if (default_input == NODE_DEFAULT_INPUT_POSITION_FIELD) {
@@ -1701,14 +1630,14 @@ bNode *create_proxy_implicit_input_node(const eNodeSocketDatatype socket_type,
       }
       if (default_input == NODE_DEFAULT_INPUT_HANDLE_LEFT_FIELD) {
         bNode *node = bke::node_add_node(&C, tree, "GeometryNodeInputCurveHandlePositions"_ustr);
-        bke::node_find_socket(*node, SOCK_IN, "Relative")->flag |= SOCK_HIDDEN;
-        bke::node_find_socket(*node, SOCK_OUT, "Right")->flag |= SOCK_HIDDEN;
+        bke::node_find_socket(*node, SOCK_IN, "Relative"_ustr)->flag |= SOCK_HIDDEN;
+        bke::node_find_socket(*node, SOCK_OUT, "Right"_ustr)->flag |= SOCK_HIDDEN;
         return node;
       }
       if (default_input == NODE_DEFAULT_INPUT_HANDLE_RIGHT_FIELD) {
         bNode *node = bke::node_add_node(&C, tree, "GeometryNodeInputCurveHandlePositions"_ustr);
-        bke::node_find_socket(*node, SOCK_IN, "Relative")->flag |= SOCK_HIDDEN;
-        bke::node_find_socket(*node, SOCK_OUT, "Left")->flag |= SOCK_HIDDEN;
+        bke::node_find_socket(*node, SOCK_IN, "Relative"_ustr)->flag |= SOCK_HIDDEN;
+        bke::node_find_socket(*node, SOCK_OUT, "Left"_ustr)->flag |= SOCK_HIDDEN;
         return node;
       }
       return nullptr;
@@ -1719,6 +1648,9 @@ bNode *create_proxy_implicit_input_node(const eNodeSocketDatatype socket_type,
       }
       if (default_input == NODE_DEFAULT_INPUT_ID_INDEX_FIELD) {
         return bke::node_add_node(&C, tree, "GeometryNodeInputID"_ustr);
+      }
+      if (default_input == NODE_DEFAULT_INPUT_SCENE_FRAME) {
+        return create_proxy_implicit_scene_frame_node(C, tree);
       }
       return nullptr;
 
@@ -1760,14 +1692,13 @@ bNode *create_proxy_converter_node(const eNodeSocketDatatype socket_type,
   BKE_ntree_update_tag_node_property(&dst_tree, proxy_node);
   BKE_ntree_update_after_single_tree_change(*CTX_data_main(&C), dst_tree);
 
-  bNodeSocket *socket = static_cast<bNodeSocket *>(proxy_node->inputs.first);
-  node_socket_copy_default_value_data(
-      eNodeSocketDatatype(socket->type), socket->default_value, src_value);
+  bNodeSocket *socket = proxy_node->inputs.first();
+  bke::socket_value_copy_content(socket->type, socket->default_value, src_value, true);
 
   proxy_node->flag |= NODE_COLLAPSED;
 
   if (src_socket) {
-    bNodeSocket &proxy_socket = *static_cast<bNodeSocket *>(proxy_node->inputs.first);
+    bNodeSocket &proxy_socket = *proxy_node->inputs.first();
     anim_basepaths.append(
         {socket_basepath(src_tree, *src_socket), socket_basepath(dst_tree, proxy_socket)});
   }
@@ -1783,11 +1714,11 @@ static bNodeTreeInterfacePanel *make_panel(const int uid,
   BLI_assert(!name.is_empty());
 
   bNodeTreeInterfacePanel *new_panel = MEM_new<bNodeTreeInterfacePanel>(__func__);
-  new_panel->item.item_type = NODE_INTERFACE_PANEL;
-  new_panel->name = BLI_strdupn(name.data(), name.size());
-  new_panel->description = description.is_empty() ?
-                               nullptr :
-                               BLI_strdupn(description.data(), description.size());
+  new_panel->item.item_type = NodeTreeInterfaceItemType::Panel;
+  new_panel->name_ = BLI_strdupn(name.data(), name.size());
+  new_panel->description_ = description.is_empty() ?
+                                nullptr :
+                                BLI_strdupn(description.data(), description.size());
   new_panel->identifier = uid;
   new_panel->flag = flag;
   return new_panel;
@@ -1836,6 +1767,11 @@ void bNodeTreeInterface::write(BlendWriter *writer)
 
 void bNodeTreeInterface::read_data(BlendDataReader *reader)
 {
+  /* Root item must be a panel, not checked elsewhere because it is embedded. */
+  if (this->root_panel.item.item_type != NodeTreeInterfaceItemType::Panel) {
+    BLO_read_data_invalidate(reader, "Corrupt .blend file, invalid node tree interface.");
+    this->root_panel = bNodeTreeInterfacePanel();
+  }
   item_types::item_read_data(reader, this->root_panel.item);
 
   this->runtime = MEM_new<bke::bNodeTreeInterfaceRuntime>(__func__);
@@ -1874,14 +1810,14 @@ const bNodeTreeInterfaceItem *bNodeTreeInterface::active_item() const
 
 void bNodeTreeInterfaceItem::set_selected(const bool select)
 {
-  switch (eNodeTreeInterfaceItemType(this->item_type)) {
-    case NODE_INTERFACE_PANEL: {
+  switch (this->item_type) {
+    case NodeTreeInterfaceItemType::Panel: {
       bNodeTreeInterfacePanel *panel =
           blender::bke::node_interface::get_item_as<bNodeTreeInterfacePanel>(this);
       SET_FLAG_FROM_TEST(panel->flag, select, NODE_INTERFACE_PANEL_SELECT);
       break;
     }
-    case NODE_INTERFACE_SOCKET: {
+    case NodeTreeInterfaceItemType::Socket: {
       bNodeTreeInterfaceSocket *socket =
           blender::bke::node_interface::get_item_as<bNodeTreeInterfaceSocket>(this);
       SET_FLAG_FROM_TEST(socket->flag, select, NODE_INTERFACE_SOCKET_SELECT);
@@ -2000,6 +1936,7 @@ bNodeTreeInterfacePanel *bNodeTreeInterface::insert_panel(const StringRef name,
 bNodeTreeInterfaceItem *bNodeTreeInterface::add_item_copy(const bNodeTreeInterfaceItem &item,
                                                           bNodeTreeInterfacePanel *parent)
 {
+  BLI_assert(&item != &this->root_panel.item);
   if (parent == nullptr) {
     parent = &root_panel;
   }
@@ -2017,6 +1954,7 @@ bNodeTreeInterfaceItem *bNodeTreeInterface::insert_item_copy(const bNodeTreeInte
                                                              bNodeTreeInterfacePanel *parent,
                                                              int position)
 {
+  BLI_assert(&item != &this->root_panel.item);
   if (parent == nullptr) {
     parent = &root_panel;
   }
@@ -2032,6 +1970,7 @@ bNodeTreeInterfaceItem *bNodeTreeInterface::insert_item_copy(const bNodeTreeInte
 
 bool bNodeTreeInterface::remove_item(bNodeTreeInterfaceItem &item, bool move_content_to_parent)
 {
+  BLI_assert(&item != &this->root_panel.item);
   bNodeTreeInterfacePanel *parent = this->find_item_parent(item, true);
   if (parent == nullptr) {
     return false;
@@ -2060,6 +1999,7 @@ void bNodeTreeInterface::clear_items()
 
 bool bNodeTreeInterface::move_item(bNodeTreeInterfaceItem &item, const int new_position)
 {
+  BLI_assert(&item != &this->root_panel.item);
   bNodeTreeInterfacePanel *parent = this->find_item_parent(item, true);
   if (parent == nullptr) {
     return false;
@@ -2076,11 +2016,12 @@ bool bNodeTreeInterface::move_item_to_parent(bNodeTreeInterfaceItem &item,
                                              bNodeTreeInterfacePanel *new_parent,
                                              int new_position)
 {
+  BLI_assert(&item != &this->root_panel.item);
   if (new_parent == nullptr) {
     new_parent = &this->root_panel;
   }
 
-  if (item.item_type == NODE_INTERFACE_PANEL) {
+  if (item.item_type == NodeTreeInterfaceItemType::Panel) {
     bNodeTreeInterfacePanel &src_item = reinterpret_cast<bNodeTreeInterfacePanel &>(item);
     if (src_item.contains_recursive(new_parent->item)) {
       return false;

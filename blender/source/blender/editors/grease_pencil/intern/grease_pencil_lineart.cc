@@ -8,7 +8,7 @@
 
 #include <algorithm>
 
-#include "BLI_listbase.h"
+#include "BLI_listbase.hh"
 
 #include "BKE_context.hh"
 #include "BKE_curves.hh"
@@ -19,6 +19,8 @@
 #include "BKE_report.hh"
 #include "BKE_scene.hh"
 #include "BKE_screen.hh"
+
+#include "BLT_translation.hh"
 
 #include "DNA_curves_types.h"
 #include "DNA_modifier_types.h"
@@ -44,7 +46,7 @@ void get_lineart_modifier_limits(const Object &ob, ed::greasepencil::LineartLimi
   for (const ModifierData &md : ob.modifiers) {
     if (md.type == eModifierType_GreasePencilLineart) {
       const auto *lmd = reinterpret_cast<const GreasePencilLineartModifierData *>(&md);
-      if (is_first || (lmd->flags & MOD_LINEART_USE_CACHE)) {
+      if (is_first || (lmd->flags & LINEART_GPENCIL_USE_CACHE)) {
         info.min_level = std::min<int>(info.min_level, lmd->level_start);
         info.max_level = std::max<int>(
             info.max_level, lmd->use_multiple_levels ? lmd->level_end : lmd->level_start);
@@ -62,7 +64,7 @@ void set_lineart_modifier_limits(GreasePencilLineartModifierData &lmd,
                                  const bool cache_is_ready)
 {
   BLI_assert(lmd.modifier.type == eModifierType_GreasePencilLineart);
-  if ((!cache_is_ready) || (lmd.flags & MOD_LINEART_USE_CACHE)) {
+  if ((!cache_is_ready) || (lmd.flags & LINEART_GPENCIL_USE_CACHE)) {
     lmd.level_start_override = info.min_level;
     lmd.level_end_override = info.max_level;
     lmd.edge_types_override = info.edge_types;
@@ -143,12 +145,12 @@ static bool lineart_mod_is_disabled(Scene *scene, GreasePencilLineartModifierDat
   /* Toggle on and off the baked flag as we are only interested in if something else is disabling
    * it. We can assume that the guard function has already toggled this on for all modifiers that
    * are sent here. */
-  md->flags &= (~MOD_LINEART_IS_BAKED);
+  md->flags &= ~LINEART_GPENCIL_IS_BAKED;
 
   bool enabled = BKE_modifier_is_enabled(
       scene, &md->modifier, eModifierMode_Render | eModifierMode_Realtime);
 
-  md->flags |= MOD_LINEART_IS_BAKED;
+  md->flags |= LINEART_GPENCIL_IS_BAKED;
 
   return !enabled;
 }
@@ -180,12 +182,12 @@ static bool bake_strokes(Object *ob,
   else {
     drawing = grease_pencil->insert_frame(layer, frame);
   }
-  if (UNLIKELY(!drawing)) {
+  if (!drawing) [[unlikely]] {
     return false;
   }
 
   LineartCache *local_lc = nullptr;
-  const bool should_compute_again = is_first || !(lmd->flags & MOD_LINEART_USE_CACHE);
+  const bool should_compute_again = is_first || !(lmd->flags & LINEART_GPENCIL_USE_CACHE);
   if (!(*lc)) {
     MOD_lineart_compute_feature_lines_v3(dg, *lmd, lc, !(ob->dtx & OB_DRAW_IN_FRONT));
     MOD_lineart_destroy_render_data_v3(lmd);
@@ -284,7 +286,7 @@ static void guard_modifiers(LineartBakeJob &bj)
       if (md.type == eModifierType_GreasePencilLineart) {
         GreasePencilLineartModifierData *lmd = reinterpret_cast<GreasePencilLineartModifierData *>(
             &md);
-        lmd->flags |= MOD_LINEART_IS_BAKED;
+        lmd->flags |= LINEART_GPENCIL_IS_BAKED;
       }
     }
   }
@@ -443,7 +445,7 @@ static wmOperatorStatus lineart_bake_strokes_common_modal(bContext *C,
   Scene *scene = static_cast<Scene *>(op->customdata);
 
   /* no running blender, remove handler and pass through. */
-  if (WM_jobs_test(CTX_wm_manager(C), scene, WM_JOB_TYPE_LINEART) == 0) {
+  if (!WM_jobs_has_running(CTX_wm_manager(C), scene, WM_JOB_TYPE_LINEART)) {
     return OPERATOR_FINISHED | OPERATOR_PASS_THROUGH;
   }
 
@@ -472,7 +474,7 @@ static void lineart_gpencil_clear_strokes_exec_common(Object *ob)
 
     md.mode |= eModifierMode_Realtime | eModifierMode_Render;
 
-    lmd->flags &= (~MOD_LINEART_IS_BAKED);
+    lmd->flags &= ~LINEART_GPENCIL_IS_BAKED;
   }
   DEG_id_tag_update(ob->data, ID_RECALC_GEOMETRY);
 }
@@ -505,6 +507,17 @@ static wmOperatorStatus lineart_gpencil_clear_strokes_exec(bContext *C, wmOperat
   return OPERATOR_FINISHED;
 }
 
+static std::string lineart_bake_strokes_get_description(bContext * /*C*/,
+                                                        wmOperatorType *ot,
+                                                        PointerRNA *properties)
+{
+  const bool bake_all = RNA_boolean_get(properties, "bake_all");
+  if (bake_all) {
+    return TIP_("Bake Line Art for all Grease Pencil objects");
+  }
+  return ot->description ? CTX_IFACE_(ot->translation_context, ot->description) : "";
+}
+
 static void OBJECT_OT_lineart_bake_strokes(wmOperatorType *ot)
 {
   ot->name = "Bake Line Art";
@@ -515,8 +528,20 @@ static void OBJECT_OT_lineart_bake_strokes(wmOperatorType *ot)
   ot->invoke = lineart_bake_strokes_invoke;
   ot->exec = lineart_bake_strokes_exec;
   ot->modal = lineart_bake_strokes_common_modal;
+  ot->get_description = lineart_bake_strokes_get_description;
 
   RNA_def_boolean(ot->srna, "bake_all", false, "Bake All", "Bake all Line Art modifiers");
+}
+
+static std::string lineart_clear_get_description(bContext * /*C*/,
+                                                 wmOperatorType *ot,
+                                                 PointerRNA *properties)
+{
+  const bool clear_all = RNA_boolean_get(properties, "clear_all");
+  if (clear_all) {
+    return TIP_("Clear all strokes in all Grease Pencil object");
+  }
+  return ot->description ? CTX_IFACE_(ot->translation_context, ot->description) : "";
 }
 
 static void OBJECT_OT_lineart_clear(wmOperatorType *ot)
@@ -527,6 +552,7 @@ static void OBJECT_OT_lineart_clear(wmOperatorType *ot)
 
   ot->poll = ed::greasepencil::active_grease_pencil_poll;
   ot->exec = lineart_gpencil_clear_strokes_exec;
+  ot->get_description = lineart_clear_get_description;
 
   RNA_def_boolean(ot->srna, "clear_all", false, "Clear All", "Clear all Line Art modifier bakes");
 }

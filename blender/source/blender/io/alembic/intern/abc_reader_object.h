@@ -7,6 +7,8 @@
  * \ingroup balembic
  */
 
+#include "BLI_vector.hh"
+
 #include <Alembic/Abc/IObject.h>
 #include <Alembic/Abc/ISampleSelector.h>
 #include <Alembic/AbcCoreAbstract/Foundation.h>
@@ -30,6 +32,10 @@ struct GeometrySet;
 using Alembic::AbcCoreAbstract::chrono_t;
 
 namespace io::alembic {
+
+class FCurveCreationHelper;
+
+struct TimeInfo;
 
 struct ImportSettings {
   bool blender_archive_version_prior_44 = false;
@@ -97,14 +103,13 @@ class AbcObjectReader {
    * once we fix the stack memory reference situation. */
   bool m_is_reading_a_file_sequence = false;
 
-  chrono_t m_min_time;
-  chrono_t m_max_time;
-
   /* Use reference counting since the same reader may be used by multiple
    * modifiers and/or constraints. */
   int m_refcount;
 
   bool m_inherits_xform;
+
+  bool m_has_visibility_keyframes = false;
 
  public:
   AbcObjectReader *parent_reader;
@@ -143,6 +148,10 @@ class AbcObjectReader {
   {
     return m_inherits_xform;
   }
+  bool has_visibility_keyframes() const
+  {
+    return m_has_visibility_keyframes;
+  }
 
   virtual bool valid() const = 0;
   virtual bool accepts_object_type(const Alembic::AbcCoreAbstract::ObjectHeader &alembic_header,
@@ -159,13 +168,15 @@ class AbcObjectReader {
   virtual bool topology_changed(const Mesh *existing_mesh,
                                 const Alembic::Abc::ISampleSelector &sample_sel);
 
+  void getKeyFramingHelpers(Vector<std::unique_ptr<FCurveCreationHelper>> &keyframing_helpers);
+
+  virtual std::unique_ptr<FCurveCreationHelper> getKeyFramingHelper();
+
   /** Reads the object matrix and sets up an object transform if animated. */
   void setupObjectTransform(chrono_t time);
 
   void addCacheModifier();
-
-  chrono_t minTime() const;
-  chrono_t maxTime() const;
+  void readVisibility();
 
   int refcount() const;
   void incref();

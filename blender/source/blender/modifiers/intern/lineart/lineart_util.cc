@@ -14,8 +14,8 @@
 
 #include "MEM_guardedalloc.h"
 
-#include "BLI_listbase.h"
-#include "BLI_math_matrix.h"
+#include "BLI_listbase.hh"
+#include "BLI_math_matrix_c.hh"
 
 #include "MOD_lineart.hh"
 
@@ -108,7 +108,7 @@ LineartStaticMemPoolNode *lineart_mem_new_static_pool(LineartStaticMemPool *smp,
 }
 void *lineart_mem_acquire(LineartStaticMemPool *smp, size_t size)
 {
-  LineartStaticMemPoolNode *smpn = static_cast<LineartStaticMemPoolNode *>(smp->pools.first);
+  LineartStaticMemPoolNode *smpn = smp->pools.first();
   void *ret;
 
   if (!smpn || (smpn->used_byte + size) > smpn->size) {
@@ -127,7 +127,7 @@ void *lineart_mem_acquire_thread(LineartStaticMemPool *smp, size_t size)
 
   BLI_spin_lock(&smp->lock_mem);
 
-  LineartStaticMemPoolNode *smpn = static_cast<LineartStaticMemPoolNode *>(smp->pools.first);
+  LineartStaticMemPoolNode *smpn = smp->pools.first();
 
   if (!smpn || (smpn->used_byte + size) > smpn->size) {
     smpn = lineart_mem_new_static_pool(smp, size);
@@ -214,7 +214,7 @@ void lineart_matrix_ortho_44d(double (*mProjection)[4],
 void lineart_count_and_print_render_buffer_memory(LineartData *ld)
 {
   size_t total = 0;
-  size_t count_this = BLI_listbase_count(&ld->render_data_pool.pools);
+  size_t count_this = ld->render_data_pool.pools.count();
   size_t sum_this = LRT_MEMORY_POOL_1MB * count_this;
 
   printf("LANPR Memory allocated %zu Standalone nodes, total %zu Bytes.\n", count_this, sum_this);

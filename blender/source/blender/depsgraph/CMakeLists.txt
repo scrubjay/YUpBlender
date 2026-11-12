@@ -153,6 +153,7 @@ set(LIB
   PRIVATE bf::dna
   PRIVATE bf::draw
   PRIVATE bf::functions
+  PRIVATE bf::imbuf
   PRIVATE bf::intern::atomic
   PRIVATE bf::intern::clog
   PRIVATE bf::intern::guardedalloc
@@ -179,6 +180,7 @@ if(WITH_GTESTS)
   )
   set(TEST_SRC
     intern/builder/deg_builder_rna_test.cc
+    intern/depsgraph_query_iter_test.cc
   )
   set(TEST_LIB
     ${LIB}

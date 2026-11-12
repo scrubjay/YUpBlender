@@ -44,6 +44,10 @@ static void node_declare(NodeDeclarationBuilder &b)
     template_id(&layout, context, node_pointer, "clip", nullptr, "CLIP_OT_open", nullptr);
   });
 
+  b.add_input<decl::Int>("Frame"_ustr)
+      .default_input_type(NodeDefaultInputType::NODE_DEFAULT_INPUT_SCENE_FRAME)
+      .description("The frame to get the stabilization data at");
+
   b.add_input<decl::Bool>("Invert"_ustr)
       .default_value(false)
       .description("Invert stabilization to reintroduce motion to the image");
@@ -66,11 +70,10 @@ static void node_declare(NodeDeclarationBuilder &b)
       .description("The extension mode applied to the Y axis");
 }
 
-static void node_init(const bContext *C, PointerRNA *ptr)
+static void node_init_api(const bContext *C, PointerRNA *node_ptr)
 {
-  bNode *node = static_cast<bNode *>(ptr->data);
+  bNode *node = node_ptr->data_as<bNode>();
   Scene *scene = CTX_data_scene(C);
-
   node->id = id_cast<ID *>(scene->clip);
   id_us_plus(node->id);
 }
@@ -79,7 +82,11 @@ using namespace blender::compositor;
 
 class Stabilize2DOperation : public NodeOperation {
  public:
-  using NodeOperation::NodeOperation;
+  Stabilize2DOperation(Context &context, const bNode &node) : NodeOperation(context, node)
+  {
+    InputDescriptor &image_descriptor = this->get_input_descriptor("Image");
+    image_descriptor.skip_type_conversion = true;
+  }
 
   void execute() override
   {
@@ -88,14 +95,15 @@ class Stabilize2DOperation : public NodeOperation {
 
     MovieClip *movie_clip = get_movie_clip();
     if (input.is_single_value() || !movie_clip) {
+      output.set_type(input.type());
       output.share_data(input);
       return;
     }
 
     const int width = input.domain().data_size.x;
     const int height = input.domain().data_size.y;
-    const int frame_number = BKE_movieclip_remap_scene_to_clip_frame(movie_clip,
-                                                                     context().get_frame_number());
+    const int frame = this->get_input("Frame").get_single_value_default<int>();
+    const int frame_number = BKE_movieclip_remap_scene_to_clip_frame(movie_clip, frame);
 
     float2 translation;
     float scale, rotation;
@@ -108,6 +116,7 @@ class Stabilize2DOperation : public NodeOperation {
       transformation = math::invert(transformation);
     }
 
+    output.set_type(input.type());
     output.share_data(input);
     output.transform(transformation);
     output.get_realization_options().interpolation = this->get_interpolation();
@@ -124,9 +133,10 @@ class Stabilize2DOperation : public NodeOperation {
         return Interpolation::Nearest;
       case CMP_NODE_INTERPOLATION_BILINEAR:
         return Interpolation::Bilinear;
-      case CMP_NODE_INTERPOLATION_ANISOTROPIC:
       case CMP_NODE_INTERPOLATION_BICUBIC:
         return Interpolation::Bicubic;
+      case CMP_NODE_INTERPOLATION_ANISOTROPIC:
+        return Interpolation::Anisotropic;
     }
 
     return Interpolation::Nearest;
@@ -190,7 +200,7 @@ static void node_register()
   ntype.enum_name_legacy = "STABILIZE2D";
   ntype.nclass = NODE_CLASS_DISTORT;
   ntype.declare = node_declare;
-  ntype.initfunc_api = node_init;
+  ntype.initfunc_api = node_init_api;
   ntype.get_compositor_operation = get_compositor_operation;
 
   bke::node_register_type(ntype);

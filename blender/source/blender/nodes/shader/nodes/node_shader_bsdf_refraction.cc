@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup shdnodes
+ */
+
 #include "node_shader_util.hh"
 
 namespace blender {
@@ -37,7 +41,7 @@ static int node_shader_gpu_bsdf_refraction(GPUMaterial *mat,
                                            GPUNodeStack *out)
 {
   if (!in[3].link) {
-    GPU_link(mat, "world_normals_get", &in[3].link);
+    GPU_link(mat, "world_normals_get", GPU_shading_data(), &in[3].link);
   }
 
   GPU_material_flag_set(mat, GPU_MATFLAG_REFRACT);
@@ -45,7 +49,8 @@ static int node_shader_gpu_bsdf_refraction(GPUMaterial *mat,
     GPU_material_flag_set(mat, GPU_MATFLAG_REFRACTION_MAYBE_COLORED);
   }
 
-  return GPU_stack_link(mat, node, "node_bsdf_refraction", in, out);
+  return GPU_stack_link(
+      mat, node, "node_bsdf_refraction", in, out, GPU_kernel_globals(), GPU_shading_data());
 }
 
 NODE_SHADER_MATERIALX_BEGIN
@@ -90,7 +95,7 @@ void register_node_type_sh_bsdf_refraction()
   ntype.declare = file_ns::node_declare;
   ntype.gather_link_search_ops = search_link_ops_for_shader_bsdf_node;
   ntype.add_ui_poll = object_shader_nodes_poll;
-  bke::node_type_size_preset(ntype, bke::eNodeSizePreset::Middle);
+  ntype.default_width = bke::NodeWidth::_160;
   ntype.initfunc = file_ns::node_shader_init_refraction;
   ntype.gpu_fn = file_ns::node_shader_gpu_bsdf_refraction;
   ntype.materialx_fn = file_ns::node_shader_materialx;

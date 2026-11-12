@@ -160,6 +160,14 @@ class OperatorSpec:
             " with parameters: " + str(self.operator_parameters)
 
 
+class SelectObjectSpec:
+    def __init__(self, object_name: str):
+        self.object_name = object_name
+
+    def __str__(self):
+        return "Selecting: " + self.object_name
+
+
 class DeformModifierSpec:
     """
     Holds a list of deform modifier and OperatorSpec.
@@ -539,6 +547,9 @@ class SpecMeshTest(MeshTest):
             elif isinstance(operation, OperatorSpec):
                 self._apply_operator(operation)
 
+            elif isinstance(operation, SelectObjectSpec):
+                self._select_other_object(operation)
+
             elif isinstance(operation, DeformModifierSpec):
                 self._apply_deform_modifier(evaluated_test_object, operation)
 
@@ -771,6 +782,9 @@ class SpecMeshTest(MeshTest):
         if operator.mode != 'OBJECT':
             bpy.ops.object.mode_set(mode='OBJECT')
 
+    def _select_other_object(self, operator: SelectObjectSpec):
+        bpy.data.objects[operator.object_name].select_set(True)
+
     def _apply_deform_modifier(self, test_object, operation: DeformModifierSpec):
         """
         arg: operation: DeformModifierSpec: the modifier spec
@@ -805,43 +819,33 @@ class BlendFileTest(MeshTest):
 
     def __init__(self, test_object_name, exp_object_name, threshold=None):
         super().__init__(test_object_name, exp_object_name, threshold=threshold)
-        if bpy.data.objects[test_object_name].get("allow_index_change"):
+        test_object = bpy.data.objects[test_object_name]
+        if test_object.get("allow_index_change"):
             self.allow_index_change = True
+        # Some tests need a looser comparison than the default, for example simulations where
+        # tiny floating point differences between platforms are amplified over many solver
+        # iterations. Those files can override the threshold with a custom property.
+        threshold_override = test_object.get("threshold")
+        if threshold_override is not None:
+            self.threshold = float(threshold_override)
 
     def apply_operations(self, evaluated_test_object_name):
-
         BlendFileTest.apply_operations.__doc__ = MeshTest.apply_operations.__doc__
+
         evaluated_test_object = bpy.data.objects[evaluated_test_object_name]
         modifiers_list = evaluated_test_object.modifiers
         if not modifiers_list:
             raise Exception("No modifiers are added to test object.")
-        for modifier in modifiers_list:
-            bpy.ops.object.modifier_apply(modifier=modifier.name)
-
-
-class GeoNodesSimulationTest(MeshTest):
-    """
-    A mesh test that works similar to BlendFileTest but evaluates the scene at multiple
-    frames so that simulations can run.
-    """
-
-    def __init__(self, test_object_name, exp_object_name, *, frames_num, **kwargs):
-        super().__init__(test_object_name, exp_object_name, **kwargs)
-        self.frames_num = frames_num
-
-    def apply_operations(self, evaluated_test_object_name):
-        GeoNodesSimulationTest.apply_operations.__doc__ = MeshTest.apply_operations.__doc__
-
-        evaluated_test_object = bpy.data.objects[evaluated_test_object_name]
-        modifiers_list = evaluated_test_object.modifiers
-        if not modifiers_list:
-            raise Exception("The object has no modifiers.")
 
         scene = bpy.context.scene
-        for frame in range(1, self.frames_num + 1):
-            scene.frame_set(frame)
+        if scene.get("use_playback"):
+            frame_start = scene.frame_start
+            frame_end = scene.frame_end
+            for frame in range(frame_start, frame_end + 1):
+                scene.frame_set(frame)
 
         for modifier in modifiers_list:
+            print(modifier.name)
             bpy.ops.object.modifier_apply(modifier=modifier.name)
 
 

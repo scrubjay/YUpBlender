@@ -12,8 +12,8 @@
 #include "IMB_imbuf.hh"
 #include "IMB_imbuf_types.hh"
 
-#include "BLI_math_vector.h"
-#include "BLI_utildefines.h"
+#include "BLI_math_vector_c.hh"
+#include "BLI_utildefines.hh"
 
 #include "DNA_scene_types.h"
 
@@ -634,7 +634,8 @@ ImBuf *IMB_stereo3d_ImBuf(const ImageFormatData *im_format, ImBuf *ibuf_left, Im
 
   IMB_stereo3d_write_dimensions(
       im_format->stereo3d_format.display_mode, false, ibuf_left->x, ibuf_left->y, &width, &height);
-  ibuf_stereo = IMB_allocImBuf(width, height, ibuf_left->planes, 0);
+  ibuf_stereo = IMB_allocImBuf(width, height, ImBufFlags::Zero);
+  ibuf_stereo->color_mode = ibuf_left->color_mode;
 
   if (is_float) {
     IMB_alloc_float_pixels(ibuf_stereo, ibuf_left->channels);
@@ -1165,16 +1166,21 @@ void IMB_ImBufFromStereo3d(const Stereo3dFormat *s3d,
                                &width,
                                &height);
 
-  ibuf_left = IMB_allocImBuf(width, height, ibuf_stereo3d->planes, 0);
-  ibuf_right = IMB_allocImBuf(width, height, ibuf_stereo3d->planes, 0);
+  ibuf_left = IMB_allocImBuf(width, height, ImBufFlags::Zero);
+  ibuf_right = IMB_allocImBuf(width, height, ImBufFlags::Zero);
+  ibuf_left->color_mode = ibuf_right->color_mode = ibuf_stereo3d->color_mode;
 
   if (is_float) {
     IMB_alloc_float_pixels(ibuf_left, ibuf_stereo3d->channels);
     IMB_alloc_float_pixels(ibuf_right, ibuf_stereo3d->channels);
+    ibuf_left->float_buffer.colorspace = ibuf_stereo3d->float_buffer.colorspace;
+    ibuf_right->float_buffer.colorspace = ibuf_stereo3d->float_buffer.colorspace;
   }
   else {
     IMB_alloc_byte_pixels(ibuf_left);
     IMB_alloc_byte_pixels(ibuf_right);
+    ibuf_left->byte_buffer.colorspace = ibuf_stereo3d->byte_buffer.colorspace;
+    ibuf_right->byte_buffer.colorspace = ibuf_stereo3d->byte_buffer.colorspace;
   }
 
   ibuf_left->flags = ibuf_stereo3d->flags;

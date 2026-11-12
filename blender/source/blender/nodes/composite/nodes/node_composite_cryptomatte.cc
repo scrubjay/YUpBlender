@@ -9,13 +9,13 @@
 
 #include "node_composite_util.hh"
 
-#include "BLI_assert.h"
-#include "BLI_listbase.h"
-#include "BLI_math_vector.h"
+#include "BLI_assert.hh"
+#include "BLI_listbase.hh"
+#include "BLI_math_vector_c.hh"
 #include "BLI_math_vector_types.hh"
 #include "BLI_string_ref.hh"
-#include "BLI_string_utf8.h"
-#include "BLI_utildefines.h"
+#include "BLI_string_utf8.hh"
+#include "BLI_utildefines.hh"
 #include "BLI_vector.hh"
 
 #include "IMB_imbuf_types.hh"
@@ -177,7 +177,7 @@ void ntreeCompositCryptomatteUpdateLayerNames(bNode *node)
 {
   BLI_assert(node->type_legacy == CMP_NODE_CRYPTOMATTE);
   NodeCryptomatte *n = static_cast<NodeCryptomatte *>(node->storage);
-  BLI_freelistN(&n->runtime.layers);
+  n->runtime.layers.free_no_destruct();
 
   bke::cryptomatte::CryptomatteSessionPtr session = cryptomatte_init_from_node(*node, false);
 
@@ -229,8 +229,8 @@ static void node_free_cryptomatte(bNode *node)
 
   if (nc) {
     MEM_SAFE_DELETE(nc->matte_id);
-    BLI_freelistN(&nc->runtime.layers);
-    BLI_freelistN(&nc->entries);
+    nc->runtime.layers.free_no_destruct();
+    nc->entries.free_no_destruct();
     MEM_delete(nc);
   }
 }
@@ -243,7 +243,7 @@ static void node_copy_cryptomatte(bNodeTree * /*dst_ntree*/,
   NodeCryptomatte *dest_nc = static_cast<NodeCryptomatte *>(MEM_dupalloc(src_nc));
 
   BLI_duplicatelist(&dest_nc->entries, &src_nc->entries);
-  BLI_listbase_clear(&dest_nc->runtime.layers);
+  dest_nc->runtime.layers.clear_no_delete();
   dest_nc->matte_id = static_cast<char *>(MEM_dupalloc(src_nc->matte_id));
   dest_node->storage = dest_nc;
 }
@@ -529,7 +529,7 @@ class BaseCryptoMatteOperation : public NodeOperation {
     GPU_shader_bind(shader);
 
     Result &input_image = get_input_image();
-    input_image.bind_as_texture(shader, "input_tx");
+    gpu::Texture *input_texture = input_image.bind_as_texture_or_single_value(shader, "input_tx");
 
     matte.bind_as_texture(shader, "matte_tx");
 
@@ -541,7 +541,7 @@ class BaseCryptoMatteOperation : public NodeOperation {
     compute_dispatch_threads_at_least(shader, domain.data_size);
 
     GPU_shader_unbind();
-    input_image.unbind_as_texture();
+    input_image.unbind_as_texture_or_single_value(input_texture);
     matte.unbind_as_texture();
     image_output.unbind_as_image();
   }
@@ -593,17 +593,16 @@ static void node_declare(NodeDeclarationBuilder &b)
   b.add_output<decl::Color>("Pick"_ustr).structure_type(StructureType::Dynamic);
 }
 
-static void node_init(bNodeTree * /*ntree*/, bNode *node)
+static void node_init(bNodeTree * /*node_tree*/, bNode *node)
 {
-  NodeCryptomatte *user = MEM_new<NodeCryptomatte>(__func__);
-  node->storage = user;
+  NodeCryptomatte *storage = MEM_new<NodeCryptomatte>(__func__);
+  node->storage = storage;
 }
 
-static void node_init_api(const bContext *C, PointerRNA *ptr)
+static void node_init_api(const bContext *C, PointerRNA *node_ptr)
 {
   Scene *scene = CTX_data_scene(C);
-  bNode *node = static_cast<bNode *>(ptr->data);
-  BLI_assert(node->type_legacy == CMP_NODE_CRYPTOMATTE);
+  bNode *node = node_ptr->data_as<bNode>();
   node->id = &scene->id;
   id_us_plus(node->id);
 }
@@ -625,7 +624,7 @@ static void node_extra_info(NodeExtraInfoParams &parameters)
     row.text = RPT_("Node Unsupported");
     row.tooltip = TIP_(
         "The Cryptomatte node in render mode is only supported for scene compositing");
-    row.icon = ICON_ERROR;
+    row.icon = ICON_STATUS_ERROR;
     parameters.rows.append(std::move(row));
     return;
   }
@@ -643,7 +642,7 @@ static void node_extra_info(NodeExtraInfoParams &parameters)
   NodeExtraInfoRow row;
   row.text = RPT_("Passes Not Supported");
   row.tooltip = TIP_("Render passes in the Viewport compositor are only supported in EEVEE");
-  row.icon = ICON_ERROR;
+  row.icon = ICON_STATUS_ERROR;
   parameters.rows.append(std::move(row));
 }
 
@@ -719,7 +718,7 @@ class CryptoMatteOperation : public BaseCryptoMatteOperation {
           pass_result.release();
           return layers;
         }
-        layers.append(pass_result);
+        layers.append(std::move(pass_result));
       }
 
       /* The target view later was processed already, no need to check other view layers. */
@@ -793,8 +792,8 @@ class CryptoMatteOperation : public BaseCryptoMatteOperation {
 
     image_user_for_layer.layer = layer_index;
     for (const std::string &pass_name : pass_names) {
-      Result pass_result = context().cache_manager().cached_images.get(
-          context(), image, &image_user_for_layer, pass_name.c_str());
+      const Result &pass_result = context().cache_manager().cached_images.get(
+          context(), *image, image_user_for_layer, pass_name.c_str());
 
       /* The layers will be released by the caller, so return a wrapper around the cached image
        * instead. */
@@ -802,7 +801,7 @@ class CryptoMatteOperation : public BaseCryptoMatteOperation {
                                                           pass_result.precision());
       layer_result.share_data(pass_result);
 
-      layers.append(layer_result);
+      layers.append(std::move(layer_result));
     }
 
     return layers;
@@ -914,7 +913,7 @@ static void node_register()
   ntype.enum_name_legacy = "CRYPTOMATTE_V2";
   ntype.nclass = NODE_CLASS_MATTE;
   ntype.declare = node_declare;
-  bke::node_type_size(ntype, 240, 100, 700);
+  ntype.default_width = bke::NodeWidth::_240;
   ntype.initfunc = node_init;
   ntype.initfunc_api = node_init_api;
   ntype.get_extra_info = node_extra_info;
@@ -1001,7 +1000,7 @@ class LegacyCryptoMatteOperation : public BaseCryptoMatteOperation {
         continue;
       }
 
-      const Result input = get_input(input_socket->identifier);
+      const Result &input = get_input(input_socket->identifier);
       if (input.is_single_value()) {
         /* If this Cryptomatte layer is not valid, because it is not an image, then all later
          * Cryptomatte layers can't be used even if they were valid. */
@@ -1013,7 +1012,7 @@ class LegacyCryptoMatteOperation : public BaseCryptoMatteOperation {
       Result layer_result = this->context().create_result(input.type(), input.precision());
       layer_result.share_data(input);
 
-      layers.append(layer_result);
+      layers.append(std::move(layer_result));
     }
     return layers;
   }

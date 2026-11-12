@@ -12,7 +12,7 @@ static void node_declare(NodeDeclarationBuilder &b)
 {
   b.add_output<decl::Float>("Area"_ustr)
       .translation_context(BLT_I18NCONTEXT_AMOUNT)
-      .field_source()
+      .structure_type(StructureType::Field)
       .description("The surface area of each of the mesh's faces");
 }
 
@@ -50,6 +50,11 @@ class FaceAreaFieldInput final : public bke::MeshFieldInput {
   std::optional<AttrDomain> preferred_domain(const Mesh & /*mesh*/) const override
   {
     return AttrDomain::Face;
+  }
+
+  bke::NativeFieldDomain native_domain_info(const Mesh & /*mesh*/) const override
+  {
+    return bke::NativeFieldDomain::Domain{AttrDomain::Face};
   }
 };
 

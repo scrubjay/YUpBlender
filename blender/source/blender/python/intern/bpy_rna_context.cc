@@ -10,8 +10,8 @@
 
 #include <Python.h>
 
-#include "BLI_listbase.h"
-#include "BLI_utildefines.h"
+#include "BLI_listbase.hh"
+#include "BLI_utildefines.hh"
 
 #include "BKE_context.hh"
 #include "BKE_main.hh"
@@ -327,8 +327,12 @@ static PyObject *bpy_rna_context_temp_override_enter(BPyContextTempOverride *sel
 
   /* Manipulate the context (setup). */
   if (self->ctx_temp.screen_is_set) {
-    self->ctx_temp_orig.screen = WM_window_get_active_screen(win);
-    bpy_rna_context_temp_set_screen_for_window(C, win, self->ctx_temp.screen);
+    /* A `None` window may be passed in, as the window defines the screen,
+     * there is nothing to do here. */
+    if (win != nullptr) {
+      self->ctx_temp_orig.screen = WM_window_get_active_screen(win);
+      bpy_rna_context_temp_set_screen_for_window(C, win, self->ctx_temp.screen);
+    }
   }
 
   /* NOTE: always set these members, even when they are equal to the current values because
@@ -542,7 +546,7 @@ static PyObject *bpy_rna_context_temp_override_logging_set(BPyContextTempOverrid
   };
   static _PyArg_Parser _parser = {
       "O&" /* `enable` */
-      "|$" /* Optional keyword only arguments. */
+      "|$" /* Optional, keyword only arguments. */
       "O&" /* `hide_missing` */
       ":logging_set",
       _keywords,
@@ -681,8 +685,6 @@ static PyObject *bpy_context_temp_override_extract_known_args(const char *const 
   return kwds_parse;
 }
 
-/* NOTE(@ideasman42): `ContextTempOverride` isn't accessible from (without creating an instance),
- * it should be exposed although it doesn't seem especially important either. */
 PyDoc_STRVAR(
     /* Wrap. */
     bpy_context_temp_override_doc,
@@ -709,7 +711,7 @@ PyDoc_STRVAR(
     "   :type region: :class:`bpy.types.Region` | None\n"
     "   :param keywords: Additional keywords override context members.\n"
     "   :return: The context manager.\n"
-    "   :rtype: ContextTempOverride\n");
+    "   :rtype: :class:`bpy.types.ContextTempOverride`\n");
 static PyObject *bpy_context_temp_override(PyObject *self, PyObject *args, PyObject *kwds)
 {
   const PointerRNA *context_ptr = pyrna_struct_as_ptr(self, RNA_Context);
@@ -858,12 +860,13 @@ PyMethodDef BPY_rna_context_temp_override_method_def = {
 #  endif
 #endif
 
-void bpy_rna_context_types_init()
+void bpy_rna_context_types_init(PyObject *bpy_types)
 {
   if (PyType_Ready(&BPyContextTempOverride_Type) < 0) {
     BLI_assert_unreachable();
     return;
   }
+  PyModule_AddType(bpy_types, &BPyContextTempOverride_Type);
 }
 
 /** \} */

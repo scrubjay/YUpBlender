@@ -20,7 +20,7 @@
  * - `BKE_lib_remap_callback_` should be used for functions managing remapping callbacks.
  */
 
-#include "BLI_compiler_attrs.h"
+#include "BLI_compiler_attrs.hh"
 #include "BLI_enum_flags.hh"
 #include "BLI_function_ref.hh"
 #include "BLI_map.hh"
@@ -95,7 +95,8 @@ enum {
    * Allow remapping of an ID pointer of a certain to another one of a different type.
    *
    * WARNING: Use with caution. Should only be needed in a very small amount of cases, e.g. when
-   * converting an ID type to another. */
+   * converting an ID type to another.
+   */
   ID_REMAP_ALLOW_IDTYPE_MISMATCH = 1 << 9,
 
   /**
@@ -158,7 +159,8 @@ void BKE_libblock_remap_multiple(Main *bmain,
  * implies that calling code handles all the other aspects described above. This is typically the
  * case e.g. in read-file process.
  *
- * WARNING: This call will likely leave the given BMain in invalid state in many aspects. */
+ * WARNING: This call will likely leave the given BMain in invalid state in many aspects.
+ */
 void BKE_libblock_remap_multiple_raw(Main *bmain,
                                      bke::id::IDRemapper &mappings,
                                      const int remap_flags);
@@ -183,11 +185,11 @@ void BKE_libblock_unlink(Main *bmain, void *idv, bool do_skip_indirect) ATTR_NON
 /**
  * Similar to libblock_remap, but only affects IDs used by given \a idv ID.
  *
- * \param old_idv: Unlike BKE_libblock_remap, can be NULL,
- * in which case all ID usages by given \a idv will be cleared.
- *
  * \param bmain: May be NULL, in which case there won't be depsgraph updates nor post-processing on
  * some ID types (like collections or objects) to ensure their runtime data is valid.
+ *
+ * \param old_idv: Unlike BKE_libblock_remap, can be NULL,
+ * in which case all ID usages by given \a idv will be cleared.
  */
 void BKE_libblock_relink_ex(Main *bmain, void *idv, void *old_idv, void *new_idv, int remap_flags)
     ATTR_NONNULL(2);

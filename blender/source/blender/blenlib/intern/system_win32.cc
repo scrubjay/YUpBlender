@@ -20,9 +20,9 @@
 #include "uri_convert.hh"
 #include "utfconv.hh"
 
-#include "BLI_string.h"
+#include "BLI_string.hh"
 
-#include "BLI_system.h" /* Own include. */
+#include "BLI_system.hh" /* Own include. */
 
 /* GetVersionEx is deprecated and also tends to lie about much of the information
  * it gives you. We should deal with that one day, but today is not that day. For
@@ -99,6 +99,8 @@ static void bli_windows_get_module_name(LPVOID address, PCHAR buffer, size_t siz
   }
 }
 
+/* Note: Because this code can run after main exits the MEM_* api is not available, and the stock
+ * calloc/free *must* be used. */
 static void bli_windows_get_module_version(const char *file, char *buffer, size_t buffersize)
 {
   buffer[0] = 0;
@@ -107,7 +109,7 @@ static void bli_windows_get_module_version(const char *file, char *buffer, size_
   LPBYTE lpBuffer = nullptr;
   DWORD verSize = GetFileVersionInfoSize(file, &verHandle);
   if (verSize != 0) {
-    LPSTR verData = (LPSTR)MEM_new_zeroed(verSize, "crash module version");
+    LPSTR verData = (LPSTR)calloc(1, verSize);
 
     if (GetFileVersionInfo(file, verHandle, verSize, verData)) {
       if (VerQueryValue(verData, "\\", (VOID FAR * FAR *)&lpBuffer, &size)) {
@@ -128,7 +130,7 @@ static void bli_windows_get_module_version(const char *file, char *buffer, size_
         }
       }
     }
-    MEM_delete(verData);
+    free(verData);
   }
 }
 
@@ -181,14 +183,16 @@ static void bli_windows_system_backtrace_exception_record(FILE *fp, PEXCEPTION_R
   fprintf(fp, "\n\n");
 }
 
+/* Note: Because this code can run after main exits the MEM_* api is not available, and the stock
+ * calloc/free *must* be used. */
 static bool BLI_windows_system_backtrace_run_trace(FILE *fp, HANDLE hThread, PCONTEXT context)
 {
   const int max_symbol_length = 100;
 
   bool result = true;
 
-  PSYMBOL_INFO symbolinfo = static_cast<PSYMBOL_INFO>(MEM_new_zeroed(
-      sizeof(SYMBOL_INFO) + max_symbol_length * sizeof(char), "crash Symbol table"));
+  PSYMBOL_INFO symbolinfo = static_cast<PSYMBOL_INFO>(
+      calloc(1, sizeof(SYMBOL_INFO) + max_symbol_length * sizeof(char)));
   symbolinfo->MaxNameLen = max_symbol_length - 1;
   symbolinfo->SizeOfStruct = sizeof(SYMBOL_INFO);
 
@@ -258,7 +262,7 @@ static bool BLI_windows_system_backtrace_run_trace(FILE *fp, HANDLE hThread, PCO
       break;
     }
   }
-  MEM_delete(symbolinfo);
+  free(symbolinfo);
   fprintf(fp, "\n\n");
   return result;
 }
@@ -613,12 +617,7 @@ void BLI_windows_exception_show_dialog(const char *filepath_crashlog,
 
   TASKDIALOGCONFIG config = {0};
   const TASKDIALOG_BUTTON buttons[] = {{IDRETRY, L"Restart"},
-#if 0
-    /* This lead to a large influx of low quality reports on the tracker,
-     * and has been disabled for that reason, we can re-enable this when
-     * a better workflow has been established. */
-    {IDOK, L"Report a Bug"},
-#endif
+                                       {IDOK, L"Report a Bug"},
                                        {IDHELP, L"View Crash Log"},
                                        {IDCLOSE, L"Close"}};
 
@@ -688,7 +687,8 @@ void BLI_windows_exception_show_dialog(const char *filepath_crashlog,
             L"&project=blender"
             L"&os=" + url_encode_wstring(get_os_info()) +
             L"&gpu=" + url_encode_wstring(data_ptr->gpu_name) +
-            L"&broken_version=" + url_encode_wstring(data_ptr->build_version);
+            L"&broken_version=" + url_encode_wstring(data_ptr->build_version) +
+            L"&utm_content=crash_dialog";
         /* clang-format on */
         ShellExecuteW(nullptr, L"open", link.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
         return S_FALSE;

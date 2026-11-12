@@ -934,7 +934,7 @@ class Rig(SimpleChainRig):
     def parameters_ui(cls, layout, params):
         """ Create the ui for the rig parameters. """
 
-        layout.label(icon='INFO', text='A straight line rest shape works best.')
+        layout.label(icon='STATUS_INFO', text='A straight line rest shape works best.')
 
         layout.prop(params, 'sik_start_controls')
         layout.prop(params, 'sik_mid_controls')
@@ -1280,7 +1280,7 @@ class POSE_OT_rigify_spline_tentacle_toggle_control(RigifySplineTentacleToggleCo
             select_bone = ctrl.bone
 
         if select_bone is not None:
-            for bone in obj.data.bones:
+            for bone in obj.data.edit_bones:
                 bone.select = bone == select_bone
             obj.data.bones.active = select_bone
 

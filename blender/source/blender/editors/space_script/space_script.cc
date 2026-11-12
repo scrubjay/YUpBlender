@@ -12,8 +12,8 @@
 
 #include "MEM_guardedalloc.h"
 
-#include "BLI_listbase.h"
-#include "BLI_string_utf8.h"
+#include "BLI_listbase.hh"
+#include "BLI_string_utf8.hh"
 
 #include "BKE_context.hh"
 #include "BKE_lib_query.hh"
@@ -160,7 +160,8 @@ static void script_space_blend_read_after_liblink(BlendLibReader * /*reader*/,
 {
   SpaceScript *scpt = reinterpret_cast<SpaceScript *>(sl);
 
-  /*scpt->script = nullptr; - 2.45 set to null, better re-run the script */
+  /* 2.45 set to null, better re-run the script. */
+  // scpt->script = nullptr;
   if (scpt->script) {
     SCRIPT_SET_NULL(scpt->script);
   }
@@ -180,6 +181,7 @@ void ED_spacetype_script()
 
   st->spaceid = SPACE_SCRIPT;
   STRNCPY_UTF8(st->name, "Script");
+  st->struct_size = sizeof(SpaceScript);
 
   st->create = script_create;
   st->free = script_free;

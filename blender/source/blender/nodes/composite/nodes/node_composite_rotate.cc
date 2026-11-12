@@ -67,7 +67,11 @@ using namespace blender::compositor;
 
 class RotateOperation : public NodeOperation {
  public:
-  using NodeOperation::NodeOperation;
+  RotateOperation(Context &context, const bNode &node) : NodeOperation(context, node)
+  {
+    InputDescriptor &image_descriptor = this->get_input_descriptor("Image");
+    image_descriptor.skip_type_conversion = true;
+  }
 
   void execute() override
   {
@@ -76,6 +80,7 @@ class RotateOperation : public NodeOperation {
 
     const Result &input = this->get_input("Image");
     Result &output = this->get_result("Image");
+    output.set_type(input.type());
     output.share_data(input);
     output.transform(transformation);
     output.get_realization_options().interpolation = this->get_interpolation();
@@ -92,9 +97,10 @@ class RotateOperation : public NodeOperation {
         return Interpolation::Nearest;
       case CMP_NODE_INTERPOLATION_BILINEAR:
         return Interpolation::Bilinear;
-      case CMP_NODE_INTERPOLATION_ANISOTROPIC:
       case CMP_NODE_INTERPOLATION_BICUBIC:
         return Interpolation::Bicubic;
+      case CMP_NODE_INTERPOLATION_ANISOTROPIC:
+        return Interpolation::Anisotropic;
     }
 
     return Interpolation::Nearest;

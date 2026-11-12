@@ -18,6 +18,8 @@
 #include "BLI_task.hh"
 #include "BLI_virtual_array.hh"
 
+#include "PRF_profile.hh"
+
 namespace blender {
 
 namespace bounds {
@@ -60,6 +62,80 @@ template<typename T>
   return Bounds<T>{b, b};
 }
 
+namespace detail {
+
+/**
+ * Find the smallest and largest values element-wise in a non-empty span, in one sequential pass.
+ * Several accumulators ("lanes"), so that the comparisons of one point do not wait on those of
+ * the point before it.
+ */
+template<typename T> [[nodiscard]] inline Bounds<T> min_max_lanes(const Span<T> values)
+{
+  constexpr int64_t lanes = 4;
+  const int64_t size = values.size();
+  const int64_t full = size & ~(lanes - 1);
+
+  T lo[lanes];
+  T hi[lanes];
+  for (int64_t lane = 0; lane < lanes; lane++) {
+    lo[lane] = hi[lane] = values[0];
+  }
+  for (int64_t i = 0; i < full; i += lanes) {
+    for (int64_t lane = 0; lane < lanes; lane++) {
+      const T &value = values[i + lane];
+      lo[lane] = math::min(lo[lane], value);
+      hi[lane] = math::max(hi[lane], value);
+    }
+  }
+
+  Bounds<T> result{lo[0], hi[0]};
+  for (int64_t lane = 1; lane < lanes; lane++) {
+    result.min = math::min(result.min, lo[lane]);
+    result.max = math::max(result.max, hi[lane]);
+  }
+  for (int64_t i = full; i < size; i++) {
+    result.min = math::min(result.min, values[i]);
+    result.max = math::max(result.max, values[i]);
+  }
+  return result;
+}
+
+/** #min_max_lanes with a radius added to each value first. */
+template<typename T, typename RadiusT>
+[[nodiscard]] inline Bounds<T> min_max_lanes_with_radii(const Span<T> values,
+                                                        const Span<RadiusT> radii)
+{
+  constexpr int64_t lanes = 4;
+  const int64_t size = values.size();
+  const int64_t full = size & ~(lanes - 1);
+
+  T lo[lanes];
+  T hi[lanes];
+  for (int64_t lane = 0; lane < lanes; lane++) {
+    lo[lane] = values[0] - radii[0];
+    hi[lane] = values[0] + radii[0];
+  }
+  for (int64_t i = 0; i < full; i += lanes) {
+    for (int64_t lane = 0; lane < lanes; lane++) {
+      lo[lane] = math::min(lo[lane], values[i + lane] - radii[i + lane]);
+      hi[lane] = math::max(hi[lane], values[i + lane] + radii[i + lane]);
+    }
+  }
+
+  Bounds<T> result{lo[0], hi[0]};
+  for (int64_t lane = 1; lane < lanes; lane++) {
+    result.min = math::min(result.min, lo[lane]);
+    result.max = math::max(result.max, hi[lane]);
+  }
+  for (int64_t i = full; i < size; i++) {
+    result.min = math::min(result.min, values[i] - radii[i]);
+    result.max = math::max(result.max, values[i] + radii[i]);
+  }
+  return result;
+}
+
+}  // namespace detail
+
 /**
  * Find the smallest and largest values element-wise in the span.
  */
@@ -68,17 +144,14 @@ template<typename T> [[nodiscard]] inline std::optional<Bounds<T>> min_max(const
   if (values.is_empty()) {
     return std::nullopt;
   }
+  PRF_scope_with_name("bounds::min_max", ProfileCategory::Default);
   const Bounds<T> init{values.first(), values.first()};
   return threading::parallel_reduce(
       values.index_range(),
       1024,
       init,
       [&](const IndexRange range, const Bounds<T> &init) {
-        Bounds<T> result = init;
-        for (const int i : range) {
-          math::min_max(values[i], result.min, result.max);
-        }
-        return result;
+        return merge(init, detail::min_max_lanes(values.slice(range)));
       },
       [](const Bounds<T> &a, const Bounds<T> &b) { return merge(a, b); });
 }
@@ -93,6 +166,7 @@ template<typename T>
     /* To avoid mask slice/lookup. */
     return min_max(values);
   }
+  PRF_scope_with_name("bounds::min_max", ProfileCategory::Default);
   const Bounds<T> init{values[mask.first()], values[mask.first()]};
   return threading::parallel_reduce(
       mask.index_range().drop_front(1),
@@ -119,16 +193,46 @@ template<typename T, typename RadiusT>
   if (values.is_empty()) {
     return std::nullopt;
   }
+  PRF_scope_with_name("bounds::min_max_with_radii", ProfileCategory::Default);
   const Bounds<T> init{values.first(), values.first()};
   return threading::parallel_reduce(
       values.index_range(),
       1024,
       init,
       [&](const IndexRange range, const Bounds<T> &init) {
+        return merge(init,
+                     detail::min_max_lanes_with_radii(values.slice(range), radii.slice(range)));
+      },
+      [](const Bounds<T> &a, const Bounds<T> &b) { return merge(a, b); });
+}
+
+/**
+ * Find the smallest and largest values element-wise in a virtual array.
+ */
+template<typename T> [[nodiscard]] inline std::optional<Bounds<T>> min_max(const VArray<T> &varray)
+{
+  if (varray.is_empty()) {
+    return std::nullopt;
+  }
+  PRF_scope_with_name("bounds::min_max_with_radii", ProfileCategory::Default);
+  const CommonVArrayInfo info = varray.common_info();
+  if (info.type == CommonVArrayInfo::Type::Single) {
+    Bounds<T> result = Bounds<T>(varray.first());
+    return result;
+  }
+  if (info.type == CommonVArrayInfo::Type::Span) {
+    const Span<T> span(static_cast<const T *>(info.data), varray.size());
+    return min_max<T>(span);
+  }
+  const Bounds<T> init{varray.first(), varray.first()};
+  return threading::parallel_reduce(
+      varray.index_range(),
+      1024,
+      init,
+      [&](const IndexRange range, const Bounds<T> &init) {
         Bounds<T> result = init;
         for (const int i : range) {
-          result.min = math::min(values[i] - radii[i], result.min);
-          result.max = math::max(values[i] + radii[i], result.max);
+          math::min_max(varray[i], result.min, result.max);
         }
         return result;
       },
@@ -166,6 +270,7 @@ template<typename T> inline std::optional<T> max(const VArray<T> &values)
   if (values.is_empty()) {
     return std::nullopt;
   }
+  PRF_scope_with_name("bounds::max", ProfileCategory::Default);
   if (const std::optional<T> value = values.get_if_single()) {
     return value;
   }
@@ -474,7 +579,7 @@ inline void Bounds<T>::pad(const PaddingT &padding)
   this->max = this->max + padding;
 }
 
-template<typename T> inline bool Bounds<T>::contains(const T &point)
+template<typename T> inline bool Bounds<T>::contains(const T &point) const
 {
   if (bounds::detail::any_less_than(point, this->min)) {
     return false;
@@ -485,7 +590,7 @@ template<typename T> inline bool Bounds<T>::contains(const T &point)
   return true;
 }
 
-template<typename T> inline bool Bounds<T>::intersects(const Bounds<T> &other)
+template<typename T> inline bool Bounds<T>::intersects(const Bounds<T> &other) const
 {
   if (bounds::intersect(*this, other)) {
     return true;
@@ -493,18 +598,14 @@ template<typename T> inline bool Bounds<T>::intersects(const Bounds<T> &other)
   return false;
 }
 
-template<typename T> inline bool Bounds<T>::intersects_segment(const T &start, const T &end)
+template<typename T> inline bool Bounds<T>::intersects_segment(const T &start, const T &end) const
 {
   /* Check end points first to properly handle degenerate case where the segment is a point. */
   if (this->contains(start) || this->contains(end)) {
     return true;
   }
-  if (!this->intersects(bounds::detail::segment_bounds(start, end))) {
-    return false;
-  }
   if constexpr (std::is_integral_v<T> || std::is_floating_point_v<T>) {
-    /* In the 1-dimensional case, the bounding box check above covers the intersection check. */
-    return true;
+    return this->intersects(bounds::detail::segment_bounds(start, end));
   }
   else {
     /* Check if the segment is entering and exiting the bounds. */

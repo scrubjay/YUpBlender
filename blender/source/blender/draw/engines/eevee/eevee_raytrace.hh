@@ -168,8 +168,10 @@ class RayTraceModule {
   /** Dispatch with enough tiles for the tracing resolution. */
   int3 tracing_dispatch_size_ = int3(1);
   int3 fast_gi_tracing_dispatch_size_ = int3(1);
-  /** 2D tile mask to check which unused adjacent tile we need to clear and which tile we need to
-   * dispatch for each work type. */
+  /**
+   * 2D tile mask to check which unused adjacent tile we need to clear and which tile we need to
+   * dispatch for each work type.
+   */
   Texture tile_raytrace_denoise_tx_ = {"tile_raytrace_denoise_tx_"};
   Texture tile_raytrace_tracing_tx_ = {"tile_raytrace_tracing_tx_"};
   Texture tile_fast_gi_denoise_tx_ = {"tile_fast_gi_denoise_tx_"};
@@ -199,9 +201,12 @@ class RayTraceModule {
   TextureFromPool fast_gi_radiance_tx_[4] = {{"fast_gi_radiance_tx_"}};
   TextureFromPool fast_gi_radiance_denoised_tx_[4] = {{"fast_gi_radiance_denoised_tx_"}};
   /** Texture containing the input screen radiance but re-projected. */
-  TextureFromPool downsampled_in_radiance_tx_ = {"downsampled_in_radiance_tx_"};
+  Texture downsampled_in_radiance_tx_ = {"downsampled_in_radiance_tx_"};
   /** Texture containing the view space normal. The BSDF normal is arbitrarily chosen. */
-  TextureFromPool downsampled_in_normal_tx_ = {"downsampled_in_normal_tx_"};
+  Texture downsampled_in_normal_tx_ = {"downsampled_in_normal_tx_"};
+  /** Pointers to the mip view of the above textures. Available after sync. */
+  gpu::Texture *downsampled_in_radiance_tx_ptr_[4] = {nullptr};
+  gpu::Texture *downsampled_in_normal_tx_ptr_[4] = {nullptr};
   /** Textures containing the ray hit radiance denoised (full-res). One of them is result_tx. */
   gpu::Texture *denoised_spatial_tx_ = nullptr;
   gpu::Texture *denoised_temporal_tx_ = nullptr;
@@ -253,19 +258,13 @@ class RayTraceModule {
    * current state.
    *
    * \arg rt_buffer is the layer's permanent storage.
-   * \arg screen_radiance_back_tx is the texture used for screen space transmission rays.
-   * \arg screen_radiance_front_tx is the texture used for screen space reflection rays.
-   * \arg screen_radiance_persmat is the view projection matrix used for screen_radiance_front_tx.
    * \arg active_closures is a mask of all active closures in a deferred layer.
-   * \arg main_view is the un-jittered view.
    * \arg render_view is the TAA jittered view.
    * \arg force_no_tracing will run the pipeline without any tracing, relying only on local probes.
    */
   RayTraceResult render(RayTraceBuffer &rt_buffer,
                         gpu::Texture *screen_radiance_back_tx,
                         eClosureBits active_closures,
-                        /* TODO(fclem): Maybe wrap these two in some other class. */
-                        View &main_view,
                         View &render_view);
 
   /**
@@ -291,13 +290,18 @@ class RayTraceModule {
     return use_raytracing() && ray_tracing_options_.trace_max_roughness < 1.0f;
   }
 
+  /**
+   * Update screen space thickness parameters.
+   * Needs to be called early in the frame to allow ray-cast node usage.
+   * Needs uniform_data.push_update() to be called afterward to take effect.
+   */
+  void thickness_parameters_setup(const float4x4 &winmat, const int2 extent);
+
  private:
   RayTraceResultTexture trace(int closure_index,
                               bool active_layer,
                               RaytraceEEVEE options,
                               RayTraceBuffer &rt_buffer,
-                              /* TODO(fclem): Maybe wrap these two in some other class. */
-                              View &main_view,
                               View &render_view);
 };
 

@@ -3,28 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 ###########################################################################
-# SDL
-###########################################################################
-
-if(WITH_CYCLES_STANDALONE AND WITH_CYCLES_STANDALONE_GUI)
-  # We can't use the version from the Blender precompiled libraries because
-  # it does not include the video subsystem.
-  find_package(SDL2 REQUIRED)
-  set_and_warn_library_found("SDL" SDL2_FOUND WITH_CYCLES_STANDALONE_GUI)
-
-  if(SDL2_FOUND)
-    include_directories(
-      SYSTEM
-      ${SDL2_INCLUDE_DIRS}
-    )
-  endif()
-endif()
-
-###########################################################################
 # CUDA
 ###########################################################################
 
 if(WITH_CYCLES_DEVICE_CUDA AND (WITH_CYCLES_CUDA_BINARIES OR NOT WITH_CUDA_DYNLOAD))
+  if(CMAKE_SYSTEM_PROCESSOR STREQUAL "ARM64")
+    # FindCUDA does not handle arm64 library path and fails finding required cudart
+    # It is not needed in Cycles anyway though, so just force it to some dummy value
+    set(CUDA_CUDART_LIBRARY cudart)
+  endif()
+
   find_package(CUDA) # Try to auto locate CUDA toolkit
   set_and_warn_library_found("CUDA compiler" CUDA_FOUND WITH_CYCLES_CUDA_BINARIES)
 

@@ -9,7 +9,7 @@
 #ifndef WIN32
 #  include <unistd.h> /* for read close */
 #else
-#  include "BLI_winstuff.h"
+#  include "BLI_winstuff.hh"
 #  include "winsock2.h"
 #  include <io.h> /* for open close read */
 #endif
@@ -43,15 +43,15 @@
 
 #include "MEM_guardedalloc.h"
 
-#include "BLI_listbase.h"
-#include "BLI_math_color.h"
-#include "BLI_math_matrix.h"
-#include "BLI_math_rotation.h"
-#include "BLI_math_vector.h"
+#include "BLI_listbase.hh"
+#include "BLI_math_color_c.hh"
+#include "BLI_math_matrix_c.hh"
+#include "BLI_math_rotation_c.hh"
+#include "BLI_math_vector_c.hh"
 #include "BLI_path_utils.hh"
-#include "BLI_string.h"
-#include "BLI_string_utf8.h"
-#include "BLI_utildefines.h"
+#include "BLI_string.hh"
+#include "BLI_string_utf8.hh"
+#include "BLI_utildefines.hh"
 
 #include "BKE_anim_data.hh"
 #include "BKE_anim_visualization.h"
@@ -151,7 +151,7 @@ static void area_add_window_regions(ScrArea *area, SpaceLink *sl, ListBaseT<AReg
         region->regiontype = RGN_TYPE_UI;
         region->alignment = RGN_ALIGN_RIGHT;
         region->v2d.scroll = V2D_SCROLL_RIGHT;
-        region->v2d.flag = RGN_FLAG_HIDDEN;
+        region->v2d.flag = eView2D_Flag(RGN_FLAG_HIDDEN);
         break;
 
       case SPACE_ACTION:
@@ -177,7 +177,7 @@ static void area_add_window_regions(ScrArea *area, SpaceLink *sl, ListBaseT<AReg
         region->regiontype = RGN_TYPE_UI;
         region->alignment = RGN_ALIGN_RIGHT;
         region->v2d.scroll = V2D_SCROLL_RIGHT;
-        region->v2d.flag = RGN_FLAG_HIDDEN;
+        region->v2d.flag = eView2D_Flag(RGN_FLAG_HIDDEN);
         break;
 
       case SPACE_NODE:
@@ -403,8 +403,7 @@ static void do_versions_windowmanager_2_50(bScreen *screen)
       area_add_header_region(&area, &area.regionbase);
     }
 
-    area_add_window_regions(
-        &area, static_cast<SpaceLink *>(area.spacedata.first), &area.regionbase);
+    area_add_window_regions(&area, area.spacedata.first(), &area.regionbase);
 
     /* Space image-select is deprecated. */
     for (SpaceLink &sl : area.spacedata) {
@@ -421,8 +420,8 @@ static void do_versions_windowmanager_2_50(bScreen *screen)
     }
 
     /* pushed back spaces also need regions! */
-    if (area.spacedata.first) {
-      SpaceLink *sl = static_cast<SpaceLink *>(area.spacedata.first);
+    if (area.spacedata.first_) {
+      SpaceLink *sl = area.spacedata.first_as<SpaceLink>();
       for (sl = sl->next; sl; sl = sl->next) {
         if (area.headertype) {
           area_add_header_region(&area, &sl->regionbase);
@@ -568,7 +567,7 @@ static bNodeSocket *do_versions_node_group_add_socket_2_56_2(bNodeTree *ngroup,
   bNodeSocket *gsock = MEM_new<bNodeSocket>("bNodeSocket");
 
   STRNCPY_UTF8(gsock->name, name);
-  gsock->type = type;
+  gsock->type = eNodeSocketDatatype(type);
 
   gsock->next = gsock->prev = nullptr;
   gsock->link = nullptr;
@@ -625,6 +624,8 @@ static void do_versions_socket_default_value_259(bNodeSocket *sock)
       valrgba = MEM_new<bNodeSocketValueRGBA>("default socket value");
       copy_v4_v4(valrgba->value, sock->ns.vec);
       sock->default_value = valrgba;
+      break;
+    default:
       break;
   }
 }
@@ -766,14 +767,14 @@ void blo_do_versions_250(FileData *fd, Library * /*lib*/, Main *bmain)
         pid.cache->flag |= PTCACHE_DISK_CACHE;
       }
 
-      BLI_freelistN(&pidlist);
+      pidlist.free_no_destruct();
     }
 #endif
 
     /* type was a mixed flag & enum. move the 2d flag elsewhere */
     for (Curve &cu : bmain->curves) {
       for (Nurb &nu : cu.nurb) {
-        nu.type &= CU_TYPE;
+        nu.type = eNurbType(nu.type & CU_TYPE);
       }
     }
   }
@@ -788,12 +789,12 @@ void blo_do_versions_250(FileData *fd, Library * /*lib*/, Main *bmain)
       BKE_ptcache_ids_from_object(&pidlist, ob);
 
       for (PTCacheID &pid : pidlist) {
-        if (BLI_listbase_is_empty(pid.ptcaches)) {
-          pid.ptcaches->first = pid.ptcaches->last = pid.cache;
+        if (pid.ptcaches->is_empty()) {
+          pid.ptcaches->first_ = pid.ptcaches->last_ = pid.cache;
         }
       }
 
-      BLI_freelistN(&pidlist);
+      pidlist.free_no_destruct();
 #endif
 
       if (ob.totcol && ob.matbits == nullptr) {
@@ -808,7 +809,7 @@ void blo_do_versions_250(FileData *fd, Library * /*lib*/, Main *bmain)
 
     for (Scene &sce : bmain->scenes) {
       ToolSettings *ts = sce.toolsettings;
-      if (!ts->uv_selectmode || ts->vgroup_weight == 0.0f) {
+      if (!int(ts->uv_selectmode) || ts->vgroup_weight == 0.0f) {
         ts->selectmode = SCE_SELECT_VERTEX;
 
         /* The auto-keying setting should be taken from the user-preferences
@@ -816,7 +817,7 @@ void blo_do_versions_250(FileData *fd, Library * /*lib*/, Main *bmain)
          * (i.e. will result in blank box when enabled). */
         ts->autokey_mode = U.autokey_mode;
         if (ts->autokey_mode == 0) {
-          ts->autokey_mode = 2; /* 'add/replace' but not on */
+          ts->autokey_mode = eAutokey_Mode(2); /* 'add/replace' but not on */
         }
         ts->uv_selectmode = UV_SELECT_VERT;
         ts->vgroup_weight = 1.0f;
@@ -1008,7 +1009,7 @@ void blo_do_versions_250(FileData *fd, Library * /*lib*/, Main *bmain)
 
   if (!MAIN_VERSION_FILE_ATLEAST(bmain, 250, 8)) {
     {
-      Scene *sce = static_cast<Scene *>(bmain->scenes.first);
+      Scene *sce = bmain->scenes.first();
       while (sce) {
         if (sce->r.frame_step == 0) {
           sce->r.frame_step = 1;
@@ -1020,9 +1021,9 @@ void blo_do_versions_250(FileData *fd, Library * /*lib*/, Main *bmain)
 
     {
       /* ensure all nodes have unique names */
-      bNodeTree *ntree = static_cast<bNodeTree *>(bmain->nodetrees.first);
+      bNodeTree *ntree = bmain->nodetrees.first();
       while (ntree) {
-        bNode *node = static_cast<bNode *>(ntree->nodes.first);
+        bNode *node = ntree->nodes.first();
 
         while (node) {
           bke::node_unique_name(*ntree, *node);
@@ -1034,7 +1035,7 @@ void blo_do_versions_250(FileData *fd, Library * /*lib*/, Main *bmain)
     }
 
     {
-      Object *ob = static_cast<Object *>(bmain->objects.first);
+      Object *ob = bmain->objects.first();
       while (ob) {
         /* shaded mode disabled for now */
         if (ob->dt == OB_MATERIAL) {
@@ -1061,9 +1062,9 @@ void blo_do_versions_250(FileData *fd, Library * /*lib*/, Main *bmain)
 
     /* only convert old 2.50 files with color management */
     if (bmain->versionfile == 250) {
-      Scene *sce = static_cast<Scene *>(bmain->scenes.first);
-      Material *ma = static_cast<Material *>(bmain->materials.first);
-      Tex *tex = static_cast<Tex *>(bmain->textures.first);
+      Scene *sce = bmain->scenes.first();
+      Material *ma = bmain->materials.first();
+      Tex *tex = bmain->textures.first();
       int i, convert = 0;
 
       /* convert to new color management system:
@@ -1150,7 +1151,7 @@ void blo_do_versions_250(FileData *fd, Library * /*lib*/, Main *bmain)
           if (sl.spacetype != SPACE_SEQ) {
             ListBaseT<ARegion> *regionbase;
 
-            if (&sl == area.spacedata.first) {
+            if (&sl == area.spacedata.first_) {
               regionbase = &area.regionbase;
             }
             else {
@@ -1181,7 +1182,7 @@ void blo_do_versions_250(FileData *fd, Library * /*lib*/, Main *bmain)
               ListBaseT<ARegion> *regionbase;
               SpaceSeq *sseq = reinterpret_cast<SpaceSeq *>(&sl);
 
-              if (&sl == area.spacedata.first) {
+              if (&sl == area.spacedata.first_) {
                 regionbase = &area.regionbase;
               }
               else {
@@ -1216,7 +1217,7 @@ void blo_do_versions_250(FileData *fd, Library * /*lib*/, Main *bmain)
     /* anim viz changes */
     for (Object &ob : bmain->objects) {
       /* initialize object defaults */
-      animviz_settings_init(&ob.avs);
+      bke::animviz::settings_init(&ob.avs);
 
       /* if armature, copy settings for pose from armature data
        * performing initialization where appropriate
@@ -1260,7 +1261,7 @@ void blo_do_versions_250(FileData *fd, Library * /*lib*/, Main *bmain)
           avs->path_step = 1;
         }
         else {
-          animviz_settings_init(&ob.pose->avs);
+          bke::animviz::settings_init(&ob.pose->avs);
         }
       }
     }
@@ -1301,7 +1302,7 @@ void blo_do_versions_250(FileData *fd, Library * /*lib*/, Main *bmain)
         for (SpaceLink &sl : area.spacedata) {
           ListBaseT<ARegion> *regionbase;
 
-          if (&sl == area.spacedata.first) {
+          if (&sl == area.spacedata.first_) {
             regionbase = &area.regionbase;
           }
           else {
@@ -1359,7 +1360,7 @@ void blo_do_versions_250(FileData *fd, Library * /*lib*/, Main *bmain)
             if (sl.spacetype == SPACE_SEQ) {
               ListBaseT<ARegion> *regionbase;
 
-              if (&sl == area.spacedata.first) {
+              if (&sl == area.spacedata.first_) {
                 regionbase = &area.regionbase;
               }
               else {
@@ -1417,7 +1418,7 @@ void blo_do_versions_250(FileData *fd, Library * /*lib*/, Main *bmain)
     /* adjustment to color balance node values */
     for (Scene &scene : bmain->scenes) {
       if (scene.nodetree) {
-        bNode *node = static_cast<bNode *>(scene.nodetree->nodes.first);
+        bNode *node = scene.nodetree->nodes.first();
 
         while (node) {
           if (node->type_legacy == CMP_NODE_COLORBALANCE) {
@@ -1434,7 +1435,7 @@ void blo_do_versions_250(FileData *fd, Library * /*lib*/, Main *bmain)
     }
     /* check inside node groups too */
     for (bNodeTree &ntree : bmain->nodetrees) {
-      bNode *node = static_cast<bNode *>(ntree.nodes.first);
+      bNode *node = ntree.nodes.first();
 
       while (node) {
         if (node->type_legacy == CMP_NODE_COLORBALANCE) {
@@ -1480,7 +1481,7 @@ void blo_do_versions_250(FileData *fd, Library * /*lib*/, Main *bmain)
             SpaceNode *snode = reinterpret_cast<SpaceNode *>(&sl);
             ListBaseT<ARegion> *regionbase;
 
-            if (&sl == area.spacedata.first) {
+            if (&sl == area.spacedata.first_) {
               regionbase = &area.regionbase;
             }
             else {
@@ -1509,7 +1510,7 @@ void blo_do_versions_250(FileData *fd, Library * /*lib*/, Main *bmain)
         Object *parent = static_cast<Object *>(
             blo_do_versions_newlibadr(fd, &ob.id, ID_IS_LINKED(&ob), ob.parent));
         if (parent) { /* parent may not be in group */
-          enum { PARCURVE = 1 };
+          constexpr eObject_Partype PARCURVE = eObject_Partype(1);
           if (parent->type == OB_ARMATURE && ob.partype == PARSKEL) {
             ArmatureModifierData *amd;
             bArmature *arm = static_cast<bArmature *>(
@@ -1682,7 +1683,7 @@ void blo_do_versions_250(FileData *fd, Library * /*lib*/, Main *bmain)
             }
 
             /* delete old MOD_SMOKE_INITVELOCITY flag */
-            fmd->domain->flags &= ~(1 << 4);
+            fmd->domain->flags &= ~eFluidDomain_Flags(1 << 4);
 
             /* for now just add it to all flow objects in the scene */
             for (Object &ob2 : bmain->objects) {
@@ -1708,7 +1709,7 @@ void blo_do_versions_250(FileData *fd, Library * /*lib*/, Main *bmain)
   if (!MAIN_VERSION_FILE_ATLEAST(bmain, 255, 1)) {
     for (Brush &br : bmain->brushes) {
       if (br.ob_mode == 0) {
-        br.ob_mode = OB_MODE_ALL_PAINT;
+        br.ob_mode = OB_MODE_ALL_PAINT_MESH;
       }
     }
 
@@ -1764,7 +1765,7 @@ void blo_do_versions_250(FileData *fd, Library * /*lib*/, Main *bmain)
 
     /* Fix for sample line scope initializing with no height */
     for (bScreen &screen : bmain->screens) {
-      area = static_cast<ScrArea *>(screen.areabase.first);
+      area = screen.areabase.first();
       while (area) {
         for (SpaceLink &sl : area->spacedata) {
           if (sl.spacetype == SPACE_IMAGE) {
@@ -1961,13 +1962,17 @@ void blo_do_versions_250(FileData *fd, Library * /*lib*/, Main *bmain)
     for (bScreen &screen : bmain->screens) {
       /* add regions */
       for (ScrArea &area : screen.areabase) {
-        SpaceLink *sl_first = static_cast<SpaceLink *>(area.spacedata.first);
+        SpaceLink *sl_first = area.spacedata.first();
         if (sl_first->spacetype == SPACE_IMAGE) {
           for (ARegion &region : area.regionbase) {
             if (region.regiontype == RGN_TYPE_WINDOW) {
               View2D *v2d = &region.v2d;
-              v2d->minzoom = v2d->maxzoom = v2d->scroll = v2d->keeptot = v2d->keepzoom =
-                  v2d->keepofs = v2d->align = 0;
+              v2d->minzoom = v2d->maxzoom = 0;
+              v2d->scroll = {};
+              v2d->keeptot = {};
+              v2d->keepzoom = {};
+              v2d->keepofs = {};
+              v2d->align = {};
             }
           }
         }
@@ -1977,8 +1982,12 @@ void blo_do_versions_250(FileData *fd, Library * /*lib*/, Main *bmain)
             for (ARegion &region : sl.regionbase) {
               if (region.regiontype == RGN_TYPE_WINDOW) {
                 View2D *v2d = &region.v2d;
-                v2d->minzoom = v2d->maxzoom = v2d->scroll = v2d->keeptot = v2d->keepzoom =
-                    v2d->keepofs = v2d->align = 0;
+                v2d->minzoom = v2d->maxzoom = 0;
+                v2d->scroll = {};
+                v2d->keeptot = {};
+                v2d->keepzoom = {};
+                v2d->keepofs = {};
+                v2d->align = {};
               }
             }
           }
@@ -1994,7 +2003,7 @@ void blo_do_versions_250(FileData *fd, Library * /*lib*/, Main *bmain)
 
   if (!MAIN_VERSION_FILE_ATLEAST(bmain, 259, 1)) {
     for (Scene &scene : bmain->scenes) {
-      scene.r.ffcodecdata.audio_channels = 2;
+      scene.r.ffcodecdata.audio_channels = eFFMpegAudioChannels(2);
       scene.audio.volume = 1.0f;
       if (scene.ed) {
         seq::foreach_strip(&scene.ed->seqbase, strip_set_pitch_cb, nullptr);
@@ -2004,7 +2013,7 @@ void blo_do_versions_250(FileData *fd, Library * /*lib*/, Main *bmain)
     for (bScreen &screen : bmain->screens) {
       /* add regions */
       for (ScrArea &area : screen.areabase) {
-        SpaceLink *sl_first = static_cast<SpaceLink *>(area.spacedata.first);
+        SpaceLink *sl_first = area.spacedata.first();
         if (sl_first->spacetype == SPACE_SEQ) {
           for (ARegion &region : area.regionbase) {
             if (region.regiontype == RGN_TYPE_WINDOW) {
@@ -2112,16 +2121,16 @@ void do_versions_after_linking_250(Main *bmain)
       if (adt != nullptr) {
         /* Fix actions' id-roots (i.e. if they come from a pre 2.57 .blend file). */
         if ((adt->action) && (adt->action->idroot == 0)) {
-          adt->action->idroot = GS(id->name);
+          adt->action->idroot = id->id_type();
         }
         if ((adt->tmpact) && (adt->tmpact->idroot == 0)) {
-          adt->tmpact->idroot = GS(id->name);
+          adt->tmpact->idroot = id->id_type();
         }
 
         for (NlaTrack &nla_track : adt->nla_tracks) {
           for (NlaStrip &nla_strip : nla_track.strips) {
             if ((nla_strip.act) && (nla_strip.act->idroot == 0)) {
-              nla_strip.act->idroot = GS(id->name);
+              nla_strip.act->idroot = id->id_type();
             }
           }
         }

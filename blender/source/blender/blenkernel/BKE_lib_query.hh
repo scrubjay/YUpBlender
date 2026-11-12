@@ -73,7 +73,8 @@ enum LibraryForeachIDCallbackFlag {
   /**
    * That ID is not really used by its owner, it's just an internal hint/helper.
    * This marks the 'from' pointers issue, like Key->from.
-   * How to handle that kind of cases totally depends on what caller code is doing... */
+   * How to handle that kind of cases totally depends on what caller code is doing...
+   */
   IDWALK_CB_LOOPBACK = (1 << 6),
 
   /**
@@ -435,6 +436,10 @@ struct LibQueryUnusedIDsData {
    *
    * Allows for more complex handling of which IDs should be deleted, on top of the basic
    * local/linked choices.
+   *
+   * TODO: Refactor this to return some optional `UnusedIDsData::Status` value instead, and always
+   * call it. This will allow this callback to have full control over the final status of the given
+   * ID, if it decides to.
    */
   FunctionRef<bool(ID *id)> filter_fn = nullptr;
 
@@ -467,20 +472,12 @@ struct LibQueryUnusedIDsData {
  * By default only consider IDs with `0` user count.
  * If `do_recursive` is set, it will check dependencies to detect all IDs that are not actually
  * used in current file, including `archipelagos` (i.e. set of IDs referencing each other in
- * loops, but without any 'external' valid usages.
+ * loops, but without any 'external' valid usages).
  *
  * Valid usages here are defined as ref-counting usages, which are not towards embedded or
  * loop-back data.
  *
- * \param r_num_total: A zero-initialized array of #INDEX_ID_MAX integers. Number of IDs detected
- * as unused from given parameters, per ID type in the matching index, and as total in
- * #INDEX_ID_NULL item.
- * \param r_num_local: A zero-initialized array of #INDEX_ID_MAX integers. Number of local IDs
- * detected as unused from given parameters (but assuming \a do_local_ids is true), per ID type in
- * the matching index, and as total in #INDEX_ID_NULL item.
- * \param r_num_linked: A zero-initialized array of #INDEX_ID_MAX integers. Number of linked IDs
- * detected as unused from given parameters (but assuming \a do_linked_ids is true), per ID type in
- * the matching index, and as total in #INDEX_ID_NULL item.
+ * \param parameters: Input options and return values.
  */
 void BKE_lib_query_unused_ids_amounts(Main *bmain, LibQueryUnusedIDsData &parameters);
 /**
@@ -489,15 +486,12 @@ void BKE_lib_query_unused_ids_amounts(Main *bmain, LibQueryUnusedIDsData &parame
  * By default only tag IDs with `0` user count.
  * If `do_recursive` is set, it will check dependencies to detect all IDs that are not actually
  * used in current file, including `archipelagos` (i.e. set of IDs referencing each other in
- * loops, but without any 'external' valid usages.
+ * loops, but without any 'external' valid usages).
  *
  * Valid usages here are defined as ref-counting usages, which are not towards embedded or
  * loop-back data.
  *
  * \param tag: the ID tag to use to mark the ID as unused. Should never be `0`.
- * \param r_num_tagged_total: A zero-initialized array of #INDEX_ID_MAX integers. Number of IDs
- * tagged as unused from given parameters, per ID type in the matching index, and as total in
- * #INDEX_ID_NULL item.
  */
 void BKE_lib_query_unused_ids_tag(Main *bmain, int tag, LibQueryUnusedIDsData &parameters);
 

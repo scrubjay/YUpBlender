@@ -12,6 +12,7 @@ class ASSETSHELF_PT_display(Panel):
     # Doesn't actually matter. Panel is instanced through popover only.
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'HEADER'
+    bl_ui_units_x = 11
 
     def draw(self, context):
         layout = self.layout
@@ -43,7 +44,10 @@ class ASSETSHELF_PT_filter(Panel):
 
         # Filter option stored in the Preferences.
         if use_remote_asset_libraries:
-            layout.prop(prefs.view, "show_online_assets", text="Online Assets")
+            col = layout.column()
+            col.use_property_split = True
+            col.use_property_decorate = False
+            col.prop(prefs.view, "asset_access", text="Access")
 
 
 classes = (

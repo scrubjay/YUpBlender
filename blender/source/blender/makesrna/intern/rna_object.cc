@@ -15,7 +15,7 @@
 #include "DNA_meta_types.h"
 #include "DNA_object_types.h"
 
-#include "BLI_math_rotation.h"
+#include "BLI_math_rotation_c.hh"
 
 #include "BLT_translation.hh"
 
@@ -30,6 +30,9 @@
 
 #include "WM_api.hh"
 #include "WM_types.hh"
+
+#include "ANIM_action.hh"
+#include "ANIM_action_iterators.hh"
 
 namespace blender {
 
@@ -198,7 +201,7 @@ const EnumPropertyItem rna_enum_metaelem_type_items[] = {
     {MB_TUBE, "CAPSULE", ICON_META_CAPSULE, "Capsule", ""},
     {MB_PLANE, "PLANE", ICON_META_PLANE, "Plane", ""},
     /* NOTE: typo at original definition! */
-    {MB_ELIPSOID, "ELLIPSOID", ICON_META_ELLIPSOID, "Ellipsoid", ""},
+    {MB_ELLIPSOID, "ELLIPSOID", ICON_META_ELLIPSOID, "Ellipsoid", ""},
     {MB_CUBE, "CUBE", ICON_META_CUBE, "Cube", ""},
     {0, nullptr, 0, nullptr, nullptr},
 };
@@ -292,8 +295,8 @@ const EnumPropertyItem rna_enum_object_axis_flip_items[] = {
 #  include <fmt/format.h>
 
 #  include "BLI_bounds.hh"
-#  include "BLI_listbase.h"
-#  include "BLI_string.h"
+#  include "BLI_listbase.hh"
+#  include "BLI_string.hh"
 
 #  include "DNA_ID.h"
 #  include "DNA_constraint_types.h"
@@ -304,8 +307,8 @@ const EnumPropertyItem rna_enum_object_axis_flip_items[] = {
 #  include "DNA_material_types.h"
 #  include "DNA_node_types.h"
 
-#  include "BLI_math_matrix.h"
-#  include "BLI_math_vector.h"
+#  include "BLI_math_matrix_c.hh"
+#  include "BLI_math_vector_c.hh"
 
 #  include "BKE_armature.hh"
 #  include "BKE_brush.hh"
@@ -336,6 +339,8 @@ const EnumPropertyItem rna_enum_object_axis_flip_items[] = {
 #  include "DEG_depsgraph.hh"
 #  include "DEG_depsgraph_build.hh"
 
+#  include "ED_anim_api.hh"
+#  include "ED_anim_transformable.hh"
 #  include "ED_curve.hh"
 #  include "ED_lattice.hh"
 #  include "ED_mesh.hh"
@@ -479,7 +484,7 @@ static void rna_Object_active_shape_update(Main *bmain, Scene * /*scene*/, Point
 
         DEG_id_tag_update(&mesh->id, 0);
 
-        BKE_editmesh_looptris_and_normals_calc(em);
+        BKE_editmesh_looptris_and_normals_calc(em, BKE_editmesh_bmesh_get_for_write(mesh));
         break;
       }
       case OB_CURVES_LEGACY:
@@ -491,6 +496,8 @@ static void rna_Object_active_shape_update(Main *bmain, Scene * /*scene*/, Point
         BKE_editlattice_load(ob);
         BKE_editlattice_make(ob);
         break;
+      default:
+        break;
     }
   }
 
@@ -500,9 +507,12 @@ static void rna_Object_active_shape_update(Main *bmain, Scene * /*scene*/, Point
 
 static void rna_Object_dependency_update(Main *bmain, Scene * /*scene*/, PointerRNA *ptr)
 {
+  Object *ob = id_cast<Object *>(ptr->owner_id);
   DEG_id_tag_update(ptr->owner_id, ID_RECALC_TRANSFORM);
   DEG_relations_tag_update(bmain);
   WM_main_add_notifier(NC_OBJECT | ND_PARENT, ptr->owner_id);
+
+  BKE_collection_object_parented_sort_index_reset(*bmain, *ob);
 }
 
 void rna_Object_data_update(Main *bmain, Scene *scene, PointerRNA *ptr)
@@ -678,11 +688,11 @@ static void rna_Object_parent_type_set(PointerRNA *ptr, int value)
 
   /* Skip if type did not change (otherwise we loose parent inverse in
    * ed::object::parent_set). */
-  if (ob->partype == value) {
+  if (ob->partype == eObject_Partype(value)) {
     return;
   }
 
-  ed::object::parent_set(ob, ob->parent, value, ob->parsubstr);
+  ed::object::parent_set(ob, ob->parent, eObject_Partype(value), ob->parsubstr);
 }
 
 static bool rna_Object_parent_type_override_apply(Main *bmain,
@@ -713,7 +723,7 @@ static bool rna_Object_parent_type_override_apply(Main *bmain,
     return false;
   }
 
-  ob->partype = parent_type_src;
+  ob->partype = eObject_Partype(parent_type_src);
   RNA_property_update_main(bmain, nullptr, ptr_dst, prop_dst);
   return true;
 }
@@ -833,9 +843,9 @@ static void rna_Object_dup_collection_set(PointerRNA *ptr,
 
   /* Must not let this be set if the object belongs in this group already,
    * thus causing a cycle/infinite-recursion leading to crashes on load #25298. */
-  if (BKE_collection_has_object_recursive(grp, ob) == 0) {
+  if (BKE_collection_has_object_recursive_instanced(grp, ob) == 0) {
     if (ob->type == OB_EMPTY) {
-      id_us_min(&ob->instance_collection->id);
+      id_us_min(id_cast<ID *>(ob->instance_collection));
       ob->instance_collection = grp;
       id_us_plus(&ob->instance_collection->id);
     }
@@ -844,11 +854,10 @@ static void rna_Object_dup_collection_set(PointerRNA *ptr,
     }
   }
   else {
-    BKE_report(
-        nullptr,
-        RPT_ERROR,
-        "Cannot set instance-collection as object belongs in collection being instanced, thus "
-        "causing a cycle");
+    BKE_report(nullptr,
+               RPT_ERROR,
+               "Cannot set instance-collection as object belongs (directly or indirectly) in "
+               "collection being instanced, thus causing a dependency cycle");
   }
 }
 
@@ -899,7 +908,7 @@ static PointerRNA rna_Object_active_vertex_group_get(PointerRNA *ptr)
 {
   Object *ob = reinterpret_cast<Object *>(ptr->owner_id);
   if (!BKE_object_supports_vertex_groups(ob)) {
-    return PointerRNA_NULL;
+    return {};
   }
 
   const ListBaseT<bDeformGroup> *defbase = BKE_object_defgroup_list(ob);
@@ -963,7 +972,7 @@ static void rna_Object_active_vertex_group_index_range(
     return;
   }
   const ListBaseT<bDeformGroup> *defbase = BKE_object_defgroup_list(ob);
-  *max = max_ii(0, BLI_listbase_count(defbase) - 1);
+  *max = max_ii(0, defbase->count() - 1);
 }
 
 void rna_object_vgroup_name_index_get(PointerRNA *ptr, char *value, int index)
@@ -1148,7 +1157,7 @@ static void rna_Object_active_particle_system_index_range(
 {
   Object *ob = reinterpret_cast<Object *>(ptr->owner_id);
   *min = 0;
-  *max = max_ii(0, BLI_listbase_count(&ob->particlesystem) - 1);
+  *max = max_ii(0, ob->particlesystem.count() - 1);
 }
 
 static int rna_Object_active_particle_system_index_get(PointerRNA *ptr)
@@ -1202,11 +1211,28 @@ static void rna_Object_rotation_mode_set(PointerRNA *ptr, int value)
   Object *ob = static_cast<Object *>(ptr->data);
 
   /* use API Method for conversions... */
-  BKE_rotMode_change_values(
-      ob->quat, ob->rot, ob->rotAxis, &ob->rotAngle, ob->rotmode, short(value));
+  BKE_rotMode_change_values(ob->quat,
+                            ob->rot,
+                            ob->rotAxis,
+                            &ob->rotAngle,
+                            eRotationModes(ob->rotmode),
+                            eRotationModes(value));
 
   /* finally, set the new rotation type */
   ob->rotmode = clamp_i(value, ROT_MODE_MIN, ROT_MODE_MAX);
+}
+
+static void rna_Object_convert_rotation_mode(Object *ob,
+                                             bContext *C,
+                                             const short rotation_mode,
+                                             const bool bake)
+{
+  if (rotation_mode < ROT_MODE_MIN || rotation_mode > ROT_MODE_MAX) {
+    return;
+  }
+
+  ed::AnimTransformable transformable(*ob);
+  convert_to_rotation_mode(*C, transformable, eRotationModes(rotation_mode), bake);
 }
 
 static void rna_Object_dimensions_get(PointerRNA *ptr, float *value)
@@ -1510,7 +1536,7 @@ static void rna_Object_active_shape_key_index_range(
 
   *min = 0;
   if (key) {
-    *max = BLI_listbase_count(&key->block) - 1;
+    *max = key->block.count() - 1;
     if (*max < 0) {
       *max = 0;
     }
@@ -1541,7 +1567,7 @@ static PointerRNA rna_Object_active_shape_key_get(PointerRNA *ptr)
   KeyBlock *kb;
 
   if (key == nullptr) {
-    return PointerRNA_NULL;
+    return {};
   }
 
   kb = static_cast<KeyBlock *>(BLI_findlink(&key->block, ob->shapenr - 1));
@@ -1561,7 +1587,7 @@ static PointerRNA rna_Object_collision_get(PointerRNA *ptr)
   Object *ob = reinterpret_cast<Object *>(ptr->owner_id);
 
   if (ob->type != OB_MESH) {
-    return PointerRNA_NULL;
+    return {};
   }
 
   return RNA_pointer_create_with_parent(*ptr, RNA_CollisionSettings, ob->pd);
@@ -1582,9 +1608,12 @@ static void rna_Object_active_constraint_set(PointerRNA *ptr,
   BKE_constraints_active_set(&ob->constraints, static_cast<bConstraint *>(value.data));
 }
 
-static bConstraint *rna_Object_constraints_new(Object *object, Main *bmain, int type)
+static bConstraint *rna_Object_constraints_new(Object *object,
+                                               Main *bmain,
+                                               int type,
+                                               const char *name)
 {
-  bConstraint *new_con = BKE_constraint_add_for_object(object, nullptr, type);
+  bConstraint *new_con = BKE_constraint_add_for_object(object, name, eBConstraint_Types(type));
 
   ed::object::constraint_tag_update(bmain, object, new_con);
   WM_main_add_notifier(NC_OBJECT | ND_CONSTRAINT | NA_ADDED, object);
@@ -1765,7 +1794,7 @@ static void rna_Object_active_modifier_set(PointerRNA *ptr, PointerRNA value, Re
 
   WM_main_add_notifier(NC_OBJECT | ND_MODIFIER, ob);
 
-  if (RNA_pointer_is_null(&value)) {
+  if (!value) {
     BKE_object_modifier_set_active(ob, nullptr);
     return;
   }
@@ -1825,9 +1854,9 @@ bool rna_Object_modifiers_override_apply(Main *bmain,
      * modifier).
      *
      * Try to handle this by finding already existing one here. */
-    const ModifierTypeInfo *mti = BKE_modifier_get_info(ModifierType(mod_src->type));
+    const ModifierTypeInfo *mti = BKE_modifier_get_info(mod_src->type);
     if (mti->flags & eModifierTypeFlag_Single) {
-      mod_dst = BKE_modifiers_findby_type(ob_dst, ModifierType(mod_src->type));
+      mod_dst = BKE_modifiers_findby_type(ob_dst, mod_src->type);
     }
 
     if (mod_dst == nullptr) {
@@ -2470,8 +2499,15 @@ static void rna_def_object_constraints(BlenderRNA *brna, PropertyRNA *cprop)
   parm = RNA_def_enum(
       func, "type", rna_enum_constraint_type_items, 1, "", "Constraint type to add");
   RNA_def_parameter_flags(parm, PropertyFlag(0), PARM_REQUIRED);
+  RNA_def_string(func,
+                 "name",
+                 nullptr,
+                 0,
+                 "",
+                 "Name of the new constraint. If empty, the name of the constraint type is used");
   /* return type */
   parm = RNA_def_pointer(func, "constraint", "Constraint", "", "New constraint");
+  RNA_def_parameter_flags(parm, PROP_NEVER_NULL, ParameterFlag(0));
   RNA_def_function_return(func, parm);
 
   func = RNA_def_function(srna, "remove", "rna_Object_constraints_remove");
@@ -2508,6 +2544,7 @@ static void rna_def_object_constraints(BlenderRNA *brna, PropertyRNA *cprop)
   RNA_def_parameter_clear_flags(parm, PROP_THICK_WRAP, ParameterFlag(0));
   /* return type */
   parm = RNA_def_pointer(func, "new_constraint", "Constraint", "", "New constraint");
+  RNA_def_parameter_flags(parm, PROP_NEVER_NULL, ParameterFlag(0));
   RNA_def_function_return(func, parm);
 }
 
@@ -2707,6 +2744,7 @@ static void rna_def_object_vertex_groups(BlenderRNA *brna, PropertyRNA *cprop)
   RNA_def_function_ui_description(func, "Add vertex group to object");
   RNA_def_string(func, "name", "Group", 0, "", "Vertex group name"); /* optional */
   parm = RNA_def_pointer(func, "group", "VertexGroup", "", "New vertex group");
+  RNA_def_parameter_flags(parm, PROP_NEVER_NULL, ParameterFlag(0));
   RNA_def_function_return(func, parm);
 
   func = RNA_def_function(srna, "remove", "rna_Object_vgroup_remove");
@@ -2787,6 +2825,8 @@ static void rna_def_object_lineart(BlenderRNA *brna)
   RNA_def_struct_sdna(srna, "ObjectLineArt");
   RNA_def_struct_path_func(srna, "rna_ObjectLineArt_path");
 
+  RNA_define_lib_overridable(true);
+
   prop = RNA_def_property(srna, "usage", PROP_ENUM, PROP_NONE);
   RNA_def_property_enum_items(prop, prop_feature_line_usage_items);
   RNA_def_property_ui_text(prop, "Usage", "How to use this object in Line Art calculation");
@@ -2819,6 +2859,8 @@ static void rna_def_object_lineart(BlenderRNA *brna)
                            "The intersection line will be included into the object with the "
                            "higher intersection priority value");
   RNA_def_property_update(prop, NC_GPENCIL | ND_SHADING, "rna_object_lineart_update");
+
+  RNA_define_lib_overridable(false);
 }
 
 static void rna_def_object_visibility(StructRNA *srna)
@@ -2889,6 +2931,7 @@ static void rna_def_object_visibility(StructRNA *srna)
   prop = RNA_def_property(srna, "visible_camera", PROP_BOOLEAN, PROP_NONE);
   RNA_def_property_boolean_negative_sdna(prop, nullptr, "visibility_flag", OB_HIDE_CAMERA);
   RNA_def_property_ui_text(prop, "Camera Visibility", "Object visibility to camera rays");
+  RNA_def_property_ui_icon(prop, ICON_INDIRECT_ONLY_OFF, 1);
   RNA_def_property_update(prop, NC_OBJECT | ND_DRAW, "rna_Object_internal_update_draw");
 
   prop = RNA_def_property(srna, "visible_diffuse", PROP_BOOLEAN, PROP_NONE);
@@ -2926,6 +2969,7 @@ static void rna_def_object_visibility(StructRNA *srna)
       "Holdout",
       "Render objects as a holdout or matte, creating a hole in the image with zero alpha, to "
       "fill out in compositing with real footage or another render");
+  RNA_def_property_ui_icon(prop, ICON_HOLDOUT_OFF, 1);
   RNA_def_property_update(prop, NC_OBJECT | ND_DRAW, "rna_Object_hide_update");
 
   prop = RNA_def_property(srna, "is_shadow_catcher", PROP_BOOLEAN, PROP_NONE);
@@ -2936,6 +2980,14 @@ static void rna_def_object_visibility(StructRNA *srna)
       "Only render shadows and reflections on this object, for compositing renders into real "
       "footage. Objects with this setting are considered to already exist in the footage, "
       "objects without it are synthetic objects being composited into it.");
+  RNA_def_property_update(prop, NC_OBJECT | ND_DRAW, "rna_Object_internal_update_draw");
+
+  prop = RNA_def_property(srna, "visible_raycast", PROP_BOOLEAN, PROP_NONE);
+  RNA_def_property_boolean_negative_sdna(prop, nullptr, "visibility_flag", OB_HIDE_RAYCAST);
+  RNA_def_property_ui_text(
+      prop,
+      "Raycast Visibility",
+      "Object visibility to raycast rays. Implicitly false for Blended materials in EEVEE.");
   RNA_def_property_update(prop, NC_OBJECT | ND_DRAW, "rna_Object_internal_update_draw");
 }
 
@@ -3051,6 +3103,13 @@ static void rna_def_object(BlenderRNA *brna)
   RNA_def_property_ui_text(
       prop, "Parent Bone", "Name of parent bone in case of a bone parenting relation");
   RNA_def_property_update(prop, NC_OBJECT | ND_DRAW, "rna_Object_dependency_update");
+
+  prop = RNA_def_property(srna, "parent_bone_head_tail_factor", PROP_FLOAT, PROP_FACTOR);
+  RNA_def_property_float_sdna(prop, nullptr, "parent_bone_head_tail_factor");
+  RNA_def_property_range(prop, 0.0f, 1.0f);
+  RNA_def_property_ui_range(prop, 0.0, 1.0, 1, 2);
+  RNA_def_property_ui_text(prop, "Parent Bone Head/Tail", "Position along the length of bone");
+  RNA_def_property_update(prop, NC_OBJECT | ND_DRAW, "rna_Object_internal_update");
 
   prop = RNA_def_property(srna, "use_parent_final_indices", PROP_BOOLEAN, PROP_NONE);
   RNA_def_property_boolean_sdna(prop, nullptr, "transflag", OB_PARENT_USE_FINAL_INDICES);
@@ -3175,6 +3234,24 @@ static void rna_def_object(BlenderRNA *brna)
       /* This description is shared by other "rotation_mode" properties. */
       "The kind of rotation to apply, values from other rotation modes are not used");
   RNA_def_property_update(prop, NC_OBJECT | ND_TRANSFORM, "rna_Object_internal_update");
+
+  FunctionRNA *func = RNA_def_function(
+      srna, "convert_rotation_mode", "rna_Object_convert_rotation_mode");
+  RNA_def_function_ui_description(
+      func, "Changes the rotation mode and converts all animation to match that new mode");
+  RNA_def_function_flag(func, FUNC_USE_CONTEXT);
+  PropertyRNA *parm = RNA_def_enum(func,
+                                   "rotation_mode",
+                                   rna_enum_object_rotation_mode_items,
+                                   ROT_MODE_XYZ,
+                                   "Rotation Mode",
+                                   "The rotation mode to change to");
+  RNA_def_parameter_flags(parm, PropertyFlag(0), PARM_REQUIRED);
+  parm = RNA_def_boolean(func,
+                         "bake",
+                         false,
+                         "Bake",
+                         "Insert a key on every frame to ensure interpolation is preserved");
 
   prop = RNA_def_property(srna, "scale", PROP_FLOAT, PROP_XYZ);
   RNA_def_property_flag(prop, PROP_PROPORTIONAL);

@@ -9,8 +9,8 @@
  * or normals at a given ray time is a matter of interpolation of the two steps
  * between which the ray time lies.
  *
- * The extra positions and normals are stored as ATTR_STD_MOTION_VERTEX_POSITION
- * and ATTR_STD_MOTION_VERTEX_NORMAL mesh attributes.
+ * The extra positions are stored as additional motion steps in ATTR_STD_POSITION.
+ * Normals in ATTR_STD_VERTEX_NORMAL and ATTR_STD_CORNER_NORMAL.
  */
 
 #pragma once
@@ -50,10 +50,10 @@ ccl_device_inline bool motion_triangle_intersect(KernelGlobals kg,
   float u;
   float v;
   if (ray_triangle_intersect(P, dir, tmin, tmax, verts[0], verts[1], verts[2], &u, &v, &t)) {
-#ifdef __VISIBILITY_FLAG__
-    /* Visibility flag test. we do it here under the assumption
-     * that most triangles are culled by node flags.
-     */
+#if defined(__VISIBILITY_FLAG__) && !defined(__KERNEL_HIPRT__)
+    /* Visibility flag test. we do it here under the assumption that most triangles are culled by
+     * node flags.
+     * Note that HIP-RT performs visibility check on the instance level. */
     if (kernel_data_fetch(prim_visibility, prim_addr) & visibility)
 #endif
     {

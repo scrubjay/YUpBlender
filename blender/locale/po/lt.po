@@ -1,9 +1,9 @@
 
 msgid ""
 msgstr ""
-"Project-Id-Version: Blender 5.2.0 Alpha (b'8bc0d293b105')\n"
+"Project-Id-Version: Blender 5.3.0 Release Candidate (b'f78a5e153839')\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-04-28 08:59+0000\n"
+"POT-Creation-Date: 2026-11-09 09:34+0000\n"
 "PO-Revision-Date: 2025-07-23 15:18+0000\n"
 "Last-Translator: Aras Pranckevičius <aras@nesnausk.org>\n"
 "Language-Team: Lithuanian <https://translate.blender.org/projects/blender-ui/ui/lt/>\n"
@@ -624,6 +624,38 @@ msgid "Space currently being displayed in this area"
 msgstr "Zona šiuo metu aktyvi šioje erdvėje"
 
 
+msgid "Asset Library"
+msgstr "Išteklių biblioteka"
+
+
+msgid "All Libraries"
+msgstr "Visos bibliotekos"
+
+
+msgid "Show assets from all of the listed asset libraries"
+msgstr "Rodyti išteklius iš visų išvardintų bibliotekų"
+
+
+msgid "Current File"
+msgstr "Dabartinis failas"
+
+
+msgid "Show the assets currently available in this Blender session"
+msgstr "Rodyti išteklius pasiekiamus šioje Blender sesijoje"
+
+
+msgid "Essentials"
+msgstr "Esminiai"
+
+
+msgid "Custom"
+msgstr "Pasirinktinis/-ė"
+
+
+msgid "Show assets from the asset libraries configured in the Preferences"
+msgstr "Rodyti išteklius iš nustatymuose pasirinktų išteklių bibliotekų"
+
+
 msgid "User Asset Libraries"
 msgstr "Vartotojo išteklių bibliotekos"
 
@@ -729,40 +761,8 @@ msgid "Asset Shelf"
 msgstr "Išteklių lentyna"
 
 
-msgid "Asset Library"
-msgstr "Išteklių biblioteka"
-
-
 msgid "Choose the asset library to display assets from"
 msgstr "Pasirinkti išteklių biblioteką, kurios ištekliai rodomi"
-
-
-msgid "All Libraries"
-msgstr "Visos bibliotekos"
-
-
-msgid "Show assets from all of the listed asset libraries"
-msgstr "Rodyti išteklius iš visų išvardintų bibliotekų"
-
-
-msgid "Current File"
-msgstr "Dabartinis failas"
-
-
-msgid "Show the assets currently available in this Blender session"
-msgstr "Rodyti išteklius pasiekiamus šioje Blender sesijoje"
-
-
-msgid "Essentials"
-msgstr "Esminiai"
-
-
-msgid "Custom"
-msgstr "Pasirinktinis/-ė"
-
-
-msgid "Show assets from the asset libraries configured in the Preferences"
-msgstr "Rodyti išteklius iš nustatymuose pasirinktų išteklių bibliotekų"
 
 
 msgid "Activate Operator"
@@ -1041,8 +1041,8 @@ msgid "Version"
 msgstr "Versija"
 
 
-msgid "ACEScg"
-msgstr "„ACEScg“"
+msgid "Blender"
+msgstr "„Blender“"
 
 
 msgid "Not yet defined"
@@ -1060,6 +1060,10 @@ msgstr "ID tipas"
 
 msgid "Import Info"
 msgstr "Importavimo informacija"
+
+
+msgid "Path"
+msgstr "Kelias"
 
 
 msgid "Avoid"
@@ -1269,6 +1273,10 @@ msgid "Simplify"
 msgstr "Supaprastinti"
 
 
+msgid "Pixel"
+msgstr "Pikselis"
+
+
 msgid "Hardness"
 msgstr "Kietumas"
 
@@ -1403,28 +1411,8 @@ msgid "Exclude"
 msgstr "Išskirti"
 
 
-msgid "ACES2065-1"
-msgstr "„ACES2065-1“"
-
-
-msgid "AgX Log"
-msgstr "„AgX“ žurnalas"
-
-
-msgid "Rec.1886"
-msgstr "„Rec.1886“"
-
-
-msgid "Rec.2020"
-msgstr "„Rec.2020“"
-
-
 msgid "Color space that the sequencer operates in"
 msgstr "Vaizdo montavimo spalvų erdvė"
-
-
-msgid "View"
-msgstr "Rodymas"
 
 
 msgid "Temperature"
@@ -1449,6 +1437,10 @@ msgstr "„HSL“"
 
 msgid "Elements"
 msgstr "Elementai"
+
+
+msgid "Identifier"
+msgstr "Identifikatorius"
 
 
 msgctxt "Text"
@@ -1522,6 +1514,10 @@ msgstr "Gylis"
 
 msgid "Surface"
 msgstr "Paviršius"
+
+
+msgid "View"
+msgstr "Rodymas"
 
 
 msgid "Radius"
@@ -1698,10 +1694,6 @@ msgstr "Sūkurys"
 
 msgid "Wind"
 msgstr "Vėjas"
-
-
-msgid "Identifier"
-msgstr "Identifikatorius"
 
 
 msgid "Group"
@@ -2405,10 +2397,6 @@ msgid "Usage"
 msgstr "Naudojimas/Vartojimas"
 
 
-msgid "Path"
-msgstr "Kelias"
-
-
 msgid "Follow"
 msgstr "Sekti"
 
@@ -2681,10 +2669,6 @@ msgstr "Tuščia/-s"
 
 msgid "Degrees"
 msgstr "Laipsniai"
-
-
-msgid "Pixel"
-msgstr "Pikselis"
 
 
 msgid "RK4"
@@ -3093,20 +3077,20 @@ msgid "Show/Hide"
 msgstr "Rodyti/Slėpti"
 
 
-msgid "Apply"
-msgstr "Pritaikyti"
-
-
 msgid "Import"
 msgstr "Importuoti"
 
 
-msgid "Layout"
-msgstr "Išdėstymas/Maketas"
+msgid "Apply"
+msgstr "Pritaikyti"
 
 
 msgid "Track"
 msgstr "Sekti"
+
+
+msgid "Layout"
+msgstr "Išdėstymas/Maketas"
 
 
 msgid "Animals"
@@ -3135,10 +3119,6 @@ msgstr "Pridėti keitiklį"
 
 msgid "Python"
 msgstr "„Python“"
-
-
-msgid "Blender"
-msgstr "„Blender“"
 
 
 msgid "System"
@@ -3407,6 +3387,10 @@ msgid "New Action"
 msgstr "Naujas veiksmas"
 
 
+msgid "Search"
+msgstr "Paieška"
+
+
 msgid "File Browser Mode"
 msgstr "Failų naršyklės veiksena"
 
@@ -3648,6 +3632,10 @@ msgid "No device - there will be no audio output"
 msgstr "Nėra įrenginio – nebus jokios garso išvesties"
 
 
+msgid "CUDA"
+msgstr "„CUDA“"
+
+
 msgid "Language"
 msgstr "Kalba"
 
@@ -3658,10 +3646,6 @@ msgstr "Kalba, naudojama vertimui"
 
 msgid "Skip Save"
 msgstr "Praleisti išsaugojimą"
-
-
-msgid "CUDA"
-msgstr "„CUDA“"
 
 
 msgid "OptiX"
@@ -3923,10 +3907,6 @@ msgid "Tool"
 msgstr "Įrankis"
 
 
-msgid "Scene Properties"
-msgstr "Scenos ypatybės"
-
-
 msgctxt "ID"
 msgid "Render"
 msgstr "Vaizduoti"
@@ -3939,6 +3919,10 @@ msgstr "Išvestis"
 
 msgid "Output Properties"
 msgstr "Išvesties ypatybės"
+
+
+msgid "Scene Properties"
+msgstr "Scenos ypatybės"
 
 
 msgid "World Properties"
@@ -4128,10 +4112,6 @@ msgid "Path Before"
 msgstr "Kelias prieš"
 
 
-msgid "Selected File"
-msgstr "Pasirinktas failas"
-
-
 msgid "Font Style"
 msgstr "Šrifto stilius"
 
@@ -4223,8 +4203,8 @@ msgid "Vibration"
 msgstr "Vibracija"
 
 
-msgid "Search"
-msgstr "Paieška"
+msgid "Cancel"
+msgstr "Atšaukti"
 
 
 msgctxt "WindowManager"
@@ -4342,6 +4322,11 @@ msgstr "„Blender“ yra nemokama taikomoji programa"
 
 
 msgctxt "Operator"
+msgid "Close"
+msgstr "Uždaryti"
+
+
+msgctxt "Operator"
 msgid "Donate"
 msgstr "Paremti"
 
@@ -4389,13 +4374,13 @@ msgstr "Nauja/-s/-i"
 
 
 msgctxt "Operator"
-msgid "Color"
-msgstr "Spalva"
+msgid "Text"
+msgstr "Tekstas"
 
 
 msgctxt "Operator"
-msgid "Text"
-msgstr "Tekstas"
+msgid "Color"
+msgstr "Spalva"
 
 
 msgctxt "Text"
@@ -4463,11 +4448,6 @@ msgid "Object"
 msgstr "Objektas"
 
 
-msgctxt "Operator"
-msgid "Close"
-msgstr "Uždaryti"
-
-
 msgid "Saved \"%s\""
 msgstr "Išsaugotas – „%s“"
 
@@ -4482,10 +4462,6 @@ msgstr "„AOV“"
 
 msgid "objects"
 msgstr "objektai"
-
-
-msgid "Cancel"
-msgstr "Atšaukti"
 
 
 msgctxt "WindowManager"

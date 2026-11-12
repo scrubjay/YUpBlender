@@ -26,14 +26,16 @@ class VKContext;
 class VKStreamingBuffer {
   /** Current host buffer storing the data to be uploaded. */
   std::optional<std::unique_ptr<VKBuffer>> host_buffer_;
-  /** Minimum alignment for streaming. Needs to be set to
-   * `VkPhysicalDeviceLimits.min*OffsetAlignment` */
+  /**
+   * Minimum alignment for streaming. Needs to be set to
+   * `VkPhysicalDeviceLimits.min*OffsetAlignment`
+   */
   VkDeviceSize min_offset_alignment_;
   /** Device buffer that is being updated. */
-  VkBuffer vk_buffer_dst_;
+  VKResourceWithHandle<VkBuffer> vk_buffer_dst_;
   /** Size of 'vk_buffer_dst_' */
   VkDeviceSize vk_buffer_size_;
-  /**Current offset in the host buffer where new data will be stored. */
+  /** Current offset in the host buffer where new data will be stored. */
   VkDeviceSize offset_ = 0;
   /**
    * Render graph node handle for the copy of the host buffer to vk_buffer_dst_. Used to update the
@@ -51,7 +53,7 @@ class VKStreamingBuffer {
    */
   VkDeviceSize update(VKContext &context, const void *data, size_t data_size);
 
-  VkBuffer vk_buffer_dst()
+  VKResourceWithHandle<VkBuffer> vk_buffer_dst()
   {
     return vk_buffer_dst_;
   }

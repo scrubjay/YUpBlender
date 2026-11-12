@@ -6,13 +6,13 @@
  * \ingroup modifiers
  */
 
-#include "BLI_utildefines.h"
+#include "BLI_utildefines.hh"
 
 #include "BLI_array.hh"
-#include "BLI_math_matrix.h"
-#include "BLI_math_vector.h"
+#include "BLI_math_matrix_c.hh"
+#include "BLI_math_vector_c.hh"
 #include "BLI_simd.hh"
-#include "BLI_task.h"
+#include "BLI_task_c.hh"
 
 #include "BLT_translation.hh"
 
@@ -532,77 +532,78 @@ static void panel_register(ARegionType *region_type)
 
 static void blend_write(BlendWriter *writer, const ID *id_owner, const ModifierData *md)
 {
-  MeshDeformModifierData mmd = *reinterpret_cast<const MeshDeformModifierData *>(md);
-  const bool is_undo = BLO_write_is_undo(writer);
-
-  if (ID_IS_OVERRIDE_LIBRARY(id_owner) && !is_undo) {
+  const MeshDeformModifierData *mmd = reinterpret_cast<const MeshDeformModifierData *>(md);
+  const bool is_undo = writer->is_undo();
+  const bool without_bind_data = ID_IS_OVERRIDE_LIBRARY(id_owner) && !is_undo &&
+                                 (md->flag & eModifierFlag_OverrideLibrary_Local) == 0;
+  if (without_bind_data) {
+    /* Modifier coming from linked data cannot be bound from an override, so we can remove all
+     * binding data, can save a significant amount of memory. */
     BLI_assert(!ID_IS_LINKED(id_owner));
-    const bool is_local = (md->flag & eModifierFlag_OverrideLibrary_Local) != 0;
-    if (!is_local) {
-      /* Modifier coming from linked data cannot be bound from an override, so we can remove all
-       * binding data, can save a significant amount of memory. */
-      mmd.influences_num = 0;
-      mmd.bindinfluences = nullptr;
-      mmd.bindinfluences_sharing_info = nullptr;
-      mmd.verts_num = 0;
-      mmd.bindoffsets = nullptr;
-      mmd.bindoffsets_sharing_info = nullptr;
-      mmd.cage_verts_num = 0;
-      mmd.bindcagecos = nullptr;
-      mmd.bindcagecos_sharing_info = nullptr;
-      mmd.dyngridsize = 0;
-      mmd.dyngrid = nullptr;
-      mmd.dyngrid_sharing_info = nullptr;
-      mmd.influences_num = 0;
-      mmd.dyninfluences = nullptr;
-      mmd.dyninfluences_sharing_info = nullptr;
-      mmd.dynverts = nullptr;
-      mmd.dynverts_sharing_info = nullptr;
-    }
+    writer->write_struct(mmd, [](BlendStructWriter<MeshDeformModifierData> &struct_writer) {
+      auto &shallow_mmd = struct_writer.shallow_data;
+      shallow_mmd.influences_num = 0;
+      shallow_mmd.bindinfluences = nullptr;
+      shallow_mmd.bindinfluences_sharing_info = nullptr;
+      shallow_mmd.verts_num = 0;
+      shallow_mmd.bindoffsets = nullptr;
+      shallow_mmd.bindoffsets_sharing_info = nullptr;
+      shallow_mmd.cage_verts_num = 0;
+      shallow_mmd.bindcagecos = nullptr;
+      shallow_mmd.bindcagecos_sharing_info = nullptr;
+      shallow_mmd.dyngridsize = 0;
+      shallow_mmd.dyngrid = nullptr;
+      shallow_mmd.dyngrid_sharing_info = nullptr;
+      shallow_mmd.influences_num = 0;
+      shallow_mmd.dyninfluences = nullptr;
+      shallow_mmd.dyninfluences_sharing_info = nullptr;
+      shallow_mmd.dynverts = nullptr;
+      shallow_mmd.dynverts_sharing_info = nullptr;
+    });
+    return;
   }
 
-  const int size = mmd.dyngridsize;
+  const int size = mmd->dyngridsize;
 
-  BLO_write_shared(writer,
-                   mmd.bindinfluences,
-                   sizeof(MDefInfluence) * mmd.influences_num,
-                   mmd.bindinfluences_sharing_info,
-                   [&]() { writer->write_struct_array(mmd.influences_num, mmd.bindinfluences); });
+  writer->write_shared(
+      mmd->bindinfluences,
+      sizeof(MDefInfluence) * mmd->influences_num,
+      mmd->bindinfluences_sharing_info,
+      [&]() { writer->write_struct_array(mmd->influences_num, mmd->bindinfluences); });
 
   /* NOTE: `bindoffset` is abusing `verts_num + 1` as its size, this becomes an incorrect value in
    * case `verts_num == 0`, since `bindoffset` is then nullptr, not a size 1 allocated array. */
-  if (mmd.verts_num > 0) {
-    BLO_write_shared(writer,
-                     mmd.bindoffsets,
-                     sizeof(int) * (mmd.verts_num + 1),
-                     mmd.bindoffsets_sharing_info,
-                     [&]() { writer->write_int32_array(mmd.verts_num + 1, mmd.bindoffsets); });
+  if (mmd->verts_num > 0) {
+    writer->write_shared(
+        mmd->bindoffsets,
+        sizeof(int) * (mmd->verts_num + 1),
+        mmd->bindoffsets_sharing_info,
+        [&]() { writer->write_int32_array(mmd->verts_num + 1, mmd->bindoffsets); });
   }
   else {
-    BLI_assert(mmd.bindoffsets == nullptr);
+    BLI_assert(mmd->bindoffsets == nullptr);
   }
 
-  BLO_write_shared(writer,
-                   mmd.bindcagecos,
-                   sizeof(float[3]) * mmd.cage_verts_num,
-                   mmd.bindcagecos_sharing_info,
-                   [&]() { writer->write_float3_array(mmd.cage_verts_num, mmd.bindcagecos); });
-  BLO_write_shared(
-      writer, mmd.dyngrid, sizeof(MDefCell) * size * size * size, mmd.dyngrid_sharing_info, [&]() {
-        writer->write_struct_array(size * size * size, mmd.dyngrid);
-      });
-  BLO_write_shared(writer,
-                   mmd.dyninfluences,
-                   sizeof(MDefInfluence) * mmd.influences_num,
-                   mmd.dyninfluences_sharing_info,
-                   [&]() { writer->write_struct_array(mmd.influences_num, mmd.dyninfluences); });
-  BLO_write_shared(writer,
-                   mmd.dynverts,
-                   sizeof(MDefInfluence) * mmd.verts_num,
-                   mmd.dynverts_sharing_info,
-                   [&]() { writer->write_int32_array(mmd.verts_num, mmd.dynverts); });
+  writer->write_shared(
+      mmd->bindcagecos,
+      sizeof(float[3]) * mmd->cage_verts_num,
+      mmd->bindcagecos_sharing_info,
+      [&]() { writer->write_float3_array(mmd->cage_verts_num, mmd->bindcagecos); });
+  writer->write_shared(mmd->dyngrid,
+                       sizeof(MDefCell) * size * size * size,
+                       mmd->dyngrid_sharing_info,
+                       [&]() { writer->write_struct_array(size * size * size, mmd->dyngrid); });
+  writer->write_shared(
+      mmd->dyninfluences,
+      sizeof(MDefInfluence) * mmd->influences_num,
+      mmd->dyninfluences_sharing_info,
+      [&]() { writer->write_struct_array(mmd->influences_num, mmd->dyninfluences); });
+  writer->write_shared(mmd->dynverts,
+                       sizeof(MDefInfluence) * mmd->verts_num,
+                       mmd->dynverts_sharing_info,
+                       [&]() { writer->write_int32_array(mmd->verts_num, mmd->dynverts); });
 
-  writer->write_struct_at_address(md, &mmd);
+  writer->write_struct(mmd);
 }
 
 static void blend_read(BlendDataReader *reader, ModifierData *md)
@@ -612,8 +613,9 @@ static void blend_read(BlendDataReader *reader, ModifierData *md)
 
   if (mmd->bindinfluences) {
     mmd->bindinfluences_sharing_info = BLO_read_shared(reader, &mmd->bindinfluences, [&]() {
-      BLO_read_struct_array(reader, MDefInfluence, mmd->influences_num, &mmd->bindinfluences);
-      return implicit_sharing::info_for_mem_free(mmd->bindinfluences);
+      BLO_read_array_and_validate_size(reader, &mmd->bindinfluences, &mmd->influences_num);
+      return mmd->bindinfluences ? implicit_sharing::info_for_mem_free(mmd->bindinfluences) :
+                                   nullptr;
     });
   }
 
@@ -622,40 +624,45 @@ static void blend_read(BlendDataReader *reader, ModifierData *md)
   if (mmd->verts_num > 0) {
     if (mmd->bindoffsets) {
       mmd->bindoffsets_sharing_info = BLO_read_shared(reader, &mmd->bindoffsets, [&]() {
-        BLO_read_int32_array(reader, mmd->verts_num + 1, &mmd->bindoffsets);
-        return implicit_sharing::info_for_mem_free(mmd->bindoffsets);
+        (void)BLO_read_array(reader, &mmd->bindoffsets, int64_t(mmd->verts_num) + 1);
+        return mmd->bindoffsets ? implicit_sharing::info_for_mem_free(mmd->bindoffsets) : nullptr;
       });
     }
   }
 
   if (mmd->bindcagecos) {
     mmd->bindcagecos_sharing_info = BLO_read_shared(reader, &mmd->bindcagecos, [&]() {
-      BLO_read_float3_array(reader, mmd->cage_verts_num, &mmd->bindcagecos);
-      return implicit_sharing::info_for_mem_free(mmd->bindcagecos);
+      BLO_read_array_and_validate_size(reader, &mmd->bindcagecos, &mmd->cage_verts_num, 3);
+      return mmd->bindcagecos ? implicit_sharing::info_for_mem_free(mmd->bindcagecos) : nullptr;
     });
   }
   if (mmd->dyngrid) {
     mmd->dyngrid_sharing_info = BLO_read_shared(reader, &mmd->dyngrid, [&]() {
-      BLO_read_struct_array(reader, MDefCell, size * size * size, &mmd->dyngrid);
-      return implicit_sharing::info_for_mem_free(mmd->dyngrid);
+      (void)BLO_read_array(reader, &mmd->dyngrid, int64_t(size) * size * size);
+      return mmd->dyngrid ? implicit_sharing::info_for_mem_free(mmd->dyngrid) : nullptr;
     });
   }
   if (mmd->dyninfluences) {
     mmd->dyninfluences_sharing_info = BLO_read_shared(reader, &mmd->dyninfluences, [&]() {
-      BLO_read_struct_array(reader, MDefInfluence, mmd->influences_num, &mmd->dyninfluences);
-      return implicit_sharing::info_for_mem_free(mmd->dyninfluences);
+      BLO_read_array_and_validate_size(reader, &mmd->dyninfluences, &mmd->influences_num);
+      return mmd->dyninfluences ? implicit_sharing::info_for_mem_free(mmd->dyninfluences) :
+                                  nullptr;
     });
   }
   if (mmd->dynverts) {
     mmd->dynverts_sharing_info = BLO_read_shared(reader, &mmd->dynverts, [&]() {
-      BLO_read_int32_array(reader, mmd->verts_num, &mmd->dynverts);
-      return implicit_sharing::info_for_mem_free(mmd->dynverts);
+      BLO_read_array_and_validate_size(reader, &mmd->dynverts, &mmd->verts_num);
+      return mmd->dynverts ? implicit_sharing::info_for_mem_free(mmd->dynverts) : nullptr;
     });
   }
 
   /* Deprecated storage. */
-  BLO_read_float_array(reader, mmd->verts_num, &mmd->bindweights);
-  BLO_read_float3_array(reader, mmd->cage_verts_num, &mmd->bindcos);
+  if (mmd->bindweights) {
+    BLO_read_array_and_validate_size(reader, &mmd->bindweights, &mmd->verts_num);
+  }
+  if (mmd->bindcos) {
+    BLO_read_array_and_validate_size(reader, &mmd->bindcos, &mmd->cage_verts_num, 3);
+  }
 }
 
 ModifierTypeInfo modifierType_MeshDeform = {

@@ -13,7 +13,7 @@
 
 #include "BLI_array_utils.hh"
 #include "BLI_bit_vector.hh"
-#include "BLI_linklist_stack.h"
+#include "BLI_linklist_stack.hh"
 #include "BLI_math_vector.hh"
 
 #include "DNA_brush_types.h"
@@ -195,7 +195,7 @@ static float falloff_value_vertex_get(const SculptSession &ss,
     return expand_cache.vert_falloff[vert];
   }
   const Brush *brush = expand_cache.brush;
-  const MTex *mtex = BKE_brush_mask_texture_get(brush, OB_MODE_SCULPT);
+  const MTex *mtex = BKE_brush_mask_texture_get(brush, PaintMode::Sculpt);
   if (!mtex->tex) {
     return expand_cache.vert_falloff[vert];
   }
@@ -219,7 +219,7 @@ static float max_vert_falloff_get(const Cache &expand_cache)
     return expand_cache.max_vert_falloff;
   }
 
-  const MTex *mask_tex = BKE_brush_mask_texture_get(expand_cache.brush, OB_MODE_SCULPT);
+  const MTex *mask_tex = BKE_brush_mask_texture_get(expand_cache.brush, PaintMode::Sculpt);
   if (!mask_tex->tex) {
     return expand_cache.max_vert_falloff;
   }
@@ -389,25 +389,36 @@ static BitVector<> enabled_state_to_bitmap(const Depsgraph &depsgraph,
     }
     case bke::pbvh::Type::Grids: {
       const Mesh &base_mesh = *id_cast<const Mesh *>(object.data);
+      const OffsetIndices<int> faces = base_mesh.faces();
+      const Span<int> corner_verts = base_mesh.corner_verts();
+      const GroupedSpan<int> vert_to_face_map = base_mesh.vert_to_face_map();
       const bke::AttributeAccessor attributes = base_mesh.attributes();
       const VArraySpan face_sets = *attributes.lookup_or_default<int>(
           ".sculpt_face_set", bke::AttrDomain::Face, 0);
 
       SubdivCCG &subdiv_ccg = *ss.subdiv_ccg;
-      const Span<int> grid_to_face_map = subdiv_ccg.grid_to_face_map;
       const CCGKey key = BKE_subdiv_ccg_key_top_level(subdiv_ccg);
       const Span<float3> positions = subdiv_ccg.positions;
       BitGroupVector<> &grid_hidden = subdiv_ccg.grid_hidden;
       for (const int grid : IndexRange(subdiv_ccg.grids_num)) {
         const int start = grid * key.grid_area;
-        const int face_set = face_sets[grid_to_face_map[grid]];
         BKE_subdiv_ccg_foreach_visible_grid_vert(key, grid_hidden, grid, [&](const int offset) {
           const int vert = start + offset;
           if (!is_vert_in_active_component(ss, expand_cache, vert)) {
             return;
           }
           if (expand_cache.snap) {
-            enabled_verts[vert].set(expand_cache.snap_enabled_face_sets->contains(face_set));
+            const SubdivCCGCoord coord = SubdivCCGCoord::from_index(key, vert);
+            if (face_set::coord_has_any_face_set(faces,
+                                                 corner_verts,
+                                                 vert_to_face_map,
+                                                 face_sets,
+                                                 subdiv_ccg,
+                                                 coord,
+                                                 *expand_cache.snap_enabled_face_sets))
+            {
+              enabled_verts[vert].set(true);
+            }
             return;
           }
           enabled_verts[vert].set(
@@ -1435,8 +1446,13 @@ static void init_from_face_set_boundary(const Depsgraph &depsgraph,
       threading::parallel_for(IndexRange(totvert), 1024, [&](const IndexRange range) {
         for (const int vert : range) {
           const SubdivCCGCoord coord = SubdivCCGCoord::from_index(key, vert);
-          vert_has_face_set[vert] = face_set::vert_has_face_set(
-              subdiv_ccg, face_sets, coord.grid_index, active_face_set);
+          vert_has_face_set[vert] = face_set::coord_has_face_set(faces,
+                                                                 corner_verts,
+                                                                 vert_to_face_map,
+                                                                 face_sets,
+                                                                 subdiv_ccg,
+                                                                 coord,
+                                                                 active_face_set);
           vert_has_unique_face_set[vert] = face_set::vert_has_unique_face_set(
               faces, corner_verts, vert_to_face_map, face_sets, subdiv_ccg, coord);
         }
@@ -2098,6 +2114,8 @@ static void update_for_vert(bContext *C, Object &ob, const std::optional<int> ve
 
           IndexMaskMemory memory;
           pbvh.tag_masks_changed(IndexMask::from_bools(node_changed, memory));
+
+          BKE_subdiv_ccg_average_grids(*ss.subdiv_ccg);
           break;
         }
         case bke::pbvh::Type::BMesh: {
@@ -2184,8 +2202,7 @@ static void update_for_vert(bContext *C, Object &ob, const std::optional<int> ve
 static std::optional<int> target_vert_update_and_get(bContext *C, Object &ob, const float mval[2])
 {
   SculptSession &ss = *ob.runtime->sculpt_session;
-  CursorGeometryInfo cgi;
-  if (cursor_geometry_info_update(C, &cgi, mval, false)) {
+  if (cursor_geometry_info_update(C, mval, false)) {
     return ss.active_vert_index();
   }
   return std::nullopt;
@@ -2349,7 +2366,7 @@ static bool set_initial_components_for_mouse(bContext *C,
     const int last_active_vert_index = ss.last_active_vert_index();
     /* It still may be the case that there is no last active vert in rare circumstances for
      * everyday usage.
-     * (i.e. if the cursor has never been over the mesh at all. A solution to both this problem
+     * (i.e. if the cursor has never been over the mesh at all). A solution to both this problem
      * and needing to store this data is to figure out which is the nearest vertex to the current
      * cursor position */
     if (last_active_vert_index == -1) {
@@ -2503,11 +2520,13 @@ static void sculpt_expand_status(bContext *C, wmOperator *op, Cache *expand_cach
   status.opmodal(IFACE_("Geodesic Step"), op->type, SCULPT_EXPAND_MODAL_RECURSION_STEP_GEODESIC);
   status.opmodal(IFACE_("Topology Step"), op->type, SCULPT_EXPAND_MODAL_RECURSION_STEP_TOPOLOGY);
 
-  const MTex *mask_tex = BKE_brush_mask_texture_get(expand_cache->brush, OB_MODE_SCULPT);
-  if (mask_tex->tex) {
-    status.opmodal({}, op->type, SCULPT_EXPAND_MODAL_TEXTURE_DISTORTION_INCREASE);
-    status.opmodal(
-        IFACE_("Texture Distortion"), op->type, SCULPT_EXPAND_MODAL_TEXTURE_DISTORTION_DECREASE);
+  if (expand_cache->brush) {
+    const MTex *mask_tex = BKE_brush_mask_texture_get(expand_cache->brush, PaintMode::Sculpt);
+    if (mask_tex->tex) {
+      status.opmodal({}, op->type, SCULPT_EXPAND_MODAL_TEXTURE_DISTORTION_INCREASE);
+      status.opmodal(
+          IFACE_("Texture Distortion"), op->type, SCULPT_EXPAND_MODAL_TEXTURE_DISTORTION_DECREASE);
+    }
   }
 }
 
@@ -2523,7 +2542,7 @@ static wmOperatorStatus sculpt_expand_modal(bContext *C, wmOperator *op, const w
 
   /* Update SculptSession data. */
   Depsgraph *depsgraph = CTX_data_depsgraph_pointer(C);
-  BKE_sculpt_update_object_for_edit(depsgraph, &ob, false);
+  BKE_sculptsession_update_for_edit(depsgraph, &ob, false);
   ensure_sculptsession_data(ob);
 
   /* Update and get the active vertex (and face) from the cursor. */
@@ -2551,6 +2570,9 @@ static wmOperatorStatus sculpt_expand_modal(bContext *C, wmOperator *op, const w
         break;
       }
       case SCULPT_EXPAND_MODAL_BRUSH_GRADIENT_TOGGLE: {
+        if (!expand_cache.brush) {
+          break;
+        }
         expand_cache.brush_gradient = !expand_cache.brush_gradient;
         if (expand_cache.brush_gradient) {
           expand_cache.falloff_gradient = true;
@@ -2655,8 +2677,11 @@ static wmOperatorStatus sculpt_expand_modal(bContext *C, wmOperator *op, const w
         break;
       }
       case SCULPT_EXPAND_MODAL_TEXTURE_DISTORTION_INCREASE: {
+        if (!expand_cache.brush) {
+          break;
+        }
         if (expand_cache.texture_distortion_strength == 0.0f) {
-          const MTex *mask_tex = BKE_brush_mask_texture_get(expand_cache.brush, OB_MODE_SCULPT);
+          const MTex *mask_tex = BKE_brush_mask_texture_get(expand_cache.brush, PaintMode::Sculpt);
           if (mask_tex->tex == nullptr) {
             BKE_report(op->reports,
                        RPT_WARNING,
@@ -2786,7 +2811,6 @@ static void cache_initial_config_set(bContext *C, wmOperator *op, Cache &expand_
   expand_cache.normal_falloff_blur_steps = RNA_int_get(op->ptr, "normal_falloff_smooth");
   expand_cache.invert = RNA_boolean_get(op->ptr, "invert");
   expand_cache.preserve = RNA_boolean_get(op->ptr, "use_mask_preserve");
-  expand_cache.auto_mask = RNA_boolean_get(op->ptr, "use_auto_mask");
   expand_cache.falloff_gradient = RNA_boolean_get(op->ptr, "use_falloff_gradient");
   expand_cache.target = TargetType(RNA_enum_get(op->ptr, "target"));
   expand_cache.modify_active_face_set = RNA_boolean_get(op->ptr, "use_modify_active");
@@ -2802,13 +2826,20 @@ static void cache_initial_config_set(bContext *C, wmOperator *op, Cache &expand_
   const Sculpt &sd = *CTX_data_tool_settings(C)->sculpt;
   expand_cache.paint = paint;
   expand_cache.brush = BKE_paint_brush_for_read(&sd.paint);
-  BKE_curvemapping_init(expand_cache.brush->curve_distance_falloff);
-  copy_v4_fl(expand_cache.fill_color, 1.0f);
-  copy_v3_v3(expand_cache.fill_color, BKE_brush_color_get(paint, expand_cache.brush));
+
+  if (expand_cache.brush) {
+    BKE_curvemapping_init(expand_cache.brush->curve_distance_falloff);
+    copy_v3_v3(expand_cache.fill_color, BKE_brush_color_get(paint, expand_cache.brush));
+    expand_cache.fill_color[3] = 1.0f;
+    expand_cache.blend_mode = expand_cache.brush->blend;
+  }
+  else {
+    copy_v4_fl(expand_cache.fill_color, 1.0f);
+    expand_cache.blend_mode = IMB_BLEND_MIX;
+  }
 
   expand_cache.scene = CTX_data_scene(C);
   expand_cache.texture_distortion_strength = 0.0f;
-  expand_cache.blend_mode = expand_cache.brush->blend;
 }
 
 /**
@@ -2915,7 +2946,7 @@ static wmOperatorStatus sculpt_expand_invoke(bContext *C, wmOperator *op, const 
     }
   }
 
-  BKE_sculpt_update_object_for_edit(depsgraph, &ob, needs_colors);
+  BKE_sculptsession_update_for_edit(depsgraph, &ob, needs_colors);
 
   if (ss.expand_cache->target == TargetType::Mask) {
     ed::sculpt_paint::mask_overlay_check(*C, *op);

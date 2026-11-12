@@ -22,7 +22,7 @@ struct PipelineState {
   Vector<SpecializationConstant::Value> specialization_constants_;
   /* Vertex input */
   GPUPrimType primitive_;
-  /* Pre-fragment and Fragment stage*/
+  /* Pre-fragment and Fragment stage. */
   GPUState state_ = {{GPU_WRITE_COLOR}};
   uint32_t viewport_count_;
   /* Attachment formats. */
@@ -47,12 +47,6 @@ struct PipelineState {
     state_.stencil_test = stencil_test;
     state_.stencil_op = stencil_op;
     state_.provoking_vert = provoking_vert;
-    return *this;
-  }
-
-  Self &logic_op_xor()
-  {
-    state_.logic_op_xor = 1;
     return *this;
   }
 

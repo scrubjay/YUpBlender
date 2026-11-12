@@ -28,7 +28,7 @@ PyDoc_STRVAR(
     "\n"
     "   Builds a CurveNatureF1D object.\n"
     "\n"
-    "   :arg integration_type: The integration method used to compute a single value\n"
+    "   :param integration_type: The integration method used to compute a single value\n"
     "      from a set of values.\n"
     "   :type integration_type: :class:`freestyle.types.IntegrationType`\n"
     "\n"
@@ -42,7 +42,7 @@ PyDoc_STRVAR(
     "   method, such as the MEAN, might give, in this case, irrelevant\n"
     "   results.\n"
     "\n"
-    "   :arg inter: An Interface1D object.\n"
+    "   :param inter: An Interface1D object.\n"
     "   :type inter: :class:`freestyle.types.Interface1D`\n"
     "   :return: The nature of the Interface1D.\n"
     "   :rtype: :class:`freestyle.types.Nature`\n");
@@ -51,8 +51,14 @@ static int CurveNatureF1D___init__(BPy_CurveNatureF1D *self, PyObject *args, PyO
   static const char *kwlist[] = {"integration_type", nullptr};
   PyObject *obj = nullptr;
 
-  if (!PyArg_ParseTupleAndKeywords(
-          args, kwds, "|O!", (char **)kwlist, &IntegrationType_Type, &obj))
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "|"  /* Optional arguments. */
+                                   "O!" /* `integration_type` */
+                                   ":__init__",
+                                   (char **)kwlist,
+                                   &IntegrationType_Type,
+                                   &obj))
   {
     return -1;
   }

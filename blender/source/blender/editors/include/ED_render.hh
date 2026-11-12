@@ -54,6 +54,14 @@ void ED_render_scene_update(const DEGEditorUpdateContext *update_ctx, bool updat
  * Update 3D viewport render or draw engine on changes to the scene or view settings.
  */
 void ED_render_view3d_update(Depsgraph *depsgraph, wmWindow *window, ScrArea *area, bool updated);
+/**
+ * Pause or resume all 3D viewport render engines during final render or bake.
+ */
+void ED_render_view3d_auto_pause(Main *bmain, bool pause);
+/**
+ * Notify 3D viewport render engines of 3D pause state changes.
+ */
+void ED_render_view3d_pause_notify(Main *bmain);
 
 Scene *ED_render_job_get_scene(const bContext *C);
 Scene *ED_render_job_get_current_scene(const bContext *C);
@@ -85,7 +93,7 @@ bool ED_preview_use_image_size(const PreviewImage *preview, eIconSizes size);
 /**
  * Check if \a id is supported by the automatic preview render.
  */
-bool ED_preview_id_is_supported(const ID *id, const char **r_disabled_hint = nullptr);
+bool ED_preview_id_render_is_supported(const ID *id, const char **r_disabled_hint = nullptr);
 
 void ED_preview_set_visibility(Main *pr_main,
                                Scene *scene,
@@ -124,6 +132,7 @@ void ED_preview_icon_job(
 void ED_preview_restart_work(const bContext *C);
 
 void ED_preview_kill_jobs(wmWindowManager *wm, Main *bmain);
+void ED_preview_kill_jobs_for_undo(wmWindowManager *wm, Main *bmain);
 void ED_preview_kill_jobs_for_id(wmWindowManager *wm, const ID *id);
 
 /**

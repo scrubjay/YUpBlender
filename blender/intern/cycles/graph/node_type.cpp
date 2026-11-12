@@ -69,13 +69,13 @@ size_t SocketType::size(Type type, bool packed)
     case INT_ARRAY:
       return sizeof(array<int>);
     case COLOR_ARRAY:
-      return sizeof(array<float3>);
+      return sizeof(array<packed_float3>);
     case VECTOR_ARRAY:
-      return sizeof(array<float3>);
+      return sizeof(array<packed_float3>);
     case POINT_ARRAY:
-      return sizeof(array<float3>);
+      return sizeof(array<packed_float3>);
     case NORMAL_ARRAY:
-      return sizeof(array<float3>);
+      return sizeof(array<packed_float3>);
     case POINT2_ARRAY:
       return sizeof(array<float2>);
     case STRING_ARRAY:
@@ -164,8 +164,8 @@ void NodeType::register_input(ustring name,
   socket.enum_values = enum_values;
   socket.node_type = node_type;
   socket.flags = flags | extra_flags;
-  assert(inputs.size() < std::numeric_limits<SocketModifiedFlags>::digits);
-  socket.modified_flag_bit = (1ull << inputs.size());
+  assert(inputs.size() < SocketModifiedFlags().size());
+  socket.modified_flag_bit = inputs.size();
   inputs.push_back(socket);
 }
 

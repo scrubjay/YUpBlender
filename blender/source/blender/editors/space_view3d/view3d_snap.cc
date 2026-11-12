@@ -12,13 +12,13 @@
 #include "DNA_pointcloud_types.h"
 
 #include "BLI_bounds.hh"
-#include "BLI_listbase.h"
-#include "BLI_math_matrix.h"
+#include "BLI_listbase.hh"
 #include "BLI_math_matrix.hh"
-#include "BLI_math_rotation.h"
-#include "BLI_math_vector.h"
+#include "BLI_math_matrix_c.hh"
+#include "BLI_math_rotation_c.hh"
 #include "BLI_math_vector.hh"
-#include "BLI_utildefines.h"
+#include "BLI_math_vector_c.hh"
+#include "BLI_utildefines.hh"
 #include "BLI_vector.hh"
 
 #include "BKE_action.hh"
@@ -94,9 +94,8 @@ static wmOperatorStatus snap_sel_to_grid_exec(bContext *C, wmOperator *op)
         *bmain, scene, view_layer, CTX_wm_view3d(C));
     for (Object *obedit : objects) {
       if (obedit->type == OB_MESH) {
-        BMEditMesh *em = BKE_editmesh_from_object(obedit);
-
-        if (em->bm->totvertsel == 0) {
+        const BMesh *bm = BKE_editmesh_bmesh_get(obedit);
+        if (bm->totvertsel == 0) {
           continue;
         }
       }
@@ -144,7 +143,8 @@ static wmOperatorStatus snap_sel_to_grid_exec(bContext *C, wmOperator *op)
       for (bPoseChannel &pchan_eval : ob_eval->pose->chanbase) {
         if (pchan_eval.flag & POSE_SELECTED) {
           if (ANIM_bonecoll_is_visible_pchan(arm_eval, &pchan_eval)) {
-            if ((pchan_eval.bone->flag & BONE_CONNECTED) == 0) {
+            const Bone *bone_eval = pchan_eval.bone_get(*ob_eval);
+            if ((bone_eval->flag & BONE_CONNECTED) == 0) {
               float nLoc[3];
 
               /* get nearest grid point to snap to */
@@ -158,7 +158,7 @@ static wmOperatorStatus snap_sel_to_grid_exec(bContext *C, wmOperator *op)
               mul_m4_v3(ob_eval->world_to_object().ptr(), vec);
 
               /* Get location of grid point in pose space. */
-              BKE_armature_loc_pose_to_bone(&pchan_eval, vec, vec);
+              BKE_armature_loc_pose_to_bone({&pchan_eval, bone_eval}, vec, vec);
 
               /* Adjust location on the original pchan. */
               bPoseChannel *pchan = BKE_pose_channel_find_name(ob->pose, pchan_eval.name);
@@ -361,9 +361,8 @@ static bool snap_selected_to_location_rotation(bContext *C,
       obedit = objects[ob_index];
 
       if (obedit->type == OB_MESH) {
-        BMEditMesh *em = BKE_editmesh_from_object(obedit);
-
-        if (em->bm->totvertsel == 0) {
+        const BMesh *bm = BKE_editmesh_bmesh_get(obedit);
+        if (bm->totvertsel == 0) {
           continue;
         }
       }
@@ -422,11 +421,12 @@ static bool snap_selected_to_location_rotation(bContext *C,
       mul_v3_m4v3(target_loc_local, ob->world_to_object().ptr(), target_loc_global);
 
       for (bPoseChannel &pchan : ob->pose->chanbase) {
-        if ((pchan.flag & POSE_SELECTED) && animrig::bone_is_visible(arm, &pchan) &&
+        const Bone *bone = pchan.bone_get(*ob);
+        if ((pchan.flag & POSE_SELECTED) && animrig::bone_is_visible(arm, {&pchan, bone}) &&
             /* if the bone has a parent and is connected to the parent,
              * don't do anything - will break chain unless we do auto-ik.
              */
-            (pchan.bone->flag & BONE_CONNECTED) == 0)
+            (bone->flag & BONE_CONNECTED) == 0)
         {
           pchan.runtime.flag |= POSE_RUNTIME_TRANSFORM;
         }
@@ -438,12 +438,13 @@ static bool snap_selected_to_location_rotation(bContext *C,
       for (bPoseChannel &pchan : ob->pose->chanbase) {
         if ((pchan.runtime.flag & POSE_RUNTIME_TRANSFORM) &&
             /* check that our parents not transformed (if we have one) */
-            ((pchan.bone->parent &&
+            ((pchan.parent &&
               pose_bone_runtime_flag_test_recursive(pchan.parent, POSE_RUNTIME_TRANSFORM)) == 0))
         {
           /* Get position in pchan (pose) space. */
           float3 target_loc_pose;
 
+          Bone *bone = pchan.bone_get(*ob);
           if (use_offset) {
             mul_v3_m4v3(target_loc_pose, ob->object_to_world().ptr(), pchan.pose_mat[3]);
             add_v3_v3(target_loc_pose, offset_global);
@@ -455,10 +456,10 @@ static bool snap_selected_to_location_rotation(bContext *C,
             }
 
             mul_m4_v3(ob->world_to_object().ptr(), target_loc_pose);
-            BKE_armature_loc_pose_to_bone(&pchan, target_loc_pose, target_loc_pose);
+            BKE_armature_loc_pose_to_bone({&pchan, bone}, target_loc_pose, target_loc_pose);
           }
           else {
-            BKE_armature_loc_pose_to_bone(&pchan, target_loc_local, target_loc_pose);
+            BKE_armature_loc_pose_to_bone({&pchan, bone}, target_loc_local, target_loc_pose);
           }
 
           if (use_rotation) {
@@ -528,9 +529,7 @@ static bool snap_selected_to_location_rotation(bContext *C,
     BKE_scene_graph_evaluated_ensure(depsgraph, bmain);
 
     /* Reset flags. */
-    for (Object *ob = static_cast<Object *>(bmain->objects.first); ob;
-         ob = static_cast<Object *>(ob->id.next))
-    {
+    for (Object *ob = bmain->objects.first(); ob; ob = static_cast<Object *>(ob->id.next)) {
       ob->flag &= ~OB_DONE;
     }
 
@@ -930,9 +929,8 @@ static bool snap_curs_to_sel_ex(bContext *C, const int pivot_point, float r_curs
 
       /* We can do that quick check for meshes only... */
       if (obedit->type == OB_MESH) {
-        BMEditMesh *em = BKE_editmesh_from_object(obedit);
-
-        if (em->bm->totvertsel == 0) {
+        const BMesh *bm = BKE_editmesh_bmesh_get(obedit);
+        if (bm->totvertsel == 0) {
           continue;
         }
       }

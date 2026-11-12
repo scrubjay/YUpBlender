@@ -11,15 +11,15 @@
  */
 
 #include "BLI_kdopbvh.hh"
-#include "BLI_listbase.h"
-#include "BLI_math_matrix.h"
+#include "BLI_listbase.hh"
+#include "BLI_math_matrix_c.hh"
 #include "BLI_math_quaternion.hh"
 #include "BLI_math_quaternion_types.hh"
-#include "BLI_math_rotation.h"
-#include "BLI_math_vector.h"
+#include "BLI_math_rotation_c.hh"
 #include "BLI_math_vector.hh"
+#include "BLI_math_vector_c.hh"
 #include "BLI_math_vector_types.hh"
-#include "BLI_time.h"
+#include "BLI_time.hh"
 
 #include "BLT_translation.hh"
 
@@ -94,7 +94,7 @@ static void wm_xr_session_update_screen(Main *bmain, const wmXrData *xr_data)
 {
   const bool session_exists = WM_xr_session_exists(xr_data);
 
-  for (bScreen *screen = static_cast<bScreen *>(bmain->screens.first); screen;
+  for (bScreen *screen = bmain->screens.first(); screen;
        screen = static_cast<bScreen *>(screen->id.next))
   {
     for (ScrArea &area : screen->areabase) {
@@ -107,7 +107,7 @@ static void wm_xr_session_update_screen(Main *bmain, const wmXrData *xr_data)
           }
 
           if (session_exists) {
-            wmWindowManager *wm = static_cast<wmWindowManager *>(bmain->wm.first);
+            wmWindowManager *wm = bmain->wm.first();
             const Scene *scene = WM_windows_scene_get_from_screen(wm, screen);
 
             ED_view3d_xr_shading_update(wm, v3d, scene);
@@ -417,6 +417,10 @@ static wmOperatorStatus wm_xr_navigation_grab_invoke(bContext *C,
                                                      const wmEvent *event)
 {
   if (!wm_xr_operator_test_event(op, event)) {
+    return OPERATOR_PASS_THROUGH;
+  }
+
+  if (wm_xr_viewfinder_operator_event_match_hand(C, event)) {
     return OPERATOR_PASS_THROUGH;
   }
 
@@ -787,8 +791,25 @@ static wmOperatorStatus wm_xr_navigation_fly_invoke(bContext *C,
   }
 
   wmWindowManager *wm = CTX_wm_manager(C);
+  wmXrData *xr = &wm->xr;
 
-  wm_xr_fly_init(op, &wm->xr);
+  if (wm_xr_viewfinder_operator_event_match_hand(C, event)) {
+    const bool swap_hands = xr->runtime->session_state.swap_hands;
+    const eXrFlyMode mode = eXrFlyMode(RNA_enum_get(op->ptr, swap_hands ? "alt_mode" : "mode"));
+    const eXrViewfinderHand viewfinder_hand = eXrViewfinderHand(
+        xr->session_settings.viewfinder_hand);
+
+    const bool clashes_with_viewfinder = (ELEM(mode, XR_FLY_VIEWER_LEFT, XR_FLY_VIEWER_RIGHT) &&
+                                          viewfinder_hand == XR_VIEWFINDER_HAND_LEFT) ||
+                                         (ELEM(mode, XR_FLY_TURNLEFT, XR_FLY_TURNRIGHT) &&
+                                          viewfinder_hand == XR_VIEWFINDER_HAND_RIGHT);
+
+    if (clashes_with_viewfinder) {
+      return OPERATOR_PASS_THROUGH;
+    }
+  }
+
+  wm_xr_fly_init(op, xr);
 
   WM_event_add_modal_handler(C, op);
 
@@ -1553,6 +1574,10 @@ static wmOperatorStatus wm_xr_navigation_teleport_invoke(bContext *C,
     return OPERATOR_PASS_THROUGH;
   }
 
+  if (wm_xr_viewfinder_operator_event_match_hand(C, event)) {
+    return OPERATOR_PASS_THROUGH;
+  }
+
   wm_xr_navigation_teleport_init(op);
 
   const wmOperatorStatus retval = op->type->modal(C, op, event);
@@ -1799,6 +1824,17 @@ static wmOperatorStatus wm_xr_navigation_reset_exec(bContext *C, wmOperator *op)
   return OPERATOR_FINISHED;
 }
 
+static wmOperatorStatus wm_xr_navigation_reset_invoke(bContext *C,
+                                                      wmOperator *op,
+                                                      const wmEvent *event)
+{
+  if (wm_xr_viewfinder_operator_event_match_hand(C, event)) {
+    return OPERATOR_CANCELLED;
+  }
+
+  return wm_xr_navigation_reset_exec(C, op);
+}
+
 static void WM_OT_xr_navigation_reset(wmOperatorType *ot)
 {
   /* Identifiers. */
@@ -1807,6 +1843,7 @@ static void WM_OT_xr_navigation_reset(wmOperatorType *ot)
   ot->description = "Reset VR navigation deltas relative to session base pose";
 
   /* Callbacks. */
+  ot->invoke = wm_xr_navigation_reset_invoke;
   ot->exec = wm_xr_navigation_reset_exec;
   ot->poll = wm_xr_operator_sessionactive;
 

@@ -92,7 +92,7 @@ struct ExtraLinkInfo {
  * the same name as the USD material.  If the USD material has a
  * #UsdPreviewSurface source, the Blender material's viewport display
  * color, roughness and metallic properties are set to the corresponding
- * #UsdPreoviewSurface inputs.
+ * #UsdPreviewSurface inputs.
  *
  * If the Import USD Preview option is enabled, the current implementation
  * converts #UsdPreviewSurface to Blender nodes as follows:
@@ -184,6 +184,15 @@ class USDMaterialReader {
   void load_tex_image(const pxr::UsdShadeShader &usd_shader,
                       bNode *tex_image,
                       const ExtraLinkInfo &extra = {}) const;
+
+  bNode *create_image_node_for_asset(
+      const pxr::SdfAssetPath &asset_path,
+      const pxr::UsdAttribute &attr,
+      bNodeTree *ntree,
+      int column,
+      NodePlacementContext &ctx,
+      bool is_color,
+      const pxr::UsdShadeShader &usd_shader = pxr::UsdShadeShader()) const;
 
   /**
    * This function creates a Blender UV Map node, under the simplifying assumption that

@@ -8,13 +8,15 @@
 
 #include <memory>
 
-#include "BLI_listbase.h"
+#include "BLI_listbase.hh"
 #include "BLI_path_utils.hh"
-#include "BLI_string.h"
+#include "BLI_string.hh"
 
 #include "AS_asset_library.hh"
 
 #include "BKE_asset.hh"
+#include "BKE_idtype.hh"
+#include "BKE_main.hh"
 
 #include "BLO_read_write.hh"
 
@@ -26,10 +28,7 @@ namespace blender {
 
 /* #AssetWeakReference -------------------------------------------- */
 
-AssetWeakReference::AssetWeakReference()
-    : asset_library_type(0), asset_library_identifier(nullptr), relative_asset_identifier(nullptr)
-{
-}
+AssetWeakReference::AssetWeakReference() = default;
 
 AssetWeakReference::AssetWeakReference(const AssetWeakReference &other)
     : asset_library_type(other.asset_library_type),
@@ -43,7 +42,7 @@ AssetWeakReference::AssetWeakReference(AssetWeakReference &&other)
       asset_library_identifier(other.asset_library_identifier),
       relative_asset_identifier(other.relative_asset_identifier)
 {
-  other.asset_library_type = 0; /* Not a valid type. */
+  other.asset_library_type = eAssetLibraryType{}; /* Not a valid type. */
   other.asset_library_identifier = nullptr;
   other.relative_asset_identifier = nullptr;
 }
@@ -80,10 +79,12 @@ bool operator==(const AssetWeakReference &a, const AssetWeakReference &b)
     return false;
   }
 
-  const char *a_lib_idenfifier = a.asset_library_identifier ? a.asset_library_identifier : "";
-  const char *b_lib_idenfifier = b.asset_library_identifier ? b.asset_library_identifier : "";
-  if (BLI_path_cmp_normalized(a_lib_idenfifier, b_lib_idenfifier) != 0) {
-    return false;
+  if (a.asset_library_type == ASSET_LIBRARY_CUSTOM) {
+    const char *a_lib_idenfifier = a.asset_library_identifier ? a.asset_library_identifier : "";
+    const char *b_lib_idenfifier = b.asset_library_identifier ? b.asset_library_identifier : "";
+    if (BLI_path_cmp_normalized(a_lib_idenfifier, b_lib_idenfifier) != 0) {
+      return false;
+    }
   }
   const char *a_asset_idenfifier = a.relative_asset_identifier ? a.relative_asset_identifier : "";
   const char *b_asset_idenfifier = b.relative_asset_identifier ? b.relative_asset_identifier : "";
@@ -127,13 +128,26 @@ void BKE_asset_weak_reference_read(BlendDataReader *reader, AssetWeakReference *
   BLO_read_string(reader, &weak_ref->relative_asset_identifier);
 }
 
+void BKE_asset_weak_reference_foreach_main(Main &bmain,
+                                           FunctionRef<void(AssetWeakReference &weak_ref)> fn)
+{
+  ID *id;
+  FOREACH_MAIN_ID_BEGIN (&bmain, id) {
+    const IDTypeInfo *id_type = BKE_idtype_get_info_from_id(id);
+    if (id_type->foreach_asset_weak_reference) {
+      id_type->foreach_asset_weak_reference(id, fn);
+    }
+  }
+  FOREACH_MAIN_ID_END;
+}
+
 void BKE_asset_catalog_path_list_free(ListBaseT<AssetCatalogPathLink> &catalog_path_list)
 {
   for (AssetCatalogPathLink &catalog_path : catalog_path_list.items_mutable()) {
     MEM_delete(catalog_path.path);
     BLI_freelinkN(&catalog_path_list, &catalog_path);
   }
-  BLI_assert(BLI_listbase_is_empty(&catalog_path_list));
+  BLI_assert(catalog_path_list.is_empty());
 }
 
 ListBaseT<AssetCatalogPathLink> BKE_asset_catalog_path_list_duplicate(
@@ -182,6 +196,23 @@ void BKE_asset_catalog_path_list_add_path(ListBaseT<AssetCatalogPathLink> &catal
   AssetCatalogPathLink *new_path = MEM_new<AssetCatalogPathLink>(__func__);
   new_path->path = BLI_strdup(catalog_path);
   BLI_addtail(&catalog_path_list, new_path);
+}
+
+bool BKE_asset_catalog_path_list_remove_path(ListBaseT<AssetCatalogPathLink> &catalog_path_list,
+                                             const char *catalog_path)
+{
+  bool changed = false;
+
+  for (AssetCatalogPathLink &path_link : catalog_path_list.items_mutable()) {
+    if (!STREQ(path_link.path, catalog_path)) {
+      continue;
+    }
+    MEM_delete(path_link.path);
+    BLI_freelinkN(&catalog_path_list, &path_link);
+    changed = true;
+  }
+
+  return changed;
 }
 
 }  // namespace blender

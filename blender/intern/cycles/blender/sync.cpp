@@ -3,10 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0 */
 
 #include "BKE_appdir.hh"
+#include "BKE_geometry_set.hh"
+#include "BKE_object_types.hh"
+#include "BKE_scene.hh"
 #include "DEG_depsgraph_query.hh"
 #include "DNA_scene_types.h"
 #include "DNA_userdef_types.h"
 #include "DNA_world_types.h"
+#include "RE_engine.h"
 #include "RNA_prototypes.hh"
 #include "RNA_types.hh"
 
@@ -112,7 +116,7 @@ void BlenderSync::sync_recalc(blender::Depsgraph &b_depsgraph,
   blender::Object *b_dicing_camera_object = get_dicing_camera_object(b_v3d, b_rv3d);
   bool dicing_camera_updated = false;
 
-  /* Iterate over all blender::IDs in this depsgraph. */
+  /* Iterate over all IDs in this depsgraph. */
   blender::DEGIDIterData deg_iter_data{};
   deg_iter_data.graph = &b_depsgraph;
   deg_iter_data.only_updated = true;
@@ -125,24 +129,24 @@ void BlenderSync::sync_recalc(blender::Depsgraph &b_depsgraph,
   {
     /* TODO(sergey): Can do more selective filter here. For example, ignore changes made to
      * screen data-block. Note that sync_data() needs to be called after object deletion, and
-     * currently this is ensured by the scene blender::ID tagged for update, which sets the
-     * `has_updates_` flag. */
+     * currently this is ensured by the scene ID tagged for update, which sets the `has_updates_`
+     * flag. */
     has_updates_ = true;
 
     const bool updated_shading = ((b_id->recalc & (blender::ID_RECALC_SHADING |
                                                    blender::ID_RECALC_ANIMATION)) != 0);
 
     /* Material */
-    if (GS(b_id->name) == blender::ID_MA) {
+    if (b_id->id_type() == blender::ID_MA) {
       shader_map.set_recalc(b_id);
     }
     /* Light */
-    else if (GS(b_id->name) == blender::ID_LA) {
+    else if (b_id->id_type() == blender::ID_LA) {
       shader_map.set_recalc(b_id);
       geometry_map.set_recalc(b_id);
     }
     /* Object */
-    else if (GS(b_id->name) == blender::ID_OB) {
+    else if (b_id->id_type() == blender::ID_OB) {
       blender::Object *b_ob = blender::id_cast<blender::Object *>(b_id);
       const bool can_have_geometry = object_can_have_geometry(*b_ob);
       const bool is_light = !can_have_geometry && object_is_light(*b_ob);
@@ -187,7 +191,7 @@ void BlenderSync::sync_recalc(blender::Depsgraph &b_depsgraph,
           }
 
           if (updated_geometry) {
-            if (!BLI_listbase_is_empty(&b_ob->particlesystem)) {
+            if (!b_ob->particlesystem.is_empty()) {
               particle_system_map.set_recalc(b_ob);
             }
           }
@@ -213,11 +217,11 @@ void BlenderSync::sync_recalc(blender::Depsgraph &b_depsgraph,
       }
     }
     /* Mesh */
-    else if (GS(b_id->name) == blender::ID_ME) {
+    else if (b_id->id_type() == blender::ID_ME) {
       geometry_map.set_recalc(b_id);
     }
     /* World */
-    else if (GS(b_id->name) == blender::ID_WO) {
+    else if (b_id->id_type() == blender::ID_WO) {
       const blender::World *b_world = blender::id_cast<blender::World *>(b_id);
       if (world_map == b_world) {
         world_recalc = true;
@@ -225,15 +229,15 @@ void BlenderSync::sync_recalc(blender::Depsgraph &b_depsgraph,
       shader_map.set_recalc(b_id);
     }
     /* Scene */
-    else if (GS(b_id->name) == blender::ID_SCE) {
+    else if (b_id->id_type() == blender::ID_SCE) {
       shader_map.set_recalc(b_id);
     }
     /* Volume */
-    else if (GS(b_id->name) == blender::ID_VO) {
+    else if (b_id->id_type() == blender::ID_VO) {
       geometry_map.set_recalc(b_id);
     }
     /* Camera */
-    else if (GS(b_id->name) == blender::ID_CA) {
+    else if (b_id->id_type() == blender::ID_CA) {
       if (b_dicing_camera_object && b_dicing_camera_object->data == b_id) {
         dicing_camera_updated = true;
       }
@@ -298,13 +302,18 @@ void BlenderSync::sync_data(blender::RenderData &b_render,
                             blender::RegionView3D *b_rv3d,
                             const int width,
                             const int height,
-                            void **python_thread_state,
                             const DeviceInfo &denoise_device_info)
 {
   /* For auto refresh images. */
   ImageManager *image_manager = scene->image_manager.get();
-  const int frame = b_scene->r.cfra;
+  const float frame = BKE_scene_frame_get(b_scene);
+  const bool frame_update = frame_last_synced != frame;
   const bool auto_refresh_update = image_manager->set_animation_frame_update(frame);
+
+  if (frame_update) {
+    frame_last_synced = frame;
+    has_updates_ = true;
+  }
 
   if (!has_updates_ && !auto_refresh_update) {
     return;
@@ -318,20 +327,16 @@ void BlenderSync::sync_data(blender::RenderData &b_render,
    * implicit check on whether it is a background render or not. What is the nicer thing here? */
   const bool background = !b_v3d;
 
+  sync_scene_attributes();
   sync_view_layer(b_view_layer);
   sync_integrator(b_view_layer, background, denoise_device_info);
   sync_film(b_view_layer, b_screen, b_v3d);
-  sync_shaders(b_depsgraph, b_screen, b_v3d, auto_refresh_update);
+  sync_shaders(b_depsgraph, b_screen, b_v3d, auto_refresh_update, frame_update);
   sync_images();
 
   geometry_synced.clear(); /* use for objects and motion sync */
 
-  if (scene->need_motion() == Scene::MOTION_NONE || scene->need_motion() == Scene::MOTION_PASS ||
-      scene->camera->get_motion_position() == MOTION_POSITION_CENTER)
-  {
-    sync_objects(b_depsgraph, b_screen, b_v3d);
-  }
-  sync_motion(b_render, b_depsgraph, b_screen, b_v3d, b_rv3d, width, height, python_thread_state);
+  sync_objects_and_motion(b_render, b_depsgraph, b_screen, b_v3d, b_rv3d, width, height);
 
   geometry_synced.clear();
 
@@ -379,6 +384,25 @@ void BlenderSync::sync_integrator(blender::ViewLayer &b_view_layer,
   integrator->set_filter_glossy(get_float(cscene, "blur_glossy"));
 
   integrator->set_use_pixel_jitter(get_boolean(cscene, "use_pixel_jitter"));
+
+  bool use_custom_pixel_jitter_sample = false;
+  blender::PropertyRNA *override_pixel_jitter_sample_prop = RNA_struct_find_property(
+      &scene_rna_ptr, "[\"override_pixel_jitter_sample\"]");
+  if (override_pixel_jitter_sample_prop) {
+    const int array_length = RNA_property_array_length(&scene_rna_ptr,
+                                                       override_pixel_jitter_sample_prop);
+    if (array_length == 2) {
+      array<float> pixel_jitter_sample_arr(2);
+      RNA_property_float_get_array(
+          &scene_rna_ptr, override_pixel_jitter_sample_prop, &pixel_jitter_sample_arr[0]);
+      integrator->set_custom_pixel_jitter_sample(pixel_jitter_sample_arr);
+      use_custom_pixel_jitter_sample = true;
+    }
+    else if (array_length != 0) {
+      printf("%s: scene.custom_pixel_jitter_sample length is not 0 or 2.\n", __func__);
+    }
+  }
+  integrator->set_use_custom_pixel_jitter_sample(use_custom_pixel_jitter_sample);
 
   int seed = get_int(cscene, "seed");
   if (get_boolean(cscene, "use_animated_seed")) {
@@ -462,39 +486,6 @@ void BlenderSync::sync_integrator(blender::ViewLayer &b_view_layer,
     integrator->set_adaptive_min_samples(get_int(cscene, "adaptive_min_samples"));
   }
 
-  float scrambling_distance = get_float(cscene, "scrambling_distance");
-  const bool auto_scrambling_distance = get_boolean(cscene, "auto_scrambling_distance");
-  if (auto_scrambling_distance) {
-    if (samples == 0) {
-      /* If samples is 0, then viewport rendering is set to render infinitely. In that case we
-       * override the samples value with 4096 so the Automatic Scrambling Distance algorithm
-       * picks a Scrambling Distance value with a good balance of performance and correlation
-       * artifacts when rendering to high sample counts. */
-      samples = 4096;
-    }
-
-    if (use_adaptive_sampling) {
-      /* If Adaptive Sampling is enabled, use "min_samples" in the Automatic Scrambling Distance
-       * algorithm to avoid artifacts common with Adaptive Sampling + Scrambling Distance. */
-      const AdaptiveSampling adaptive_sampling = integrator->get_adaptive_sampling();
-      samples = min(samples, adaptive_sampling.min_samples);
-    }
-    scrambling_distance *= 4.0f / sqrtf(samples);
-  }
-
-  /* Only use scrambling distance in the viewport if user wants to. */
-  const bool preview_scrambling_distance = get_boolean(cscene, "preview_scrambling_distance");
-  if ((preview && !preview_scrambling_distance) ||
-      sampling_pattern != SAMPLING_PATTERN_TABULATED_SOBOL)
-  {
-    scrambling_distance = 1.0f;
-  }
-
-  if (scrambling_distance != 1.0f) {
-    LOG_INFO << "Using scrambling distance: " << scrambling_distance;
-  }
-  integrator->set_scrambling_distance(scrambling_distance);
-
   if (get_boolean(cscene, "use_fast_gi")) {
     if (preview) {
       integrator->set_ao_bounces(get_int(cscene, "ao_bounces"));
@@ -560,9 +551,61 @@ void BlenderSync::sync_integrator(blender::ViewLayer &b_view_layer,
     integrator->set_denoiser_upscale_factor(denoise_params.upscale_factor);
   }
 
+  float scrambling_distance = get_float(cscene, "scrambling_distance");
+  const bool auto_scrambling_distance = get_boolean(cscene, "auto_scrambling_distance");
+  if (auto_scrambling_distance) {
+    if (samples == 0) {
+      /* If samples is 0, then viewport rendering is set to render infinitely. In that case we
+       * override the samples value with 4096 so the Automatic Scrambling Distance algorithm
+       * picks a Scrambling Distance value with a good balance of performance and correlation
+       * artifacts when rendering to high sample counts. */
+      samples = 4096;
+    }
+
+    if (use_adaptive_sampling) {
+      /* If Adaptive Sampling is enabled, use "min_samples" in the Automatic Scrambling Distance
+       * algorithm to avoid artifacts common with Adaptive Sampling + Scrambling Distance. */
+      const AdaptiveSampling adaptive_sampling = integrator->get_adaptive_sampling();
+      samples = min(samples, adaptive_sampling.min_samples);
+    }
+    scrambling_distance *= 4.0f / sqrtf(samples);
+  }
+
+  /* Only use scrambling distance in the viewport if user wants to and they're not using DLSS.
+   * DLSS typically accumulates multiple 1spp renders over time.
+   * In an ideal world this would converge to a correct result, but in most situations with
+   * scrambling, DLSS disregards previous samples since they're so different, ultimately leading to
+   * flickering and artifacts. */
+  const bool preview_scrambling_distance = get_boolean(cscene, "preview_scrambling_distance");
+  if ((preview && !preview_scrambling_distance) ||
+      sampling_pattern != SAMPLING_PATTERN_TABULATED_SOBOL ||
+      (denoise_params.use && denoise_params.type == DENOISER_DLSS))
+  {
+    scrambling_distance = 1.0f;
+  }
+
+  if (scrambling_distance != 1.0f) {
+    LOG_INFO << "Using scrambling distance: " << scrambling_distance;
+  }
+  integrator->set_scrambling_distance(scrambling_distance);
+
   /* UPDATE_NONE as we don't want to tag the integrator as modified (this was done by the
    * set calls above), but we need to make sure that the dependent things are tagged. */
   integrator->tag_update(scene, Integrator::UPDATE_NONE);
+}
+
+/* Scene Attributes */
+
+void BlenderSync::sync_scene_attributes()
+{
+  SceneAttributes *scene_attribute = scene->scene_attribute;
+
+  blender::Scene *scene = b_scene;
+  float frame = BKE_scene_frame_get(b_scene);
+  float time = FRA2TIME(frame);
+
+  scene_attribute->set_time(time);
+  scene_attribute->set_frame(frame);
 }
 
 /* Film */
@@ -618,6 +661,12 @@ void BlenderSync::sync_film(blender::ViewLayer &b_view_layer,
   else {
     film->set_use_approximate_shadow_catcher(!get_boolean(crl, "use_pass_shadow_catcher"));
   }
+
+  /* Denoising passes. */
+  film->set_denoising_pass_follow_reflections(
+      get_boolean(crl, "denoising_pass_follow_reflections"));
+  film->set_denoising_pass_use_albedo_roughness_weighting(
+      get_boolean(crl, "denoising_pass_use_albedo_roughness_weighting"));
 }
 
 /* Render Layer */
@@ -742,6 +791,8 @@ static bool get_known_pass_type(blender::RenderPass &b_pass, PassType &type, Pas
   MAP_PASS("Denoising Normal", PASS_DENOISING_NORMAL, true);
   MAP_PASS("Denoising Roughness", PASS_DENOISING_ROUGHNESS, true);
   MAP_PASS("Denoising Depth", PASS_DENOISING_DEPTH, true);
+  MAP_PASS("Denoising Backward Motion", PASS_DENOISING_BACKWARD_MOTION, true);
+  MAP_PASS("Denoising Specular Motion", PASS_DENOISING_SPECULAR_MOTION, true);
 
   MAP_PASS("Shadow Catcher", PASS_SHADOW_CATCHER, false);
   MAP_PASS("Noisy Shadow Catcher", PASS_SHADOW_CATCHER, true);
@@ -789,7 +840,7 @@ void BlenderSync::sync_render_passes(blender::RenderLayer &b_rlay,
   /* Always add combined pass. */
   pass_add(scene, PASS_COMBINED, "Combined");
 
-  /* Cryptomatte stores two blender::ID/weight pairs per RGBA layer.
+  /* Cryptomatte stores two ID/weight pairs per RGBA layer.
    * User facing parameter is the number of pairs. */
   const int crypto_depth = divide_up(min(16, b_view_layer.cryptomatte_levels), 2);
   scene->film->set_cryptomatte_depth(crypto_depth);
@@ -901,7 +952,10 @@ void BlenderSync::free_data_after_sync(blender::Depsgraph &b_depsgraph)
   {
     /* Grease pencil render requires all evaluated objects available as-is after Cycles is done
      * with its part. */
-    if (b_ob->type == blender::OB_GREASE_PENCIL) {
+    if (b_ob->type == blender::OB_GREASE_PENCIL ||
+        (b_ob->runtime->contained_geometry_types &
+         (1 << int(blender::bke::GeometryComponent::Type::GreasePencil))))
+    {
       continue;
     }
     BKE_object_free_caches(b_ob);
@@ -947,17 +1001,22 @@ SceneParams BlenderSync::get_scene_params(blender::UserDef &b_preferences,
       csscene, "shape", CURVE_NUM_SHAPE_TYPES, CURVE_THICK);
 
   float texture_resolution;
+  int texture_limit;
   if (background) {
     texture_resolution = RNA_float_get(&cscene, "texture_resolution_render");
+    texture_limit = RNA_enum_get(&cscene, "texture_limit_render");
   }
   else {
     texture_resolution = RNA_float_get(&cscene, "texture_resolution");
+    texture_limit = RNA_enum_get(&cscene, "texture_limit");
   }
-  if (texture_resolution < 1.0f && (b_scene.r.mode & blender::R_SIMPLIFY) != 0) {
-    params.texture_resolution = texture_resolution;
+  if ((b_scene.r.mode & blender::R_SIMPLIFY) != 0) {
+    params.texture_resolution = (texture_resolution < 1.0f) ? texture_resolution : 1.0f;
+    params.texture_limit = (texture_limit > 0) ? (1 << (texture_limit + 6)) : 0;
   }
   else {
     params.texture_resolution = 1.0f;
+    params.texture_limit = 0;
   }
 
   params.bvh_layout = DebugFlags().cpu.bvh_layout;
@@ -972,13 +1031,6 @@ SceneParams BlenderSync::get_scene_params(blender::UserDef &b_preferences,
 }
 
 /* Session Parameters */
-
-bool BlenderSync::get_session_pause(blender::Scene &b_scene, bool background)
-{
-  blender::PointerRNA scene_rna_ptr = RNA_id_pointer_create(&b_scene.id);
-  blender::PointerRNA cscene = RNA_pointer_get(&scene_rna_ptr, "cycles");
-  return (background) ? false : get_boolean(cscene, "preview_pause");
-}
 
 SessionParams BlenderSync::get_session_params(blender::RenderEngine &b_engine,
                                               blender::UserDef &b_preferences,
@@ -1101,6 +1153,16 @@ DenoiseParams BlenderSync::get_denoise_params(blender::Scene &b_scene,
     DENOISER_INPUT_NUM,
   };
 
+  enum DenoiserUpscaleQuality {
+    DENOISER_UPSCALE_NONE = 0,
+    DENOISER_UPSCALE_QUALITY = 1,
+    DENOISER_UPSCALE_BALANCED = 2,
+    DENOISER_UPSCALE_PERFORMANCE = 3,
+    DENOISER_UPSCALE_ULTRA_PERFORMANCE = 4,
+
+    DENOISER_UPSCALE_NUM,
+  };
+
   DenoiseParams denoising;
   blender::PointerRNA scene_rna_ptr = RNA_id_pointer_create(&b_scene.id);
   blender::PointerRNA cscene = RNA_pointer_get(&scene_rna_ptr, "cycles");
@@ -1150,6 +1212,48 @@ DenoiseParams BlenderSync::get_denoise_params(blender::Scene &b_scene,
       if (denoising.type == DENOISER_NONE) {
         denoising.use = false;
       }
+    }
+
+    if (denoising.type == DENOISER_DLSS) {
+      /* Disable denoising when DLSS is not supported. */
+      if (!Denoiser::is_device_supported(denoising.type, denoise_device_info)) {
+        denoising.use = false;
+      }
+
+      denoising.start_sample = 0;
+
+      switch ((DenoiserUpscaleQuality)get_enum(cscene,
+                                               "preview_denoising_upscale_quality",
+                                               DENOISER_UPSCALE_NUM,
+                                               DENOISER_UPSCALE_BALANCED))
+      {
+        case DENOISER_UPSCALE_NONE:
+          denoising.quality = DENOISER_QUALITY_HIGH;
+          denoising.upscale_factor = 1.0f;
+          break;
+        case DENOISER_UPSCALE_QUALITY:
+          denoising.quality = DENOISER_QUALITY_HIGH;
+          denoising.upscale_factor = 1.0f / 0.66666667f;
+          break;
+        default:
+        case DENOISER_UPSCALE_BALANCED:
+          denoising.quality = DENOISER_QUALITY_BALANCED;
+          denoising.upscale_factor = 1.0f / 0.58f;
+          break;
+        case DENOISER_UPSCALE_PERFORMANCE:
+          denoising.quality = DENOISER_QUALITY_FAST;
+          denoising.upscale_factor = 2.0f;
+          break;
+        case DENOISER_UPSCALE_ULTRA_PERFORMANCE:
+          denoising.quality = DENOISER_QUALITY_FAST;
+          denoising.upscale_factor = 3.0f;
+          break;
+      }
+
+      denoising.passes = DENOISER_PASS_ALBEDO | DENOISER_PASS_SPECULAR_ALBEDO |
+                         DENOISER_PASS_NORMAL | DENOISER_PASS_ROUGHNESS | DENOISER_PASS_DEPTH |
+                         DENOISER_PASS_BACKWARD_MOTION | DENOISER_PASS_SPECULAR_MOTION;
+      return denoising;
     }
   }
 

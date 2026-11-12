@@ -23,8 +23,8 @@ namespace blender {
 struct Mesh;
 
 class RandomNumberGenerator;
-namespace bke {
-struct BVHTreeFromMesh;
+namespace bke::bvh {
+class Tree;
 }
 
 namespace bke::mesh_surface_sample {
@@ -90,10 +90,10 @@ int sample_surface_points_spherical(RandomNumberGenerator &rng,
  * overhead and is not always possible. If an exact number of points is required, that has to be
  * implemented at a higher level.
  *
- * \param region_position_to_ray: Function that converts a 2D position into a 3D ray that is used
- *   to find positions on the mesh.
  * \param mesh_bvhtree: BVH tree of the triangles in the mesh. Passed in so that it does not have
  *   to be retrieved again.
+ * \param region_position_to_ray: Function that converts a 2D position into a 3D ray that is used
+ *   to find positions on the mesh.
  * \param tries_num: Number of 2d positions that are sampled. The maximum
  *   number of new samples.
  * \return The number of added points.
@@ -101,7 +101,7 @@ int sample_surface_points_spherical(RandomNumberGenerator &rng,
 int sample_surface_points_projected(
     RandomNumberGenerator &rng,
     const Mesh &mesh,
-    bke::BVHTreeFromMesh &mesh_bvhtree,
+    const bke::bvh::Tree &mesh_bvhtree,
     const float2 &sample_pos_re,
     float sample_radius_re,
     FunctionRef<void(const float2 &pos_re, float3 &r_start, float3 &r_end)> region_position_to_ray,
@@ -116,14 +116,6 @@ float3 compute_bary_coord_in_triangle(Span<float3> vert_positions,
                                       Span<int> corner_verts,
                                       const int3 &corner_tri,
                                       const float3 &position);
-
-void sample_barycentric_weights(Span<float3> vert_positions,
-                                Span<int> corner_verts,
-                                Span<int3> corner_tris,
-                                Span<int> tri_indices,
-                                Span<float3> sample_positions,
-                                const IndexMask &mask,
-                                MutableSpan<float3> bary_coords);
 
 template<typename T>
 inline T sample_corner_attribute_with_bary_coords(const float3 &bary_weights,
@@ -146,21 +138,6 @@ inline T sample_corner_attribute_with_bary_coords(const float3 &bary_weights,
                               corner_attribute[corner_tri[1]],
                               corner_attribute[corner_tri[2]]);
 }
-
-/**
- * Calculate barycentric weights from triangle indices and positions within the triangles.
- */
-class BaryWeightFromPositionFn : public mf::MultiFunction {
-  GeometrySet source_;
-  Span<float3> vert_positions_;
-  Span<int> corner_verts_;
-  Span<int3> corner_tris_;
-
- public:
-  BaryWeightFromPositionFn(GeometrySet geometry);
-  void call(const IndexMask &mask, mf::Params params, mf::Context context) const override;
-  void hash_unique(UniqueHashBytes &hash) const override;
-};
 
 class NearestCornerFromPositionFn : public mf::MultiFunction {
   GeometrySet source_;
@@ -185,11 +162,13 @@ class BaryWeightSampleFn : public mf::MultiFunction {
   fn::GField src_field_;
 
   mutable CacheMutex mutex_;
+  mutable Span<int> corner_verts_;
   mutable Span<int3> corner_tris_;
+  mutable Span<int> tri_faces_;
   mutable std::optional<bke::MeshFieldContext> source_context_;
   mutable std::unique_ptr<fn::FieldEvaluator> source_evaluator_;
   mutable const GVArray *source_data_;
-  mutable AttrDomain domain_;
+  mutable AttrDomain src_domain_;
 
  public:
   BaryWeightSampleFn(GeometrySet geometry, fn::GField src_field);

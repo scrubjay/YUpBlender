@@ -26,16 +26,20 @@ PyDoc_STRVAR(
     "outside initial vertices. A CurvePoint is instantiated and returned\n"
     "through the .object attribute.\n"
     "\n"
-    ".. method:: __init__()\n"
-    "            __init__(brother)\n"
-    "            __init__(step=0.0)\n"
+    ".. method:: __init__(*args, **kwargs)\n"
+    "\n"
+    "   Accepted call signatures:\n"
+    "\n"
+    "   - ``__init__()``\n"
+    "   - ``__init__(brother)``\n"
+    "   - ``__init__(step=0.0)``\n"
     "\n"
     "   Builds a CurvePointIterator object using either the default constructor,\n"
     "   copy constructor, or the overloaded constructor.\n"
     "\n"
-    "   :arg brother: A CurvePointIterator object.\n"
+    "   :param brother: A CurvePointIterator object.\n"
     "   :type brother: :class:`CurvePointIterator`\n"
-    "   :arg step: A resampling resolution with which the curve is resampled.\n"
+    "   :param step: A resampling resolution with which the curve is resampled.\n"
     "      If zero, no resampling is done (i.e., the iterator iterates over\n"
     "      initial vertices).\n"
     "   :type step: float\n");
@@ -46,8 +50,14 @@ static int CurvePointIterator_init(BPy_CurvePointIterator *self, PyObject *args,
   PyObject *brother = nullptr;
   float step;
 
-  if (PyArg_ParseTupleAndKeywords(
-          args, kwds, "|O!", (char **)kwlist_1, &CurvePointIterator_Type, &brother))
+  if (PyArg_ParseTupleAndKeywords(args,
+                                  kwds,
+                                  "|"  /* Optional arguments. */
+                                  "O!" /* `brother` */
+                                  ":__init__",
+                                  (char **)kwlist_1,
+                                  &CurvePointIterator_Type,
+                                  &brother))
   {
     if (!brother) {
       self->cp_it = new CurveInternal::CurvePointIterator();
@@ -58,7 +68,12 @@ static int CurvePointIterator_init(BPy_CurvePointIterator *self, PyObject *args,
     }
   }
   else if ((void)PyErr_Clear(),
-           PyArg_ParseTupleAndKeywords(args, kwds, "f", (char **)kwlist_2, &step))
+           PyArg_ParseTupleAndKeywords(args,
+                                       kwds,
+                                       "f" /* `step` */
+                                       ":__init__",
+                                       (char **)kwlist_2,
+                                       &step))
   {
     self->cp_it = new CurveInternal::CurvePointIterator(step);
   }

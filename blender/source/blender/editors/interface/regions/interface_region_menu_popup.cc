@@ -19,11 +19,11 @@
 #include "DNA_userdef_types.h"
 
 #include "BLI_hash.hh"
-#include "BLI_listbase.h"
-#include "BLI_math_vector.h"
-#include "BLI_rect.h"
-#include "BLI_string_utf8.h"
-#include "BLI_utildefines.h"
+#include "BLI_listbase.hh"
+#include "BLI_math_vector_c.hh"
+#include "BLI_rect.hh"
+#include "BLI_string_utf8.hh"
+#include "BLI_utildefines.hh"
 
 #include "BKE_context.hh"
 #include "BKE_report.hh"
@@ -433,8 +433,12 @@ static PopupBlockHandle *popup_menu_create_impl(
   return handle;
 }
 
-PopupBlockHandle *popup_menu_create(
-    bContext *C, ARegion *butregion, Button *but, MenuCreateFunc menu_func, void *arg)
+PopupBlockHandle *popup_menu_create(bContext *C,
+                                    ARegion *butregion,
+                                    Button *but,
+                                    MenuCreateFunc menu_func,
+                                    void *arg,
+                                    const bool can_refresh)
 {
   return popup_menu_create_impl(
       C,
@@ -442,7 +446,7 @@ PopupBlockHandle *popup_menu_create(
       but,
       nullptr,
       [menu_func, arg](bContext *C, Layout *layout) { menu_func(C, layout, arg); },
-      false);
+      can_refresh);
 }
 
 /** \} */
@@ -617,7 +621,7 @@ static void popup_menu_create_from_menutype(bContext *C,
         item_menutype_func(C, layout, mt);
       },
       true);
-
+  handle->srna_owner = mt->rna_ext.srna;
   STRNCPY_UTF8(handle->menu_idname, mt->idname);
 
   WorkspaceStatus status(C);
@@ -667,28 +671,33 @@ wmOperatorStatus popup_menu_invoke(bContext *C, const char *idname, ReportList *
 /** \name Popup Block API
  * \{ */
 
-void popup_block_invoke_ex(
-    bContext *C, BlockCreateFunc func, void *arg, FreeArgFunc arg_free, const bool can_refresh)
+void popup_block_invoke_ex(bContext *C,
+                           BlockCreateFunc func,
+                           void *arg,
+                           FreeArgFunc arg_free,
+                           const bool can_refresh,
+                           StructRNA *srna_owner)
 {
   wmWindow *window = CTX_wm_window(C);
 
   PopupBlockHandle *handle = popup_block_create(
       C, nullptr, nullptr, func, nullptr, arg, arg_free, can_refresh);
   handle->popup = true;
+  handle->srna_owner = srna_owner;
 
   /* Clear the status bar. */
   WorkspaceStatus status(C);
   status.item(" ", ICON_NONE);
 
   popup_handlers_add(C, &window->runtime->modalhandlers, handle, 0);
-  block_active_only_flagged_buttons(
-      C, handle->region, static_cast<Block *>(handle->region->runtime->uiblocks.first));
+  block_active_only_flagged_buttons(C, handle->region, handle->region->runtime->uiblocks.first());
   WM_event_add_mousemove(window);
 }
 
-void popup_block_invoke(bContext *C, BlockCreateFunc func, void *arg, FreeArgFunc arg_free)
+void popup_block_invoke(
+    bContext *C, BlockCreateFunc func, void *arg, FreeArgFunc arg_free, StructRNA *srna_owner)
 {
-  popup_block_invoke_ex(C, func, arg, arg_free, true);
+  popup_block_invoke_ex(C, func, arg, arg_free, true, srna_owner);
 }
 
 void popup_block_ex(bContext *C,
@@ -706,6 +715,9 @@ void popup_block_ex(bContext *C,
   handle->retvalue = 1;
 
   handle->popup_op = op;
+  if (op) {
+    handle->srna_owner = op->type->srna;
+  }
   handle->popup_arg = arg;
   handle->popup_func = popup_func;
   handle->cancel_func = cancel_func;
@@ -716,8 +728,7 @@ void popup_block_ex(bContext *C,
   status.item(" ", ICON_NONE);
 
   popup_handlers_add(C, &window->runtime->modalhandlers, handle, 0);
-  block_active_only_flagged_buttons(
-      C, handle->region, static_cast<Block *>(handle->region->runtime->uiblocks.first));
+  block_active_only_flagged_buttons(C, handle->region, handle->region->runtime->uiblocks.first());
   WM_event_add_mousemove(window);
 }
 
@@ -836,8 +847,6 @@ void popup_block_template_confirm_op(Layout *layout,
                                    UI_UNIT_Y,
                                    nullptr,
                                    "");
-    button_retval_set(but, 1);
-
     return but;
   };
 
@@ -895,6 +904,23 @@ bool popup_block_name_exists(const bScreen *screen, const StringRef name)
         return true;
       }
     }
+  }
+  return false;
+}
+
+bool popup_region_from_operator(const bScreen *screen, const ARegion *region)
+{
+  /* Walk up parent popups, e.g. a popover opened from an operator dialog. Parents may
+   * already be closed, as with a context menu opened from a popover. */
+  while (region && BLI_findindex(&screen->regionbase, region) != -1) {
+    const Block *block = region->runtime->uiblocks.first();
+    if (!(block && block->handle)) {
+      return false;
+    }
+    if (block->handle->popup_op) {
+      return true;
+    }
+    region = block->handle->ctx_region_popup;
   }
   return false;
 }

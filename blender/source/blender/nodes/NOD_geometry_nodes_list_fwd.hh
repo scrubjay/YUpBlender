@@ -2,13 +2,18 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
-#pragma once
+/** \file
+ * \ingroup nodes
+ */
 
-#include "BLI_implicit_sharing_ptr.hh"
+#pragma once
 
 namespace blender::nodes {
 
-class List;
-using ListPtr = ImplicitSharingPtr<List>;
+class GList;
+class GListPtr;
+
+template<typename T> class List;
+template<typename T> class ListPtr;
 
 }  // namespace blender::nodes

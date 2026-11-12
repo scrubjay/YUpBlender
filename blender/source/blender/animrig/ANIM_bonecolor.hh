@@ -10,9 +10,7 @@
 
 #pragma once
 
-#ifndef __cplusplus
-#  error This is a C++ header.
-#endif
+#include "BKE_pose.hh"
 
 #include "DNA_armature_types.h"
 
@@ -44,7 +42,7 @@ class BoneColor : public blender::BoneColor {
  * This returns the pose bone's own color, unless it's set to "default", then it defaults to the
  * armature bone color.
  */
-const BoneColor &ANIM_bonecolor_posebone_get(const bPoseChannel *pose_bone);
+const BoneColor &ANIM_bonecolor_posebone_get(bke::PChanBoneConst pchanbone);
 
 };  // namespace animrig
 

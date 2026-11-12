@@ -22,6 +22,7 @@ set(SRC
   intern/asset_filter.cc
   intern/asset_import.cc
   intern/asset_indexer.cc
+  intern/asset_indexer_remote_file_status.cc
   intern/asset_indexer_remote_listing.cc
   intern/asset_indexer_remote_listing_v1.cc
   intern/asset_library_reference_enum.cc
@@ -39,18 +40,21 @@ set(SRC
   intern/asset_temp_id_consumer.cc
   intern/asset_type.cc
   intern/asset_ui_utils.cc
+  intern/custom_asset_library_list_ui.cc
 
   ED_asset_catalog.hh
   ED_asset_filter.hh
   ED_asset_import.hh
   ED_asset_indexer.hh
   ED_asset_library.hh
+  ED_asset_library_ui.hh
   ED_asset_list.hh
   ED_asset_mark_clear.hh
   ED_asset_shelf.hh
   ED_asset_temp_id_consumer.hh
   ED_asset_type.hh
   intern/asset_index.hh
+  intern/asset_indexer_remote_file_status.hh
   intern/asset_indexer_remote_listing.hh
   intern/asset_library_reference.hh
   intern/asset_shelf.hh

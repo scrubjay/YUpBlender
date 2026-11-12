@@ -11,7 +11,7 @@
 
 #include "kernel/globals.h"
 
-#include "kernel/camera/projection.h"
+#include "kernel/camera/camera.h"
 
 #include "kernel/geom/attribute.h"
 #include "kernel/geom/curve.h"
@@ -48,7 +48,7 @@ ccl_device_forceinline T primitive_surface_attribute(KernelGlobals kg,
   }
 #endif
 #ifdef __POINTCLOUD__
-  else if (sd->type & PRIMITIVE_POINT) {
+  else if (sd->type & PRIMITIVE_ANY_POINT) {
     return point_attribute<T>(kg, sd, desc);
   }
 #endif
@@ -78,7 +78,7 @@ ccl_device void primitive_normal_set_undisplaced(KernelGlobals kg,
   }
 
   object_normal_transform(kg, sd, &N);
-  sd->N = (sd->flag & SD_BACKFACING) ? -N : N;
+  sd->N = (sd->runtime_flag & SR_BACKFACING) ? -N : N;
 }
 
 #ifdef __VOLUME__
@@ -150,7 +150,7 @@ template<typename Float3Type>
 ccl_device Float3Type primitive_tangent(KernelGlobals kg, ccl_private ShaderData *sd)
 {
 #if defined(__HAIR__) || defined(__POINTCLOUD__)
-  if (sd->type & (PRIMITIVE_CURVE | PRIMITIVE_POINT)) {
+  if (sd->type & (PRIMITIVE_CURVE | PRIMITIVE_ANY_POINT)) {
 #  ifdef __DPDU__
     return Float3Type(normalize(sd->dPdu));
   }
@@ -184,70 +184,85 @@ ccl_device Float3Type primitive_tangent(KernelGlobals kg, ccl_private ShaderData
 #endif
 }
 
-/* Motion vector for motion pass */
+/* Motion vector common */
 
-ccl_device_forceinline float4 primitive_motion_vector(KernelGlobals kg,
-                                                      const ccl_private ShaderData *sd)
+ccl_device_inline float3 primitive_motion_position(KernelGlobals kg,
+                                                   const ccl_private ShaderData *sd,
+                                                   const int offset)
 {
-  /* center position */
-  float3 center;
+#if defined(__HAIR__)
+  if (sd->type & PRIMITIVE_CURVE) {
+    const KernelCurve curve = kernel_data_fetch(curves, sd->prim);
+    const int k0 = curve.first_key + PRIMITIVE_UNPACK_SEGMENT(sd->type);
+    const int k1 = k0 + 1;
+    const float4 f0 = kernel_data_fetch(curve_keys, offset + k0);
+    const float4 f1 = kernel_data_fetch(curve_keys, offset + k1);
+    return make_float3(mix(f0, f1, sd->u));
+  }
+#endif
+#if defined(__POINTCLOUD__)
+  if (sd->type & PRIMITIVE_ANY_POINT) {
+    return make_float3(kernel_data_fetch(points, offset + sd->prim));
+  }
+#endif
+  const uint3 tri_vindex = kernel_data_fetch(tri_vindex, sd->prim);
+  const float3 v0 = kernel_data_fetch(tri_verts, offset + tri_vindex.x);
+  const float3 v1 = kernel_data_fetch(tri_verts, offset + tri_vindex.y);
+  const float3 v2 = kernel_data_fetch(tri_verts, offset + tri_vindex.z);
+  return triangle_interpolate(sd->u, sd->v, v0, v1, v2);
+}
 
+ccl_device_forceinline void primitive_motion_data_without_camera(KernelGlobals kg,
+                                                                 const ccl_private ShaderData *sd,
+                                                                 ccl_private float3 *motion_center,
+                                                                 ccl_private float3 *motion_pre,
+                                                                 ccl_private float3 *motion_post)
+{
 #if defined(__HAIR__) || defined(__POINTCLOUD__)
-  const bool is_curve_or_point = sd->type & (PRIMITIVE_CURVE | PRIMITIVE_POINT);
+  const bool is_curve_or_point = sd->type & (PRIMITIVE_CURVE | PRIMITIVE_ANY_POINT);
   if (is_curve_or_point) {
-    center = make_float3(0.0f, 0.0f, 0.0f);
+    *motion_center = make_float3(0.0f, 0.0f, 0.0f);
 
     if (sd->type & PRIMITIVE_CURVE) {
 #  if defined(__HAIR__)
-      center = curve_motion_center_location(kg, sd);
+      *motion_center = curve_motion_center_location(kg, sd);
 #  endif
     }
-    else if (sd->type & PRIMITIVE_POINT) {
+    else if (sd->type & PRIMITIVE_ANY_POINT) {
 #  if defined(__POINTCLOUD__)
-      center = point_motion_center_location(kg, sd);
+      *motion_center = point_motion_center_location(kg, sd);
 #  endif
     }
 
     if (!(sd->object_flag & SD_OBJECT_TRANSFORM_APPLIED)) {
-      object_position_transform(kg, sd, &center);
+      object_position_transform(kg, sd, motion_center);
     }
   }
   else
 #endif
   {
-    center = sd->P;
+    *motion_center = sd->P;
   }
 
-  float3 motion_pre = center;
-  float3 motion_post = center;
+  *motion_pre = *motion_center;
+  *motion_post = *motion_center;
 
   /* deformation motion */
-  AttributeDescriptor desc = find_attribute(kg, sd, ATTR_STD_MOTION_VERTEX_POSITION);
+  const ccl_global KernelObject &kobject = kernel_data_fetch(objects, sd->object);
+  const int pos_offset = kobject.position_offset;
+  const int numverts = kobject.numverts;
+  const int num_motion_steps = kobject.num_geom_steps;
 
-  if (is_attribute_found(desc)) {
-    /* get motion info */
-    const int numverts = kernel_data_fetch(objects, sd->object).numverts;
-
-#if defined(__HAIR__) || defined(__POINTCLOUD__)
-    if (is_curve_or_point) {
-      motion_pre = make_float3(primitive_surface_attribute<float4>(kg, sd, desc));
-      desc.offset += numverts;
-      motion_post = make_float3(primitive_surface_attribute<float4>(kg, sd, desc));
-
-      /* Curve */
-      if ((sd->object_flag & SD_OBJECT_HAS_VERTEX_MOTION) == 0) {
-        object_position_transform(kg, sd, &motion_pre);
-        object_position_transform(kg, sd, &motion_post);
-      }
+  if (sd->object_flag & SD_OBJECT_HAS_VERTEX_MOTION) {
+    /* Motion steps are stored after the center position in the dedicated position arrays. */
+    int offset = pos_offset + numverts;
+    *motion_pre = primitive_motion_position(kg, sd, offset);
+    if (num_motion_steps > 2) {
+      offset += numverts;
+      *motion_post = primitive_motion_position(kg, sd, offset);
     }
-    else
-#endif
-        if (sd->type & PRIMITIVE_TRIANGLE)
-    {
-      /* Triangle */
-      motion_pre = triangle_attribute<float3>(kg, sd, desc);
-      desc.offset += numverts;
-      motion_post = triangle_attribute<float3>(kg, sd, desc);
+    else {
+      object_inverse_position_transform(kg, sd, motion_post);
     }
   }
 
@@ -256,64 +271,86 @@ ccl_device_forceinline float4 primitive_motion_vector(KernelGlobals kg,
   Transform tfm;
 
   tfm = object_fetch_motion_pass_transform(kg, sd->object, OBJECT_PASS_MOTION_PRE);
-  motion_pre = transform_point(&tfm, motion_pre);
+  *motion_pre = transform_point(&tfm, *motion_pre);
 
   tfm = object_fetch_motion_pass_transform(kg, sd->object, OBJECT_PASS_MOTION_POST);
-  motion_post = transform_point(&tfm, motion_post);
+  *motion_post = transform_point(&tfm, *motion_post);
+}
 
-  float3 motion_center;
+/* Motion vector for motion pass */
 
-  /* camera motion, for perspective/orthographic motion.pre/post will be a
-   * world-to-raster matrix, for panorama it's world-to-camera, for custom
-   * we fall back to the world position until we have inverse mapping for it */
-  if (kernel_data.cam.type == CAMERA_CUSTOM) {
-    /* TODO: Custom cameras don't have inverse mappings yet, so we fall back to
-     * camera-space vectors here for now. */
-    tfm = kernel_data.cam.worldtocamera;
-    motion_center = normalize(transform_point(&tfm, center));
+ccl_device_forceinline float4 primitive_motion_vector(KernelGlobals kg,
+                                                      const ccl_private ShaderData *sd)
+{
+  float3 motion_center, motion_pre, motion_post;
+  primitive_motion_data_without_camera(kg, sd, &motion_center, &motion_pre, &motion_post);
 
-    tfm = kernel_data.cam.motion_pass_pre;
-    motion_pre = normalize(transform_point(&tfm, motion_pre));
+  return camera_motion_vector(kg, motion_center, motion_pre, motion_post);
+}
 
-    tfm = kernel_data.cam.motion_pass_post;
-    motion_post = normalize(transform_point(&tfm, motion_post));
-  }
-  else if (kernel_data.cam.type != CAMERA_PANORAMA) {
-    /* Perspective and orthographics camera use the world-to-raster matrix. */
-    ProjectionTransform projection = kernel_data.cam.worldtoraster;
-    motion_center = transform_perspective(&projection, center);
+/* Motion vector for denoising backward motion pass */
 
-    projection = kernel_data.cam.perspective_pre;
-    motion_pre = transform_perspective(&projection, motion_pre);
+ccl_device_forceinline float3
+primitive_motion_vector_backward_depth_delta(KernelGlobals kg, const ccl_private ShaderData *sd)
+{
+  Transform tfm;
+  float3 motion_center, motion_pre, motion_post;
+  primitive_motion_data_without_camera(kg, sd, &motion_center, &motion_pre, &motion_post);
 
-    projection = kernel_data.cam.perspective_post;
-    motion_post = transform_perspective(&projection, motion_post);
-  }
-  else {
-    /* Panorama cameras have their own inverse mappings. */
-    tfm = kernel_data.cam.worldtocamera;
-    motion_center = normalize(transform_point(&tfm, center));
-    motion_center = make_float3(direction_to_panorama(&kernel_data.cam, motion_center));
-    motion_center.x *= kernel_data.cam.width;
-    motion_center.y *= kernel_data.cam.height;
+  /* Get camera-space vectors for linear depth delta. */
+  tfm = kernel_data.cam.worldtocamera;
+  float3 motion_center_cam = transform_point(&tfm, motion_center);
+  tfm = kernel_data.cam.motion_pass_pre;
+  float3 motion_pre_cam = transform_point(&tfm, motion_pre);
 
-    tfm = kernel_data.cam.motion_pass_pre;
-    motion_pre = normalize(transform_point(&tfm, motion_pre));
-    motion_pre = make_float3(direction_to_panorama(&kernel_data.cam, motion_pre));
-    motion_pre.x *= kernel_data.cam.width;
-    motion_pre.y *= kernel_data.cam.height;
+  float4 motion = camera_motion_vector(kg, motion_center, motion_pre, motion_post);
 
-    tfm = kernel_data.cam.motion_pass_post;
-    motion_post = normalize(transform_point(&tfm, motion_post));
-    motion_post = make_float3(direction_to_panorama(&kernel_data.cam, motion_post));
-    motion_post.x *= kernel_data.cam.width;
-    motion_post.y *= kernel_data.cam.height;
-  }
+  float linear_depth_delta_pre = motion_pre_cam.z - motion_center_cam.z;
 
-  motion_pre = motion_pre - motion_center;
-  motion_post = motion_center - motion_post;
+  return make_float3(motion.x, motion.y, linear_depth_delta_pre);
+}
 
-  return make_float4(motion_pre.x, motion_pre.y, motion_post.x, motion_post.y);
+/* Motion vector for reflections */
+
+ccl_device_forceinline float3 project_reflection(const float3 reflector_P,
+                                                 const float3 reflector_N,
+                                                 const float3 P)
+{
+  /* See Ray Tracing Gems chapter 32.4.3 Reflection Motion Vectors */
+
+  float3 reflector_to_o = P - reflector_P;
+  float3 N = dot(reflector_N, reflector_to_o) < 0.0f ? -reflector_N : reflector_N;
+  float3 T, B;
+  make_orthonormals(N, &T, &B);
+
+  float3 P_o = to_local(reflector_to_o, T, B, N);
+
+  float z_o = max(P_o.z, 1e-5f);
+  float x_o = P_o.x;
+  float y_o = P_o.y;
+  const float inverse_f = 0.0f;
+  float z_i = 1.0f / (inverse_f - 1.0f / z_o);
+  float x_i = -(z_i / z_o) * x_o;
+  float y_i = -(z_i / z_o) * y_o;
+
+  float3 P_i = reflector_P + to_global(make_float3(x_i, y_i, z_i), T, B, N);
+  return P_i;
+}
+
+ccl_device_forceinline float4 primitive_motion_vector_reflection(KernelGlobals kg,
+                                                                 const float3 reflector_P,
+                                                                 const float3 reflector_N,
+                                                                 const ccl_private ShaderData *sd)
+{
+  float3 motion_center, motion_pre, motion_post;
+  primitive_motion_data_without_camera(kg, sd, &motion_center, &motion_pre, &motion_post);
+
+  /* TODO: This does not handle cases where the reflector is moving. */
+  motion_center = project_reflection(reflector_P, reflector_N, motion_center);
+  motion_pre = project_reflection(reflector_P, reflector_N, motion_pre);
+  motion_post = project_reflection(reflector_P, reflector_N, motion_post);
+
+  return camera_motion_vector(kg, motion_center, motion_pre, motion_post);
 }
 
 CCL_NAMESPACE_END

@@ -13,9 +13,14 @@
 #include "COM_context.hh"
 #include "COM_operation.hh"
 
+namespace blender {
+class ComputeContext;
+}
+
 namespace blender::compositor {
 
 struct Schedule;
+class NodeTreeEvaluator;
 
 /* A type representing a contiguous subset of the node execution schedule that will be compiled
  * into a Pixel Operation. */
@@ -27,19 +32,19 @@ using PixelCompileUnit = VectorSet<const bNode *>;
  * An operation that is evaluated pixel-wise and is compiled from a contiguous subset of the node
  * execution schedule, whose nodes all represent pixel-wise operations. The subset of the node
  * execution schedule is called a Pixel Compile Unit and contains nodes that are called Pixel
- * nodes, see the discussion in COM_compile_state.hh for more information. Since the nodes inside
- * the compile unit are all pixel wise, they can be combined into a single operation that can be
- * evaluated more efficiently. This is an abstract class that should be implemented to compile and
- * evaluate the compile unit as needed.
+ * nodes, see the discussion in COM_node_tree_evaluator.hh for more information. Since the nodes
+ * inside the compile unit are all pixel wise, they can be combined into a single operation that
+ * can be evaluated more efficiently. This is an abstract class that should be implemented to
+ * compile and evaluate the compile unit as needed.
  *
  * Consider the following node graph with a node execution schedule denoted by the number on each
  * node. The compiler may decide to compile a subset of the execution schedule into a pixel
  * operation if they are all pixel nodes, in this case, the nodes from 3 to 5 were compiled
  * together into a pixel operation. This subset is called the pixel compile unit. See the
- * discussion in COM_evaluator.hh for more information on the compilation process. Links that are
- * internal to the pixel operation are established between the input and outputs of the pixel
- * nodes, for instance, the links between nodes 3 and 4 as well as those between nodes 4 and 5.
- * However, links that cross the boundary of the pixel operation needs special handling.
+ * discussion in COM_node_tree_evaluator.hh for more information on the compilation process. Links
+ * that are internal to the pixel operation are established between the input and outputs of the
+ * pixel nodes, for instance, the links between nodes 3 and 4 as well as those between nodes 4
+ * and 5. However, links that cross the boundary of the pixel operation needs special handling.
  *
  *                                        Pixel Operation
  *                   +------------------------------------------------------+
@@ -66,17 +71,11 @@ using PixelCompileUnit = VectorSet<const bNode *>;
  * the link from node 5 to node 6 is declared as an output to the operation. */
 class PixelOperation : public Operation {
  protected:
-  /* The compile unit that will be compiled into this pixel operation. */
-  PixelCompileUnit compile_unit_;
-  /* A reference to the node execution schedule that is being compiled. */
-  const Schedule &schedule_;
-  /* A node instance key that identifies the particular group node that uses the node group that
-   * this pixel operation belongs to. If the node group represents a top-level standalone node
-   * group with no associated group node, this will be bke::NODE_INSTANCE_KEY_BASE. */
-  bNodeInstanceKey instance_key_ = bke::NODE_INSTANCE_KEY_BASE;
-  /* A map that associates each node instance identified by its node instance key to its node
-   * preview. This could be nullptr if node previews are not needed. */
-  Map<bNodeInstanceKey, bke::bNodePreview> *node_previews_ = nullptr;
+  /* The node tree evaluator which currently contains a pixel compile unit that needs to be
+   * compiled into this pixel operation. */
+  NodeTreeEvaluator &node_tree_evaluator_;
+  /* The compute context where this pixel operation is executing. */
+  const ComputeContext &compute_context_;
   /* A map that associates the identifier of each input of the operation with the output socket it
    * is linked to. This is needed to help the compiler establish links between operations. */
   Map<std::string, const bNodeSocket *> inputs_to_linked_outputs_map_;
@@ -85,7 +84,7 @@ class PixelOperation : public Operation {
   Map<const bNodeSocket *, std::string> outputs_to_declared_inputs_map_;
   /* A map that associates each of the needed implicit inputs with the identifiers of the inputs of
    * the operation that were declared for them. */
-  Map<ImplicitInput, std::string> implicit_inputs_to_input_identifiers_map_;
+  Map<ImplicitInputType, std::string> implicit_inputs_to_input_identifiers_map_;
   /* A map that associates the identifier of each input of the operation with the number of node
    * inputs that use it, that is, its reference count. This is needed to correct the reference
    * counts of results linked to the inputs of the operation, since the results that provide the
@@ -103,16 +102,25 @@ class PixelOperation : public Operation {
   /* A vector set that stores all output sockets that are used as previews for nodes inside the
    * pixel operation. */
   VectorSet<const bNodeSocket *> preview_outputs_;
+  /* A vector set that stores all output sockets that will be logged to the node evaluator log. */
+  VectorSet<const bNodeSocket *> logged_outputs_;
+  /* True if the operation operates on single values, that is, all of its inputs and outputs are
+   * single values. */
+  const bool is_single_value_;
 
  public:
-  PixelOperation(Context &context, PixelCompileUnit &compile_unit, const Schedule &schedule);
+  PixelOperation(Context &context,
+                 NodeTreeEvaluator &node_tree_evaluator,
+                 const ComputeContext &compute_context,
+                 const bool is_single_value);
 
-  /* Compute a node preview for all nodes in the pixel operations if the node requires a preview.
+  /* Log the values of all inputs and outputs of nodes inside the pixel operation as well as node
+   * previews for all nodes in the pixel operations if the node requires a preview.
    *
    * Previews are computed from results that are populated for outputs that are used to compute
    * previews even if they are internally linked, and those outputs are stored and tracked in the
    * preview_outputs_ vector set, see the populate_results_for_node method for more information. */
-  void compute_preview() override;
+  void log_data() override;
 
   /* Get the identifier of the operation output corresponding to the given output socket. This is
    * called by the compiler to identify the operation output that provides the result for an input
@@ -128,31 +136,15 @@ class PixelOperation : public Operation {
   /* Get a reference to the implicit inputs to input identifiers map of the operation. This is
    * called by the compiler to link the operations inputs with their corresponding implicit input
    * results. See implicit_inputs_to_input_identifiers_map_ for more information. */
-  Map<ImplicitInput, std::string> &get_implicit_inputs_to_input_identifiers_map();
+  Map<ImplicitInputType, std::string> &get_implicit_inputs_to_input_identifiers_map();
 
   /* Returns the internal reference count of the operation input with the given identifier. See the
    * inputs_to_reference_counts_map_ member for more information. */
   int get_internal_input_reference_count(const StringRef &identifier);
 
-  /* Compute and set the initial reference counts of all the results of the operation. The
-   * reference counts of the results are the number of operations that use those results, which is
-   * computed as the number of inputs linked to the output corresponding to each of the results of
-   * the operation, but only the linked inputs whose node is part of the schedule but not part of
-   * the pixel operation, since inputs that are part of the pixel operations are internal links.
-   *
-   * Additionally, results that are used as node previews gets an extra reference count because
-   * they are referenced and released by the compute_preview method.
-   *
-   * The node execution schedule is given as an input. */
+  /* Compute and set the initial reference counts of all the results of the operation. The node
+   * execution schedule is given as an input. */
   void compute_results_reference_counts(const Schedule &schedule);
-
-  /* Getter and setter for instance_key_. */
-  void set_instance_key(const bNodeInstanceKey &instance_key);
-  bNodeInstanceKey get_instance_key();
-
-  /* Getter and setter for node_previews_. */
-  void set_node_previews(Map<bNodeInstanceKey, bke::bNodePreview> *node_previews);
-  Map<bNodeInstanceKey, bke::bNodePreview> *get_node_previews();
 };
 
 }  // namespace blender::compositor

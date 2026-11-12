@@ -16,10 +16,10 @@
 #include "DNA_screen_types.h"
 #include "MEM_guardedalloc.h"
 
-#include "BLI_listbase.h"
-#include "BLI_math_base.h"
-#include "BLI_string_utf8.h"
-#include "BLI_utildefines.h"
+#include "BLI_listbase.hh"
+#include "BLI_math_base_c.hh"
+#include "BLI_string_utf8.hh"
+#include "BLI_utildefines.hh"
 
 #include "BKE_context.hh"
 #include "BKE_lib_query.hh"
@@ -79,12 +79,13 @@ static SpaceLink *action_create(const ScrArea *area, const Scene *scene)
 
   saction->ads.filterflag |= ADS_FILTER_SUMMARY;
   if (is_timeline) {
-    saction->ads.filterflag |= ADS_FLAG_SUMMARY_COLLAPSED;
+    saction->ads.flag |= ADS_FLAG_SUMMARY_COLLAPSED;
   }
 
   saction->cache_display = TIME_CACHE_DISPLAY | TIME_CACHE_SOFTBODY | TIME_CACHE_PARTICLES |
                            TIME_CACHE_CLOTH | TIME_CACHE_SMOKE | TIME_CACHE_DYNAMICPAINT |
-                           TIME_CACHE_RIGIDBODY | TIME_CACHE_SIMULATION_NODES;
+                           TIME_CACHE_RIGIDBODY | TIME_CACHE_SIMULATION_NODES |
+                           TIME_CACHE_COMPOSITOR;
 
   saction->overlays.flag |= (ADS_OVERLAY_SHOW_OVERLAYS | ADS_SHOW_SCENE_STRIP_FRAME_RANGE);
 
@@ -108,7 +109,9 @@ static SpaceLink *action_create(const ScrArea *area, const Scene *scene)
   region->regiontype = RGN_TYPE_CHANNELS;
   region->alignment = RGN_ALIGN_LEFT;
   /* Channel list is hidden by default in timeline mode, and visible in other modes. */
-  region->flag |= is_timeline ? RGN_FLAG_HIDDEN : 0;
+  if (is_timeline) {
+    region->flag |= RGN_FLAG_HIDDEN;
+  }
 
   /* Only need to set scroll settings, as this will use `listview` v2d configuration. */
   region->v2d.scroll = V2D_SCROLL_BOTTOM;
@@ -161,7 +164,7 @@ static void action_free(SpaceLink * /*sl*/)
 /* spacetype; init callback */
 static void action_init(wmWindowManager * /*wm*/, ScrArea *area)
 {
-  SpaceAction *saction = static_cast<SpaceAction *>(area->spacedata.first);
+  SpaceAction *saction = area->spacedata.first_as<SpaceAction>();
   saction->runtime.flag |= SACTION_RUNTIME_FLAG_NEED_CHAN_SYNC;
 }
 
@@ -232,7 +235,7 @@ static void action_main_region_draw(const bContext *C, ARegion *region)
         &ac, &anim_data, filter, ac.data, eAnimCont_Types(ac.datatype));
     /* The View2D's height needs to be set before calling view2d_view_ortho because the latter
      * uses the View2D's `cur` rect which might be modified when setting the height. */
-    set_v2d_height(v2d, items, !BLI_listbase_is_empty(ac.markers));
+    set_v2d_height(v2d, items, !ac.markers->is_empty());
   }
 
   ui::view2d_view_ortho(v2d);
@@ -362,7 +365,7 @@ static void action_channel_region_draw(const bContext *C, ARegion *region)
       &ac, &anim_data, filter, ac.data, eAnimCont_Types(ac.datatype));
   /* The View2D's height needs to be set before calling view2d_view_ortho because the latter
    * uses the View2D's `cur` rect which might be modified when setting the height. */
-  set_v2d_height(v2d, item_count, !BLI_listbase_is_empty(ac.markers));
+  set_v2d_height(v2d, item_count, !ac.markers->is_empty());
 
   ui::view2d_view_ortho(v2d);
   draw_channel_names(const_cast<bContext *>(C), &ac, region, anim_data);
@@ -576,7 +579,7 @@ static void action_listener(const wmSpaceTypeListenerParams *params)
 {
   ScrArea *area = params->area;
   const wmNotifier *wmn = params->notifier;
-  SpaceAction *saction = static_cast<SpaceAction *>(area->spacedata.first);
+  SpaceAction *saction = area->spacedata.first_as<SpaceAction>();
 
   /* context changes */
   switch (wmn->category) {
@@ -783,7 +786,7 @@ static void action_footer_region_listener(const wmRegionListenerParams *params)
 static bool action_region_poll_hide_in_timeline(const RegionPollParams *params)
 {
   BLI_assert(params->area->spacetype == SPACE_ACTION);
-  const SpaceAction *saction = static_cast<const SpaceAction *>(params->area->spacedata.first);
+  const SpaceAction *saction = params->area->spacedata.first_as<SpaceAction>();
   return saction->mode != SACTCONT_TIMELINE;
 }
 
@@ -842,7 +845,7 @@ static void action_region_listener(const wmRegionListenerParams *params)
 
 static void action_refresh(const bContext *C, ScrArea *area)
 {
-  SpaceAction *saction = static_cast<SpaceAction *>(area->spacedata.first);
+  SpaceAction *saction = area->spacedata.first_as<SpaceAction>();
 
   /* Update the state of the animchannels in response to changes from the data they represent
    * NOTE: the temp flag is used to indicate when this needs to be done,
@@ -897,13 +900,13 @@ static void action_foreach_id(SpaceLink *space_link, LibraryForeachIDData *data)
 
 static int action_space_subtype_get(ScrArea *area)
 {
-  SpaceAction *sact = static_cast<SpaceAction *>(area->spacedata.first);
+  SpaceAction *sact = area->spacedata.first_as<SpaceAction>();
   return sact->mode == SACTCONT_TIMELINE ? SACTCONT_TIMELINE : SACTCONT_DOPESHEET;
 }
 
 static void action_space_subtype_set(ScrArea *area, int value)
 {
-  SpaceAction *sact = static_cast<SpaceAction *>(area->spacedata.first);
+  SpaceAction *sact = area->spacedata.first_as<SpaceAction>();
   if (value == SACTCONT_TIMELINE) {
     /* Switching to the timeline. Remember what the current mode of the dope sheet is. */
     if (sact->mode != SACTCONT_TIMELINE) {
@@ -929,7 +932,7 @@ static void action_space_subtype_item_extend(bContext * /*C*/,
 
 static StringRefNull action_space_name_get(const ScrArea *area)
 {
-  SpaceAction *sact = static_cast<SpaceAction *>(area->spacedata.first);
+  SpaceAction *sact = area->spacedata.first_as<SpaceAction>();
   const int index = max_ii(0, RNA_enum_from_value(rna_enum_space_action_mode_items, sact->mode));
   const EnumPropertyItem item = rna_enum_space_action_mode_items[index];
   return item.name;
@@ -937,7 +940,7 @@ static StringRefNull action_space_name_get(const ScrArea *area)
 
 static int action_space_icon_get(const ScrArea *area)
 {
-  SpaceAction *sact = static_cast<SpaceAction *>(area->spacedata.first);
+  SpaceAction *sact = area->spacedata.first_as<SpaceAction>();
   const int index = max_ii(0, RNA_enum_from_value(rna_enum_space_action_mode_items, sact->mode));
   const EnumPropertyItem item = rna_enum_space_action_mode_items[index];
   return item.icon;
@@ -951,7 +954,9 @@ static void action_space_blend_read_data(BlendDataReader * /*reader*/, SpaceLink
 
 static void action_space_blend_write(BlendWriter *writer, SpaceLink *sl)
 {
-  writer->write_struct_cast<SpaceAction>(sl);
+  writer->write_struct_cast<SpaceAction>(sl, [](BlendStructWriter<SpaceAction> &struct_writer) {
+    struct_writer.shallow_data.runtime = {};
+  });
 }
 
 void ED_spacetype_action()
@@ -961,6 +966,7 @@ void ED_spacetype_action()
 
   st->spaceid = SPACE_ACTION;
   STRNCPY_UTF8(st->name, "Action");
+  st->struct_size = sizeof(SpaceAction);
 
   st->create = action_create;
   st->free = action_free;
@@ -1033,6 +1039,7 @@ void ED_spacetype_action()
   /* regions: UI buttons */
   art = MEM_new_zeroed<ARegionType>("spacetype action region");
   art->regionid = RGN_TYPE_UI;
+  art->flag = ARegionTypeFlag::UsePanelCategoriesSearch;
   art->prefsizex = UI_SIDEBAR_PANEL_WIDTH;
   art->keymapflag = ED_KEYMAP_UI | ED_KEYMAP_FRAMES;
   art->listener = action_region_listener;

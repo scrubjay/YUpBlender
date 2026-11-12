@@ -13,13 +13,14 @@
 #include "DNA_space_types.h"
 #include "DNA_windowmanager_types.h"
 
-#include "BLI_fileops.h"
-#include "BLI_utildefines.h"
+#include "BLI_fileops.hh"
+#include "BLI_utildefines.hh"
 #include "BLI_vector.hh"
 
 #include "BLT_translation.hh"
 
 #include "BKE_context.hh"
+#include "BKE_global.hh"
 #include "BKE_lib_id.hh"
 #include "BKE_lib_override.hh"
 #include "BKE_library.hh"
@@ -49,7 +50,7 @@ Vector<PointerRNA> ED_operator_single_id_from_context_as_vec(const bContext *C)
 {
   Vector<PointerRNA> ids;
   PointerRNA idptr = CTX_data_pointer_get_type(C, "id", RNA_ID);
-  if (idptr.data) {
+  if (idptr) {
     ids.append(idptr);
   }
   return ids;
@@ -105,7 +106,7 @@ static bool lib_id_preview_editing_poll_ex(const ID *id, const char **r_disabled
 static bool lib_id_preview_editing_poll(bContext *C)
 {
   const PointerRNA idptr = CTX_data_pointer_get(C, "id");
-  BLI_assert(!idptr.data || RNA_struct_is_ID(idptr.type));
+  BLI_assert(!idptr || RNA_struct_is_ID(idptr.type));
 
   const ID *id = static_cast<ID *>(idptr.data);
   const char *disabled_hint = nullptr;
@@ -256,8 +257,12 @@ static bool lib_id_batch_editing_preview_poll(
 
 static bool lib_id_generate_preview_poll(bContext *C)
 {
+  /* Requires GPU for viewport off-screen drawing. */
+  if (G.background) {
+    return false;
+  }
   return lib_id_batch_editing_preview_poll(C, [](const ID *id, const char **r_disabled_hint) {
-    return ED_preview_id_is_supported(id, r_disabled_hint);
+    return ED_preview_id_render_is_supported(id, r_disabled_hint);
   });
 }
 
@@ -268,7 +273,7 @@ static wmOperatorStatus lib_id_generate_preview_exec(bContext *C, wmOperator * /
   ED_preview_kill_jobs(CTX_wm_manager(C), CTX_data_main(C));
 
   lib_id_batch_edit_previews(C, [&](ID *id) {
-    if (ED_preview_id_is_supported(id, nullptr)) {
+    if (ED_preview_id_render_is_supported(id, nullptr)) {
       PreviewImage *preview = BKE_previewimg_id_get(id);
 
       if (preview) {
@@ -301,6 +306,10 @@ static void ED_OT_lib_id_generate_preview(wmOperatorType *ot)
 
 static bool lib_id_generate_preview_from_object_poll(bContext *C)
 {
+  if (G.background) {
+    /* Unsupported as it requires GPU for off-screen viewport drawing. */
+    return false;
+  }
   /* This already checks if the IDs in context (e.g. selected in the Asset browser) can generate
    * previews... */
   if (!lib_id_batch_editing_preview_poll(C)) {
@@ -314,7 +323,7 @@ static bool lib_id_generate_preview_from_object_poll(bContext *C)
     return false;
   }
   const char *disabled_hint = nullptr;
-  if (!ED_preview_id_is_supported(&object_to_render->id, &disabled_hint)) {
+  if (!ED_preview_id_render_is_supported(&object_to_render->id, &disabled_hint)) {
     CTX_wm_operator_poll_msg_set(C, disabled_hint);
     return false;
   }
@@ -412,7 +421,7 @@ static void ED_OT_lib_id_remove_preview(wmOperatorType *ot)
 static wmOperatorStatus lib_id_fake_user_toggle_exec(bContext *C, wmOperator *op)
 {
   PropertyPointerRNA pprop;
-  PointerRNA idptr = PointerRNA_NULL;
+  PointerRNA idptr = {};
 
   ui::context_active_but_prop_get_templateID(C, &pprop.ptr, &pprop.prop);
 
@@ -420,7 +429,7 @@ static wmOperatorStatus lib_id_fake_user_toggle_exec(bContext *C, wmOperator *op
     idptr = RNA_property_pointer_get(&pprop.ptr, pprop.prop);
   }
 
-  if ((pprop.prop == nullptr) || RNA_pointer_is_null(&idptr) || !RNA_struct_is_ID(idptr.type)) {
+  if ((pprop.prop == nullptr) || !idptr || !RNA_struct_is_ID(idptr.type)) {
     BKE_report(
         op->reports, RPT_ERROR, "Incorrect context for running data-block fake user toggling");
     return OPERATOR_CANCELLED;
@@ -470,7 +479,7 @@ static wmOperatorStatus lib_id_unlink_exec(bContext *C, wmOperator *op)
     idptr = RNA_property_pointer_get(&pprop.ptr, pprop.prop);
   }
 
-  if ((pprop.prop == nullptr) || RNA_pointer_is_null(&idptr) || !RNA_struct_is_ID(idptr.type)) {
+  if ((pprop.prop == nullptr) || !idptr || !RNA_struct_is_ID(idptr.type)) {
     BKE_report(
         op->reports, RPT_ERROR, "Incorrect context for running data-block fake user toggling");
     return OPERATOR_CANCELLED;

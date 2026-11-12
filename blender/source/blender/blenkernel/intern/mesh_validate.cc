@@ -17,9 +17,8 @@
 #include "DNA_meshdata_types.h"
 
 #include "BLI_array_utils.hh"
-#include "BLI_enumerable_thread_specific.hh"
 #include "BLI_index_ranges_builder.hh"
-#include "BLI_listbase.h"
+#include "BLI_listbase.hh"
 #include "BLI_ordered_edge.hh"
 
 #include "BKE_attribute.hh"
@@ -65,7 +64,7 @@ class ErrorMessages {
     if (!verbose_) {
       return;
     }
-    this->add(fmt::format(fmt::runtime(fmt), args...));
+    this->add(fmt::format(fmt, std::forward<T>(args)...));
   }
 };
 
@@ -129,8 +128,9 @@ static IndexMask find_edges_duplicates(const Mesh &mesh,
   mask.foreach_index([&](const int edge_i) {
     const int2 edge = edges[edge_i];
     if (!unique_edges.add(edge)) {
-      errors.add(
-          fmt::runtime("Edge {} is a duplicate of {}"), edge_i, unique_edges.index_of(edge));
+      errors.add(fmt::runtime("Edge {} is a duplicate of {}"),
+                 edge_i,
+                 int(mask[unique_edges.index_of(edge)]));
       duplicate_edges[edge_i].set();
     }
   });
@@ -156,15 +156,31 @@ static IndexMask find_faces_bad_offsets(const Mesh &mesh,
     errors.add("Faces offsets do not start at 0. Considering all faces invalid");
     return IndexMask(mesh.faces_num);
   }
-  return IndexMask::from_predicate(IndexRange(mesh.faces_num), memory, [&](const int face_i) {
-    const int face_start = face_offsets[face_i];
-    const int face_size = face_offsets[face_i + 1] - face_start;
-    if (face_size < 3) {
-      errors.add("Face {} has invalid size {}", face_i, face_size);
-      return true;
-    }
-    return false;
-  });
+  std::atomic<bool> non_monotonic = false;
+  const IndexMask mask = IndexMask::from_batch_predicate(
+      IndexRange(mesh.faces_num),
+      memory,
+      [&](const IndexMaskSegment universe_segment, IndexRangesBuilder<int16_t> &builder) {
+        for (const int16_t i : universe_segment.base_span()) {
+          const int face_i = int(universe_segment.offset() + i);
+          const int face_start = face_offsets[face_i];
+          const int face_end = face_offsets[face_i + 1];
+          if (face_end < face_start) {
+            non_monotonic.store(true, std::memory_order_relaxed);
+            continue;
+          }
+          if (face_end - face_start < 3) {
+            errors.add("Face {} has invalid size {}", face_i, face_end - face_start);
+            builder.add(i);
+          }
+        }
+        return universe_segment.offset();
+      });
+  if (non_monotonic.load(std::memory_order_relaxed)) {
+    errors.add("Face offsets must be monotonically increasing. Considering all faces invalid");
+    return IndexMask(mesh.faces_num);
+  }
+  return mask;
 }
 
 static IndexMask find_faces_bad_verts(const Mesh &mesh,
@@ -250,12 +266,10 @@ static IndexMask find_faces_missing_edges(const Mesh &mesh,
       exec_mode::grain_size(1024));
 }
 
-static IndexMask find_faces_bad_edges(const Mesh &mesh,
-                                      const IndexMask &mask,
-                                      const EdgeMap &unique_edges,
-                                      IndexMaskMemory &memory,
-                                      const bool verbose,
-                                      Vector<Vector<std::pair<int, int>>> &r_corner_edge_fixes)
+static bool find_faces_bad_edges(const Mesh &mesh,
+                                 const IndexMask &mask,
+                                 IndexMaskMemory &memory,
+                                 const bool verbose)
 {
   const IndexRange edges_range(mesh.edges_num);
   const Span<int2> edges = mesh.edges();
@@ -264,65 +278,37 @@ static IndexMask find_faces_bad_edges(const Mesh &mesh,
   const Span<int> corner_edges = mesh.corner_edges();
 
   ErrorMessages errors(verbose);
-  threading::EnumerableThreadSpecific<Vector<std::pair<int, int>>> all_replacements;
-  IndexMask faces_bad_edges = IndexMask::from_batch_predicate(
+  const IndexMask bad_faces = IndexMask::from_predicate(
       mask,
       memory,
-      [&](const IndexMaskSegment universe_segment, IndexRangesBuilder<int16_t> &builder) {
-        Vector<std::pair<int, int>> &replacements = all_replacements.local();
-        for (const int face_i : universe_segment) {
-          const IndexRange face = faces[face_i];
-
-          bool has_invalid_edge = false;
-          for (const int corner : face) {
-            const int corner_next = mesh::face_corner_next(face, corner);
-            const OrderedEdge actual_edge(corner_verts[corner], corner_verts[corner_next]);
-            const int actual_edge_index = unique_edges.index_of(actual_edge);
-            const int edge_index = corner_edges[corner];
-            if (!edges_range.contains(edge_index)) {
-              errors.add("Corner {} has out of range edge index {}. Expected {}",
-                         corner,
-                         edge_index,
-                         actual_edge_index);
-              replacements.append({corner, actual_edge_index});
-              has_invalid_edge = true;
-              continue;
-            }
-            if (OrderedEdge(edges[edge_index]) != actual_edge) {
-              errors.add("Corner {} has incorrect edge index {}. Expected {}",
-                         corner,
-                         edge_index,
-                         actual_edge_index);
-              replacements.append({corner, actual_edge_index});
-              has_invalid_edge = true;
-              continue;
-            }
+      [&](const int face_i) {
+        const IndexRange face = faces[face_i];
+        for (const int corner : face) {
+          const int edge_index = corner_edges[corner];
+          if (!edges_range.contains(edge_index)) {
+            errors.add("Corner {} has out of range edge index {}", corner, edge_index);
+            return true;
           }
-          if (has_invalid_edge) {
-            builder.add(face_i);
+          const int corner_next = mesh::face_corner_next(face, corner);
+          const OrderedEdge actual_edge(corner_verts[corner], corner_verts[corner_next]);
+          if (OrderedEdge(edges[edge_index]) != actual_edge) {
+            errors.add("Corner {} has incorrect edge index {}", corner, edge_index);
+            return true;
           }
         }
-        return universe_segment.offset();
-      });
-
-  for (Vector<std::pair<int, int>> &replacements : all_replacements) {
-    if (!replacements.is_empty()) {
-      r_corner_edge_fixes.append(std::move(replacements));
-    }
-  }
-
-  return faces_bad_edges;
+        return false;
+      },
+      exec_mode::grain_size(1024));
+  return !bad_faces.is_empty();
 }
 
-static IndexMask find_duplicate_faces(const Mesh &mesh,
-                                      const IndexMask &mask,
-                                      IndexMaskMemory &memory,
-                                      const bool verbose)
+IndexMask find_duplicate_faces(const OffsetIndices<int> faces,
+                               const Span<int> corner_verts,
+                               const IndexMask &mask,
+                               IndexMaskMemory &memory,
+                               MutableSpan<int> r_originals)
 {
-  const OffsetIndices<int> faces(mesh.face_offsets(), offset_indices::NoSortCheck());
-  const Span<int> corner_verts = mesh.corner_verts();
-
-  Array<int> ordered_corner_verts(mesh.corners_num);
+  Array<int> ordered_corner_verts(corner_verts.size());
   mask.foreach_index(
       [&](const int face_i) {
         const IndexRange face = faces[face_i];
@@ -350,28 +336,78 @@ static IndexMask find_duplicate_faces(const Mesh &mesh,
       },
       exec_mode::grain_size(1024));
 
-  using FaceMap = VectorSet<Span<int>,
-                            32,
-                            DefaultProbingStrategy,
-                            DefaultHash<Span<int>>,
-                            DefaultEquality<Span<int>>,
-                            SimpleVectorSetSlot<Span<int>, int>>;
+  /* Group faces by their first vertex in the order established above. */
+  Array<int> first_verts(mask.size());
+  mask.foreach_index(
+      [&](const int face_i, const int pos) {
+        first_verts[pos] = ordered_corner_verts[faces[face_i].first()];
+      },
+      exec_mode::grain_size(4096));
+  /* Compress indices of vertices to avoid empty groups for vertices not used by masked faces. */
+  Array<int> group_indices(mask.size());
+  const int groups_num = array_utils::group_ids_to_indices(
+      first_verts, first_verts.index_range(), group_indices);
+  Array<int> offset_data;
+  Array<int> index_data;
+  const OffsetIndices faces_by_first_vert =
+      offset_indices::build_groups_from_indices(
+          group_indices, groups_num, offset_data, index_data, mask)
+          .offsets;
 
-  FaceMap face_hash;
-  face_hash.reserve(mesh.faces_num);
-
-  BitVector<> duplicate_faces(mesh.faces_num, false);
-  ErrorMessages errors(verbose);
-  mask.foreach_index([&](int face_i) {
-    const IndexRange face = faces[face_i];
-    const Span<int> face_verts = ordered_corner_verts.as_span().slice(face);
-    if (!face_hash.add(face_verts)) {
-      errors.add("Face {} is a duplicate of {}", face_i, face_hash.index_of(face_verts));
-      duplicate_faces[face_i].set();
+  Array<bool> duplicate_faces(faces.size(), false);
+  threading::parallel_for(faces_by_first_vert.index_range(), 1024, [&](const IndexRange range) {
+    for (const int group_index : range) {
+      MutableSpan<int> group = index_data.as_mutable_span().slice(
+          faces_by_first_vert[group_index]);
+      if (group.size() < 2) {
+        continue;
+      }
+      /* After sorting by the ordered vertices, duplicates are contiguous and the first
+       * of each group of duplicates has the lowest index. */
+      const auto face_verts = [&](const int face_i) {
+        return ordered_corner_verts.as_span().slice(faces[face_i]);
+      };
+      std::ranges::sort(group, [&](const int a, const int b) {
+        const Span<int> verts_a = face_verts(a);
+        const Span<int> verts_b = face_verts(b);
+        if (verts_a == verts_b) {
+          return a < b;
+        }
+        return std::ranges::lexicographical_compare(verts_a, verts_b);
+      });
+      int original = group[0];
+      for (const int face_i : group.drop_front(1)) {
+        if (face_verts(face_i) != face_verts(original)) {
+          original = face_i;
+          continue;
+        }
+        if (!r_originals.is_empty()) {
+          r_originals[face_i] = original;
+        }
+        duplicate_faces[face_i] = true;
+      }
     }
   });
 
-  return IndexMask::from_bits(duplicate_faces, memory);
+  return IndexMask::from_bools(mask, duplicate_faces, memory);
+}
+
+static IndexMask find_duplicate_faces(const Mesh &mesh,
+                                      const IndexMask &mask,
+                                      IndexMaskMemory &memory,
+                                      const bool verbose)
+{
+  const OffsetIndices<int> faces(mesh.face_offsets(), offset_indices::NoSortCheck());
+  if (!verbose) {
+    return find_duplicate_faces(faces, mesh.corner_verts(), mask, memory);
+  }
+  Array<int> originals(faces.size());
+  const IndexMask duplicate_faces = find_duplicate_faces(
+      faces, mesh.corner_verts(), mask, memory, originals);
+  ErrorMessages errors(verbose);
+  duplicate_faces.foreach_index(
+      [&](const int face) { errors.add("Face {} is a duplicate of {}", face, originals[face]); });
+  return duplicate_faces;
 }
 
 static void remove_invalid_faces(Mesh &mesh, const IndexMask &valid_faces)
@@ -428,7 +464,7 @@ static void remove_invalid_faces(Mesh &mesh, const IndexMask &valid_faces)
 
   for (CustomDataLayer &layer : MutableSpan(mesh.face_data.layers, mesh.face_data.totlayer)) {
     if (layer.type == CD_ORIGINDEX) {
-      const Span src(static_cast<const int *>(layer.data), mesh.edges_num);
+      const Span src(static_cast<const int *>(layer.data), mesh.faces_num);
 
       int *dst_data = MEM_new_array_uninitialized<int>(valid_faces_num, __func__);
       MutableSpan dst(dst_data, valid_faces_num);
@@ -466,7 +502,8 @@ static void remove_invalid_faces(Mesh &mesh, const IndexMask &valid_faces)
 
       layer.sharing_info->remove_user_and_delete_if_last();
       layer.data = dst;
-      layer.sharing_info = implicit_sharing::info_for_mem_free(dst);
+      layer.sharing_info = CustomData_make_layer_sharing_info(
+          cd_type, dst, new_faces.total_size());
     }
   }
 
@@ -519,15 +556,6 @@ static void remove_invalid_edges(Mesh &mesh, const IndexMask &valid_edges)
     }
   }
 
-  Array<int> all_edges_to_valid_edges(mesh.edges_num);
-  index_mask::build_reverse_map(valid_edges, all_edges_to_valid_edges.as_mutable_span());
-  MutableSpan<int> corner_edges = mesh.corner_edges_for_write();
-  threading::parallel_for(corner_edges.index_range(), 4096, [&](const IndexRange range) {
-    for (const int i : range) {
-      corner_edges[i] = all_edges_to_valid_edges[corner_edges[i]];
-    }
-  });
-
   mesh.edges_num = valid_edges.size();
 
   mesh.tag_topology_changed();
@@ -539,7 +567,7 @@ static bool validate_vertex_groups(const Mesh &mesh, const bool verbose, Mesh *m
   if (dverts.is_empty()) {
     return true;
   }
-  const int vertex_groups_num = BLI_listbase_count(&mesh.vertex_group_names);
+  const int vertex_groups_num = mesh.vertex_group_names.count();
   Mutex mutex;
   Vector<std::pair<int, Vector<std::string, 0>>> all_errors;
   Vector<std::pair<int, Vector<MDeformWeight, 0>>> replacements;
@@ -631,7 +659,9 @@ static bool validate_material_indices(const Mesh &mesh,
   }
   if (const std::optional<int> index = material_indices.get_if_single()) {
     if (!materials_range.contains(*index)) {
-      mesh_mut->attributes_for_write().remove("material_index");
+      if (mesh_mut) {
+        mesh_mut->attributes_for_write().remove("material_index");
+      }
       return false;
     }
     return true;
@@ -868,7 +898,10 @@ static bool validate_mdisps(const Mesh &mesh, const bool verbose, Mesh *mesh_mut
   return false;
 }
 
-static bool mesh_validate_impl(const Mesh &mesh, const bool verbose, Mesh *mesh_mut)
+static bool mesh_validate_impl(const Mesh &mesh,
+                               const bool verbose,
+                               const bool allow_missing_edges,
+                               Mesh *mesh_mut)
 {
   IndexMaskMemory memory;
 
@@ -898,36 +931,30 @@ static bool mesh_validate_impl(const Mesh &mesh, const bool verbose, Mesh *mesh_
   valid_faces = IndexMask::from_difference(valid_faces, duplicate_faces, memory);
 
   const IndexMask faces_missing_edges = find_faces_missing_edges(
-      mesh, valid_faces, unique_edges, memory, verbose);
+      mesh, valid_faces, unique_edges, memory, verbose && !allow_missing_edges);
   const IndexMask valid_and_missing_edge_faces = valid_faces;
   valid_faces = IndexMask::from_difference(valid_faces, faces_missing_edges, memory);
 
-  Vector<Vector<std::pair<int, int>>> corner_edge_fixes;
-  find_faces_bad_edges(mesh, valid_faces, unique_edges, memory, verbose, corner_edge_fixes);
+  const bool any_corner_edges_bad = find_faces_bad_edges(mesh, valid_faces, memory, verbose);
 
-  bool valid = valid_edges.size() == mesh.edges_num && valid_faces.size() == mesh.faces_num &&
-               corner_edge_fixes.is_empty();
+  const int64_t valid_faces_count = allow_missing_edges ? valid_and_missing_edge_faces.size() :
+                                                          valid_faces.size();
+  bool valid = valid_edges.size() == mesh.edges_num && valid_faces_count == mesh.faces_num &&
+               !any_corner_edges_bad;
 
   if (mesh_mut) {
     Mesh &mesh = *mesh_mut;
-    if (!corner_edge_fixes.is_empty()) {
-      MutableSpan<int> corner_edges = mesh.corner_edges_for_write();
-      for (const Span<std::pair<int, int>> replacements : corner_edge_fixes) {
-        for (const std::pair<int, int> &replacement : replacements) {
-          corner_edges[replacement.first] = replacement.second;
-        }
-      }
-    }
-
     if (valid_and_missing_edge_faces.size() < mesh.faces_num) {
       remove_invalid_faces(mesh, valid_and_missing_edge_faces);
     }
 
-    if (valid_edges.size() < mesh.edges_num) {
+    const bool any_edges_removed = valid_edges.size() < mesh.edges_num;
+    if (any_edges_removed) {
       remove_invalid_edges(mesh, valid_edges);
     }
 
-    if (!faces_missing_edges.is_empty()) {
+    /* Regenerate edges if edges are missing or corner edges are bad. */
+    if (any_corner_edges_bad || any_edges_removed || !faces_missing_edges.is_empty()) {
       mesh_calc_edges(mesh, true, false);
     }
   }
@@ -949,17 +976,17 @@ static bool mesh_validate_impl(const Mesh &mesh, const bool verbose, Mesh *mesh_
   return false;
 }
 
-bool mesh_validate(Mesh &mesh, const bool verbose)
+bool mesh_validate(Mesh &mesh, const bool verbose, const bool allow_missing_edges)
 {
   if (verbose) {
     CLOG_INFO(&LOG, "Validating Mesh: %s", mesh.id.name + 2);
   }
-  return mesh_validate_impl(mesh, verbose, &mesh);
+  return mesh_validate_impl(mesh, verbose, allow_missing_edges, &mesh);
 }
 
 bool mesh_is_valid(const Mesh &mesh, const bool verbose)
 {
-  return mesh_validate_impl(mesh, verbose, nullptr);
+  return mesh_validate_impl(mesh, verbose, false, nullptr);
 }
 
 bool mesh_validate_material_indices(Mesh &mesh)

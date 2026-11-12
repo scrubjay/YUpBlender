@@ -18,14 +18,14 @@
 #include "DNA_curve_types.h"
 
 #include "BLI_math_base.hh"
-#include "BLI_math_color.h"
+#include "BLI_math_color_c.hh"
 #include "BLI_math_matrix_types.hh"
 #include "BLI_math_vector.hh"
 #include "BLI_math_vector_types.hh"
-#include "BLI_rect.h"
-#include "BLI_string_utf8.h"
-#include "BLI_task.h"
-#include "BLI_utildefines.h"
+#include "BLI_rect.hh"
+#include "BLI_string_utf8.hh"
+#include "BLI_task_c.hh"
+#include "BLI_utildefines.hh"
 
 #include "BKE_colortools.hh"
 #include "BKE_curve.hh"
@@ -50,7 +50,7 @@ void BKE_curvemapping_set_defaults(CurveMapping *cumap,
                                    float miny,
                                    float maxx,
                                    float maxy,
-                                   short default_handle_type)
+                                   eBezTriple_Handle default_handle_type)
 {
   int a;
   float clipminx, clipminy, clipmaxx, clipmaxy;
@@ -78,16 +78,19 @@ void BKE_curvemapping_set_defaults(CurveMapping *cumap,
     else if (default_handle_type == HD_AUTO_ANIM) {
       cumap->cm[a].default_handle_type = CUMA_HANDLE_AUTO_ANIM;
     }
+    else {
+      cumap->cm[a].default_handle_type = {};
+    }
 
     cumap->cm[a].totpoint = 2;
     cumap->cm[a].curve = MEM_new_array<CurveMapPoint>(2, "curve points");
 
     cumap->cm[a].curve[0].x = minx;
     cumap->cm[a].curve[0].y = miny;
-    cumap->cm[a].curve[0].flag |= default_handle_type;
+    cumap->cm[a].curve[0].flag |= cumap->cm[a].default_handle_type;
     cumap->cm[a].curve[1].x = maxx;
     cumap->cm[a].curve[1].y = maxy;
-    cumap->cm[a].curve[1].flag |= default_handle_type;
+    cumap->cm[a].curve[1].flag |= cumap->cm[a].default_handle_type;
   }
 
   cumap->changed_timestamp = 0;
@@ -1504,7 +1507,23 @@ int BKE_curvemapping_num_channels(const CurveMapping *cumap)
 
 void BKE_curvemapping_blend_write(BlendWriter *writer, const CurveMapping *cumap)
 {
-  writer->write_struct(cumap);
+  writer->write_struct(cumap, [writer](BlendStructWriter<CurveMapping> &struct_writer) {
+    CurveMapping &shallow_cumap = struct_writer.shallow_data;
+    if (!writer->is_undo()) {
+      shallow_cumap.changed_timestamp = 0;
+    }
+    for (const int i : IndexRange(CM_TOT)) {
+      shallow_cumap.cm[i].range = 0;
+      shallow_cumap.cm[i].mintable = 0;
+      shallow_cumap.cm[i].maxtable = 0;
+      zero_v2(shallow_cumap.cm[i].ext_in);
+      zero_v2(shallow_cumap.cm[i].ext_out);
+      shallow_cumap.cm[i].table = nullptr;
+      shallow_cumap.cm[i].premultable = nullptr;
+      zero_v2(shallow_cumap.cm[i].premul_ext_in);
+      zero_v2(shallow_cumap.cm[i].premul_ext_out);
+    }
+  });
   BKE_curvemapping_curves_blend_write(writer, cumap);
 }
 
@@ -1521,7 +1540,7 @@ void BKE_curvemapping_blend_read(BlendDataReader *reader, CurveMapping *cumap)
   cumap->flag &= ~CUMA_PREMULLED;
 
   for (int a = 0; a < CM_TOT; a++) {
-    BLO_read_struct_array(reader, CurveMapPoint, cumap->cm[a].totpoint, &cumap->cm[a].curve);
+    BLO_read_array_and_validate_size(reader, &cumap->cm[a].curve, &cumap->cm[a].totpoint);
     cumap->cm[a].table = nullptr;
     cumap->cm[a].premultable = nullptr;
   }
@@ -1867,7 +1886,6 @@ void BKE_scopes_update(Scopes *scopes,
   uint nl, na, nr, ng, nb;
   double divl, diva, divr, divg, divb;
   int ycc_mode = -1;
-  void *cache_handle = nullptr;
   std::optional<ColormanageProcessor> cm_processor_positions;
   std::optional<ColormanageProcessor> cm_processor_colors;
 
@@ -1957,8 +1975,8 @@ void BKE_scopes_update(Scopes *scopes,
   cm_processor_colors = ColormanageProcessor::display_processor_for_imbuf(
       ibuf, view_settings, display_settings, DISPLAY_SPACE_DRAW);
 
-  const ocio::ScopeInfo scope_info = IMB_colormanagement_get_scope_info(
-      display_settings, view_settings->view_transform);
+  const ocio::ScopeInfo scope_info = IMB_colormanagement_get_scope_info(display_settings,
+                                                                        view_settings);
 
   /* Keep number of threads in sync with the merge parts below. */
   ScopesUpdateData data{};
@@ -2005,10 +2023,6 @@ void BKE_scopes_update(Scopes *scopes,
     scopes->hist.data_g[a] = data_chunk.bin_g[a] * divg;
     scopes->hist.data_b[a] = data_chunk.bin_b[a] * divb;
     scopes->hist.data_a[a] = data_chunk.bin_a[a] * diva;
-  }
-
-  if (cache_handle) {
-    IMB_display_buffer_release(cache_handle);
   }
 
   scopes->ok = 1;
@@ -2072,7 +2086,7 @@ void BKE_color_managed_view_settings_init(ColorManagedViewSettings *view_setting
   STRNCPY_UTF8(view_settings->view_transform, view_transform);
   STRNCPY_UTF8(view_settings->look, "None");
 
-  view_settings->flag = 0;
+  view_settings->flag = eColorManageView_Flag{};
   view_settings->gamma = 1.0f;
   view_settings->exposure = 0.0f;
   view_settings->temperature = 6500.0f;
@@ -2138,6 +2152,7 @@ void BKE_color_managed_colorspace_settings_init(
     ColorManagedColorspaceSettings *colorspace_settings)
 {
   STRNCPY_UTF8(colorspace_settings->name, "");
+  STRNCPY_UTF8(colorspace_settings->interop_id, "");
 }
 
 void BKE_color_managed_colorspace_settings_copy(
@@ -2145,6 +2160,7 @@ void BKE_color_managed_colorspace_settings_copy(
     const ColorManagedColorspaceSettings *settings)
 {
   STRNCPY_UTF8(colorspace_settings->name, settings->name);
+  STRNCPY_UTF8(colorspace_settings->interop_id, settings->interop_id);
 }
 
 bool BKE_color_managed_colorspace_settings_equals(const ColorManagedColorspaceSettings *settings1,

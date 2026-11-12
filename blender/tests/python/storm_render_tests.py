@@ -12,17 +12,35 @@ try:
     from modules import render_report
 
     class StormReport(render_report.Report):
-        def __init__(self, title, output_dir, oiiotool, variation=None, blocklist=[]):
+        def __init__(
+            self,
+            title: str,
+            output_dir: Path,
+            oiiotool: Path,
+            variation: str | None = None,
+            blocklist: list[str] = [],
+        ) -> None:
             super().__init__(title, output_dir, oiiotool, variation=variation, blocklist=blocklist)
             self.gpu_backend = variation
 
-        def _get_render_arguments(self, arguments_cb, filepath, base_output_filepath):
+        def _get_render_arguments(
+            self,
+            arguments_cb: render_report.ArgumentsCallback,
+            filepath: Path,
+            base_output_filepath: Path,
+        ) -> list[str | Path]:
             return arguments_cb(filepath, base_output_filepath, gpu_backend=self.gpu_backend)
 
 except ImportError:
     # render_report can only be loaded when running the render tests. It errors when
     # this script is run during preparation steps.
     pass
+
+BLOCKLIST = [
+    # Currently, image_mipmap tests are not enabled for storm-usd
+    "image_cache_evict.blend",
+    "image_mipmap_.*.blend",
+]
 
 # Unsupported or broken scenarios for the Storm render engine
 BLOCKLIST_HYDRA = [
@@ -36,6 +54,16 @@ BLOCKLIST_HYDRA = [
     "overlapping_octrees.blend",
     # No number of sample support, so will not converge to gray as expected
     "white_noise_256spp.blend",
+    # Render is incorrect
+    "principled_bsdf_thin_glass.blend",
+    # Custom OSL camera not supported.
+    "osl_camera_.*.blend",
+    # The result doesn't match storm-usd
+    "many_lights.blend",
+    # The result differs between platforms
+    "principled_bsdf_dispersion.blend",
+    # No Gaussian splat rendering in hydra.
+    "gsplat_.*.blend",
 ]
 
 BLOCKLIST_USD = [
@@ -50,6 +78,14 @@ BLOCKLIST_USD = [
     "overlapping_octrees.blend",
     # No number of sample support, so will not converge to gray as expected
     "white_noise_256spp.blend",
+    # Render is incorrect
+    "principled_bsdf_thin_glass.blend",
+    # Custom OSL camera not supported.
+    "osl_camera_.*.blend",
+    # The result in incorrect
+    "principled_bsdf_dispersion.blend",
+    # No Gaussian splat rendering in hydra.
+    "gsplat_.*.blend",
 ]
 
 # Metal support in Storm is no as good as OpenGL, though this needs to be
@@ -63,6 +99,7 @@ BLOCKLIST_METAL = [
     "transparent_shadow.blend",
     "transparent_shadow_hair.blend",
     "transparent_shadow_hair_blur.blend",
+    "transparent_shadow_hair_colored.blend",
     "shadow_all_max_bounces.blend",
     "underwater_caustics.blend",
     "shadow_link_transparency.blend",
@@ -83,6 +120,10 @@ BLOCKLIST_METAL = [
 # AMD seems to have similar limitations as Metal for transparency.
 BLOCKLIST_AMD = BLOCKLIST_METAL + [
     "volume_tricubic_interpolation.blend",
+    "holdout.blend",
+    "principled_bsdf_anisotropic_transmission.blend",
+    # Upper left sphere renders incorrectly.
+    "principled_bsdf_coated_transmission.blend",
 ]
 
 # Minor difference in texture coordinate for white noise hash.
@@ -182,16 +223,21 @@ if inside_blender:
         sys.exit(1)
 
 
-def get_arguments(filepath, output_filepath, gpu_backend):
-    arguments = [
+def get_arguments(
+    filepath: Path,
+    output_filepath: Path,
+    gpu_backend: str | None,
+) -> list[str | Path]:
+    arguments: list[str | Path] = [
         "--background",
         "--factory-startup",
         "--enable-autoexec",
         "--debug-memory",
+        "--console-crash-handler",
         "--debug-exit-on-error"]
 
     if gpu_backend:
-        arguments.extend(["--gpu-backend", gpu_backend])
+        arguments.extend(["--gpu-backend", gpu_backend, "--debug-gpu-backend-no-fallback"])
 
     arguments.extend([
         filepath,
@@ -208,10 +254,10 @@ def create_argparse():
     parser = argparse.ArgumentParser(
         description="Run test script for each blend file in TESTDIR, comparing the render result with known output."
     )
-    parser.add_argument("--blender", required=True)
-    parser.add_argument("--testdir", required=True)
-    parser.add_argument("--outdir", required=True)
-    parser.add_argument("--oiiotool", required=True)
+    parser.add_argument("--blender", required=True, type=Path)
+    parser.add_argument("--testdir", required=True, type=Path)
+    parser.add_argument("--outdir", required=True, type=Path)
+    parser.add_argument("--oiiotool", required=True, type=Path)
     parser.add_argument("--export_method", required=True)
     parser.add_argument('--batch', default=False, action='store_true')
     parser.add_argument('--gpu-backend')
@@ -222,7 +268,7 @@ def main():
     parser = create_argparse()
     args = parser.parse_args()
 
-    blocklist = []
+    blocklist = BLOCKLIST
     if args.gpu_backend == "metal":
         blocklist += BLOCKLIST_METAL
     elif args.gpu_backend == "vulkan":
@@ -232,7 +278,7 @@ def main():
         else:
             blocklist += BLOCKLIST_VULKAN_USD
         if os.getenv("BLENDER_TEST_IGNORE_VENDOR_BLOCKLIST") is None:
-            gpu_vendor = render_report.get_gpu_device_vendor(args.blender)
+            gpu_vendor = render_report.get_gpu_device_vendor(args.blender, args.gpu_backend)
             if gpu_vendor == "NVIDIA":
                 blocklist += BLOCKLIST_VULKAN_NVIDIA
             elif gpu_vendor == "AMD":
@@ -241,7 +287,7 @@ def main():
                 blocklist += BLOCKLIST_VULKAN_INTEL_LINUX
     else:
         if os.getenv("BLENDER_TEST_IGNORE_VENDOR_BLOCKLIST") is None:
-            gpu_vendor = render_report.get_gpu_device_vendor(args.blender)
+            gpu_vendor = render_report.get_gpu_device_vendor(args.blender, args.gpu_backend)
             if gpu_vendor == "AMD":
                 blocklist += BLOCKLIST_AMD
             elif gpu_vendor == "INTEL" and sys.platform == "linux":
@@ -255,7 +301,8 @@ def main():
             variation=args.gpu_backend,
             blocklist=blocklist +
             BLOCKLIST_HYDRA)
-        report.set_reference_dir("storm_hydra_renders")
+        report.set_reference_dir("storm_renders")
+        report.set_reference_override_dir("storm_hydra_renders")
         if args.gpu_backend == "vulkan":
             report.set_compare_engine('storm_hydra', 'opengl')
         else:
@@ -268,7 +315,7 @@ def main():
             variation=args.gpu_backend,
             blocklist=blocklist +
             BLOCKLIST_USD)
-        report.set_reference_dir("storm_usd_renders")
+        report.set_reference_dir("storm_renders")
         report.set_compare_engine('storm_hydra')
         if args.gpu_backend == "metal":
             report.set_compare_engine('storm_hydra', 'metal')
@@ -282,7 +329,7 @@ def main():
     report.set_pixelated(True)
 
     # Try to account for image filtering differences from OS/drivers
-    test_dir_name = Path(args.testdir).name
+    test_dir_name = args.testdir.name
     if (test_dir_name in {'image_mapping'}):
         report.set_fail_threshold(0.028)
         report.set_fail_percent(1.3)
@@ -297,9 +344,14 @@ def main():
         report.set_fail_threshold(0.036)
         report.set_fail_percent(2.3)
 
-    test_dir_name = Path(args.testdir).name
+    test_dir_name = args.testdir.name
 
     os.environ['BLENDER_HYDRA_EXPORT_METHOD'] = args.export_method
+
+    # Workaround OpenUSD bug with perspective projection and textures.
+    # Introduced in 05f6192 upstream.
+    os.environ['HGIVULKAN_ENABLE_BUILTIN_BARYCENTRICS'] = "0"
+    os.environ['HGIGL_ENABLE_BUILTIN_BARYCENTRICS'] = "0"
 
     ok = report.run(args.testdir, args.blender, get_arguments, batch=args.batch)
 

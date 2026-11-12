@@ -13,7 +13,7 @@
 #include "SEQ_modifier.hh"
 #include "SEQ_sequencer.hh"
 
-#include "BLI_listbase.h"
+#include "BLI_listbase.hh"
 
 namespace blender::deg {
 
@@ -34,11 +34,7 @@ void StripModifierDataBackup::init_from_modifier(StripModifierData *smd)
 {
   blender::seq::StripModifierDataRuntime *runtime = smd->runtime;
 
-  if (ELEM(smd->type,
-           eSeqModifierType_SoundEqualizer,
-           eSeqModifierType_Pitch,
-           eSeqModifierType_Echo))
-  {
+  if (smd->is_type_sound()) {
     flag = runtime->flag;
     sound_in = runtime->last_sound_in;
     sound_out = runtime->last_sound_out;
@@ -53,11 +49,7 @@ void StripModifierDataBackup::restore_to_modifier(StripModifierData *smd)
 {
   blender::seq::StripModifierDataRuntime *runtime = smd->runtime;
 
-  if (ELEM(smd->type,
-           eSeqModifierType_SoundEqualizer,
-           eSeqModifierType_Pitch,
-           eSeqModifierType_Echo))
-  {
+  if (smd->is_type_sound()) {
     runtime->flag = flag;
     runtime->last_sound_in = sound_in;
     runtime->last_sound_out = sound_out;
@@ -81,7 +73,6 @@ void StripBackup::reset()
   scene_sound = nullptr;
   sound_time_stretch = nullptr;
   sound_time_stretch_fps = 0.0f;
-  movie_readers.clear();
   modifiers.clear();
 }
 
@@ -90,7 +81,6 @@ void StripBackup::init_from_strip(Strip *strip)
   scene_sound = strip->runtime->scene_sound;
   sound_time_stretch = strip->runtime->sound_time_stretch;
   sound_time_stretch_fps = strip->runtime->sound_time_stretch_fps;
-  movie_readers = std::move(strip->runtime->movie_readers);
 
   for (StripModifierData &smd : strip->modifiers) {
     StripModifierDataBackup mod_backup;
@@ -103,7 +93,6 @@ void StripBackup::init_from_strip(Strip *strip)
   strip->runtime->scene_sound = nullptr;
   strip->runtime->sound_time_stretch = nullptr;
   strip->runtime->sound_time_stretch_fps = 0.0f;
-  strip->runtime->movie_readers.clear();
 }
 
 void StripBackup::restore_to_strip(Strip *strip)
@@ -111,7 +100,6 @@ void StripBackup::restore_to_strip(Strip *strip)
   strip->runtime->scene_sound = scene_sound;
   strip->runtime->sound_time_stretch = sound_time_stretch;
   strip->runtime->sound_time_stretch_fps = sound_time_stretch_fps;
-  strip->runtime->movie_readers = std::move(movie_readers);
 
   for (StripModifierData &smd : strip->modifiers) {
     std::optional<StripModifierDataBackup> backup = modifiers.pop_try(smd.persistent_uid);
@@ -125,8 +113,7 @@ void StripBackup::restore_to_strip(Strip *strip)
 
 bool StripBackup::isEmpty() const
 {
-  return (scene_sound == nullptr) && (sound_time_stretch == nullptr) && movie_readers.is_empty() &&
-         modifiers.is_empty();
+  return (scene_sound == nullptr) && (sound_time_stretch == nullptr) && modifiers.is_empty();
 }
 
 }  // namespace blender::deg

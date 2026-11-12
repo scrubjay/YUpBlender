@@ -2,12 +2,16 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup shdnodes
+ */
+
 #include "node_shader_util.hh"
 #include "node_util.hh"
 
 #include "BKE_texture.h"
 
-#include "BLI_math_constants.h"
+#include "BLI_math_constants.hh"
 #include "BLI_math_vector.hh"
 
 #include "NOD_multi_function.hh"
@@ -22,9 +26,13 @@ namespace nodes::node_shader_tex_gradient_cc {
 static void sh_node_tex_gradient_declare(NodeDeclarationBuilder &b)
 {
   b.is_function_node();
-  b.add_input<decl::Vector>("Vector"_ustr)
-      .hide_value()
-      .implicit_field(NODE_DEFAULT_INPUT_POSITION_FIELD);
+
+  const bool is_compositor = b.tree_or_null() && b.tree_or_null()->type == NTREE_COMPOSIT;
+  const NodeDefaultInputType default_input_type =
+      is_compositor ? NODE_DEFAULT_INPUT_UNIFORM_IMAGE_COORDINATES :
+                      NODE_DEFAULT_INPUT_POSITION_FIELD;
+  b.add_input<decl::Vector>("Vector"_ustr).default_input_type(default_input_type);
+
   b.add_output<decl::Color>("Color"_ustr).no_muted_links();
   b.add_output<decl::Float>("Factor"_ustr, "Fac"_ustr).no_muted_links();
 }

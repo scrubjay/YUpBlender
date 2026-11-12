@@ -13,6 +13,10 @@
 
 namespace blender::gpu::render_graph {
 
+/* -------------------------------------------------------------------- */
+/** \name Render Graph
+ * \{ */
+
 VKRenderGraph::VKRenderGraph(VKResourceStateTracker &resources) : resources_(resources) {}
 
 void VKRenderGraph::reset()
@@ -20,6 +24,8 @@ void VKRenderGraph::reset()
 #if 0
   memstats();
 #endif
+
+  deref_resources();
 
   links_.clear();
   for (VKRenderGraphNode &node : nodes_) {

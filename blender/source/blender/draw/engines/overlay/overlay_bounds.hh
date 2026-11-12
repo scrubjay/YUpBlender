@@ -11,7 +11,7 @@
 #include "BKE_mball.hh"
 
 #include "BLI_bounds_types.hh"
-#include "BLI_utildefines.h"
+#include "BLI_utildefines.hh"
 
 #include "DNA_rigidbody_types.h"
 
@@ -67,9 +67,11 @@ class Bounds : Overlay {
   {
     const Object *ob = ob_ref.object;
     const bool from_dupli = is_from_dupli_or_set(ob);
-    const bool has_bounds =
-        !ELEM(ob->type, OB_LAMP, OB_CAMERA, OB_EMPTY, OB_SPEAKER, OB_LIGHTPROBE) &&
-        (ob->type != OB_MBALL || BKE_mball_is_basis(ob));
+    const bool empty_with_geometry = (ob->type == OB_EMPTY) && ob->runtime->geometry_set_eval &&
+                                     !ob->runtime->geometry_set_eval->is_empty();
+    const bool has_bounds = (!ELEM(ob->type, OB_LAMP, OB_CAMERA, OB_SPEAKER) &&
+                             (ob->type != OB_MBALL || BKE_mball_is_basis(ob))) ||
+                            empty_with_geometry;
     const bool show_extras = !from_dupli && state.show_extras();
 
     /* Ignore `show_extras` when the objects draw-type is already bound-box,
@@ -166,6 +168,10 @@ class Bounds : Overlay {
           break;
         case RB_SHAPE_CAPSULE:
           add_bounds(true, OB_BOUND_CAPSULE);
+          break;
+        case RB_SHAPE_CONVEXH:
+        case RB_SHAPE_TRIMESH:
+        case RB_SHAPE_COMPOUND:
           break;
       };
     }

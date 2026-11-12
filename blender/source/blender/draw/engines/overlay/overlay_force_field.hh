@@ -10,7 +10,7 @@
 
 #include "BKE_anim_path.h"
 
-#include "BLI_math_rotation.h"
+#include "BLI_math_rotation_c.hh"
 
 #include "DNA_object_force_types.h"
 
@@ -105,6 +105,8 @@ class ForceFields : Overlay {
           /* Restore */
           matrix.location() = ob->object_to_world().location();
         }
+        break;
+      default:
         break;
     }
 

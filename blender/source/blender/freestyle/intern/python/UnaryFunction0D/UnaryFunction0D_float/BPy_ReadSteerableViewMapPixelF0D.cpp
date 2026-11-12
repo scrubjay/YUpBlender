@@ -10,7 +10,7 @@
 
 #include "../../../stroke/AdvancedFunctions0D.h"
 
-#include "BLI_sys_types.h"
+#include "BLI_sys_types.hh"
 
 using namespace Freestyle;
 
@@ -28,10 +28,10 @@ PyDoc_STRVAR(
     "\n"
     "   Builds a ReadSteerableViewMapPixelF0D object.\n"
     "\n"
-    "   :arg orientation: The integer belonging to [0, 4] indicating the\n"
+    "   :param orientation: The integer belonging to [0, 4] indicating the\n"
     "      orientation (E, NE, N, NW) we are interested in.\n"
     "   :type orientation: int\n"
-    "   :arg level: The level of the pyramid from which the pixel must be\n"
+    "   :param level: The level of the pyramid from which the pixel must be\n"
     "      read.\n"
     "   :type level: int\n"
     "\n"
@@ -39,7 +39,7 @@ PyDoc_STRVAR(
     "\n"
     "   Reads a pixel in one of the level of one of the steerable viewmaps.\n"
     "\n"
-    "   :arg it: An Interface0DIterator object.\n"
+    "   :param it: An Interface0DIterator object.\n"
     "   :type it: :class:`freestyle.types.Interface0DIterator`\n"
     "   :return: A pixel in one of the level of one of the steerable viewmaps.\n"
     "   :rtype: float\n");
@@ -51,7 +51,15 @@ static int ReadSteerableViewMapPixelF0D___init__(BPy_ReadSteerableViewMapPixelF0
   uint u;
   int i;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "Ii", (char **)kwlist, &u, &i)) {
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "I" /* `orientation` */
+                                   "i" /* `level` */
+                                   ":__init__",
+                                   (char **)kwlist,
+                                   &u,
+                                   &i))
+  {
     return -1;
   }
   self->py_uf0D_float.uf0D_float = new Functions0D::ReadSteerableViewMapPixelF0D(u, i);

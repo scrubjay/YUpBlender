@@ -2,9 +2,13 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup shdnodes
+ */
+
 #include "node_shader_util.hh"
 
-#include "BLI_string.h"
+#include "BLI_string.hh"
 
 #include "UI_interface_layout.hh"
 #include "UI_resources.hh"
@@ -104,7 +108,8 @@ static int node_shader_gpu_volume_scatter(GPUMaterial *mat,
      * `extinction = scattering + absorption`. */
     GPU_material_flag_set(mat, GPU_MATFLAG_VOLUME_SCATTER | GPU_MATFLAG_VOLUME_ABSORPTION);
   }
-  return GPU_stack_link(mat, node, "node_volume_scatter", in, out);
+  return GPU_stack_link(
+      mat, node, "node_volume_scatter", in, out, GPU_kernel_globals(), GPU_shading_data());
 }
 
 #undef SOCK_COLOR_ID
@@ -129,7 +134,7 @@ void register_node_type_sh_volume_scatter()
   ntype.gather_link_search_ops = search_link_ops_for_shader_bsdf_node;
   ntype.add_ui_poll = object_shader_nodes_poll;
   ntype.draw_buttons = file_ns::node_shader_buts_scatter;
-  bke::node_type_size_preset(ntype, bke::eNodeSizePreset::Middle);
+  ntype.default_width = bke::NodeWidth::_160;
   ntype.initfunc = file_ns::node_shader_init_scatter;
   ntype.gpu_fn = file_ns::node_shader_gpu_volume_scatter;
   ntype.updatefunc = file_ns::node_shader_update_scatter;

@@ -28,7 +28,7 @@ PyDoc_STRVAR(
     "\n"
     "   Builds a ZDiscontinuityF1D object.\n"
     "\n"
-    "   :arg integration_type: The integration method used to compute a single value\n"
+    "   :param integration_type: The integration method used to compute a single value\n"
     "      from a set of values.\n"
     "   :type integration_type: :class:`freestyle.types.IntegrationType`\n"
     "\n"
@@ -40,7 +40,7 @@ PyDoc_STRVAR(
     "   Therefore, if no object is occluded by the shape to which the\n"
     "   Interface1D belongs to, 1 is returned.\n"
     "\n"
-    "   :arg inter: An Interface1D object.\n"
+    "   :param inter: An Interface1D object.\n"
     "   :type inter: :class:`freestyle.types.Interface1D`\n"
     "   :return: The normalized distance between the Interface1D and the occludee.\n"
     "   :rtype: float\n");
@@ -49,8 +49,14 @@ static int ZDiscontinuityF1D___init__(BPy_ZDiscontinuityF1D *self, PyObject *arg
   static const char *kwlist[] = {"integration_type", nullptr};
   PyObject *obj = nullptr;
 
-  if (!PyArg_ParseTupleAndKeywords(
-          args, kwds, "|O!", (char **)kwlist, &IntegrationType_Type, &obj))
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "|"  /* Optional arguments. */
+                                   "O!" /* `integration_type` */
+                                   ":__init__",
+                                   (char **)kwlist,
+                                   &IntegrationType_Type,
+                                   &obj))
   {
     return -1;
   }

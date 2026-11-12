@@ -34,9 +34,7 @@ else()
   set(FIRST_RUN FALSE)
 endif()
 
-# this starts out unset
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/build_files/cmake/Modules")
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/build_files/cmake/platform")
 
 # Avoid having an empty `CMAKE_BUILD_TYPE`.
 if(NOT DEFINED CMAKE_BUILD_TYPE_INIT)
@@ -69,20 +67,16 @@ if(POLICY CMP0177)
 endif()
 
 # -----------------------------------------------------------------------------
-# Load Blender's Local Macros
-
-include(build_files/cmake/macros.cmake)
-
-# -----------------------------------------------------------------------------
 # Initialize Project
-
-blender_project_hack_pre()
 
 project(Blender)
 
-blender_project_hack_post()
-
 enable_testing()
+
+# -----------------------------------------------------------------------------
+# Load Blender's Local Macros
+
+include(build_files/cmake/macros.cmake)
 
 # There are some circumstances where the git checkout doesn't grab
 # the files from LFS but produces small pointer files. The build system
@@ -93,7 +87,10 @@ enable_testing()
 if(EXISTS ${CMAKE_SOURCE_DIR}/release/datafiles/startup.blend)
   file(SIZE ${CMAKE_SOURCE_DIR}/release/datafiles/startup.blend startup_size)
   if(${startup_size} LESS 1024)
-    message(FATAL_ERROR "Detected incomplete startup blend, likely due to missing Git LFS checkout.\nRunning \"make update\" or \"git lfs pull\" may resolve the issue.")
+    message(FATAL_ERROR
+      "Detected incomplete startup blend, likely due to missing Git LFS checkout.\n"
+      "Running \"make update\" or \"git lfs pull\" may resolve the issue."
+    )
   endif()
   unset(startup_size)
 endif()
@@ -184,7 +181,7 @@ set(CMAKE_OPTIMIZE_DEPENDENCIES ON CACHE INTERNAL "")
 # Declare Options
 
 # Blender internal features
-option(WITH_BLENDER "Build blender (disable to build only Cycles stand-alone)." ON)
+option(WITH_BLENDER "Build Blender (disable to build only Cycles stand-alone)." ON)
 mark_as_advanced(WITH_BLENDER)
 
 if(WIN32)
@@ -201,16 +198,16 @@ intended for use by file-managers to extract PNG images from `.blend` files."
   )
 elseif(APPLE)
   option(WITH_BLENDER_THUMBNAILER "\
-Build \"blender-thumbnailer.appex\" extension for Finder/ QuickLook thumbnail \
+Build \"blender-thumbnailer.appex\" extension for Finder/QuickLook thumbnail \
 support for blend files."
     ON
   )
 endif()
 
-option(WITH_INTERNATIONAL "Enable I18N (International fonts and text)" ON)
+option(WITH_INTERNATIONAL "Enable I18N (UI translation)" ON)
 
 option(WITH_PYTHON "Enable Embedded Python API (only disable for development)" ON)
-option(WITH_PYTHON_SECURITY "Disables execution of scripts within blend files by default" ON)
+option(WITH_PYTHON_SECURITY "Disable execution of scripts within blend files by default" ON)
 # Don't want people disabling this unless they really know what they are doing.
 mark_as_advanced(WITH_PYTHON)
 # Some distributions see this as a security issue, rather than have them patch it,
@@ -218,15 +215,15 @@ mark_as_advanced(WITH_PYTHON)
 mark_as_advanced(WITH_PYTHON_SECURITY)
 
 option(WITH_PYTHON_SAFETY "\
-Enable internal API error checking to track invalid data to prevent crash on access \
+Enable internal API error checking to track invalid data to prevent a crash on access \
 (at the expense of some efficiency, only enable for development)."
   OFF
 )
 mark_as_advanced(WITH_PYTHON_SAFETY)
 option(WITH_PYTHON_MODULE "\
-Enable building as a python module which runs without a user interface, \
-like running regular blender in background mode (only enable for development), \
-installs to PYTHON_SITE_PACKAGES (or CMAKE_INSTALL_PREFIX if WITH_INSTALL_PORTABLE is enabled)."
+Enable building as a Python module which runs without a user interface, \
+like running regular Blender in background mode. \
+This installs to PYTHON_SITE_PACKAGES (or CMAKE_INSTALL_PREFIX if WITH_INSTALL_PORTABLE is enabled)."
   OFF
 )
 
@@ -252,7 +249,7 @@ mark_as_advanced(BUILDINFO_OVERRIDE_TIME)
 if(NOT ${CMAKE_VERSION} VERSION_EQUAL "3.28.2")
   option(WITH_UNITY_BUILD "\
 Enable unity build for modules that support it to improve compile times.\n\
-WARNING: this option allows files to be built without all necessary headers!\n
+WARNING: this option allows files to be built without all necessary headers!\n\
 This option should be disabled before manipulating or removing headers."
     ON
   )
@@ -298,11 +295,11 @@ option(WITH_IK_SOLVER "\
 Enable Legacy IK solver (only disable for development)"
   ON
 )
-option(WITH_FFTW3 "Enable FFTW3 support (Used for smoke, ocean sim, glare, and audio effects)" ON)
+option(WITH_FFTW3 "Enable FFTW3 support (Used for ocean sim, compositor glare & convolve, and audio effects)" ON)
 option(WITH_PUGIXML "Enable PugiXML support (Used for OpenImageIO, Grease Pencil SVG export)" ON)
 option(WITH_BULLET "Enable Bullet (Physics Engine)" ON)
 option(WITH_SYSTEM_BULLET "\
-Use the systems bullet library (currently unsupported due to missing features in upstream!)"
+Use the system's Bullet library (currently unsupported due to missing features in upstream)"
   OFF
 )
 mark_as_advanced(WITH_SYSTEM_BULLET)
@@ -312,14 +309,16 @@ option(WITH_XR_OPENXR "Enable VR features through the OpenXR specification" ON)
 option(WITH_GMP "Enable features depending on GMP (Exact Boolean)" ON)
 option(WITH_MANIFOLD "Enable features depending on Manifold (Fast Robust Boolean)" ON)
 
-option(WITH_OPENIMAGEDENOISE "Enable the OpenImageDenoise compositing node" ON)
+option(WITH_OPENIMAGEDENOISE "Enable OpenImageDenoise (Cycles denoiser and the compositor Denoise node)" ON)
+
+option(WITH_DLSS "Enable NVIDIA DLSS Ray Reconstruction support" OFF)
 
 option(WITH_OPENSUBDIV "Enable OpenSubdiv for surface subdivision" ON)
 
-option(WITH_POTRACE "Enable features relying on potrace" ON)
+option(WITH_POTRACE "Enable features relying on Potrace" ON)
 option(WITH_OPENVDB "Enable features relying on OpenVDB" ON)
 option(WITH_OPENVDB_BLOSC "\
-Enable blosc compression for OpenVDB, only enable if OpenVDB was built with blosc support"
+Enable blosc compression for OpenVDB (only enable if OpenVDB was built with blosc support)"
   ON
 )
 option(WITH_OPENVDB_3_ABI_COMPATIBLE "\
@@ -328,7 +327,7 @@ Assume OpenVDB library has been compiled with version 3 ABI compatibility"
 )
 mark_as_advanced(WITH_OPENVDB_3_ABI_COMPATIBLE)
 option(WITH_NANOVDB "Enable usage of NanoVDB data structure for rendering on the GPU" ON)
-option(WITH_HARU "Enable features relying on Libharu (Grease pencil PDF export)" ON)
+option(WITH_HARU "Enable features relying on Libharu (Grease Pencil PDF export)" ON)
 
 # GHOST Windowing Library Options
 option(WITH_GHOST_DEBUG "Enable debugging output for the GHOST library" OFF)
@@ -348,15 +347,30 @@ if(UNIX AND NOT (APPLE OR HAIKU))
   mark_as_advanced(WITH_GHOST_WAYLAND)
 
   if(WITH_GHOST_WAYLAND)
+    option(WITH_GHOST_DBUS "\
+Enable reading desktop settings over DBUS, such as the light/dark theme preference. \
+Requires the `dbus-1` headers at build time."
+      ON
+    )
+    mark_as_advanced(WITH_GHOST_DBUS)
+  endif()
+
+  option(WITH_GHOST_DBUS_DYNLOAD "\
+Enable runtime dynamic loading of `libdbus` (avoids a link time dependency)"
+    ON
+  )
+  mark_as_advanced(WITH_GHOST_DBUS_DYNLOAD)
+
+  if(WITH_GHOST_WAYLAND)
     option(WITH_GHOST_CSD "Enable client side decorations with Wayland" ON)
     mark_as_advanced(WITH_GHOST_CSD)
 
-    option(WITH_GHOST_WAYLAND_DYNLOAD "Enable runtime dynamic WAYLAND libraries loading" ON)
+    option(WITH_GHOST_WAYLAND_DYNLOAD "Enable runtime dynamic loading of WAYLAND libraries" ON)
     mark_as_advanced(WITH_GHOST_WAYLAND_DYNLOAD)
 
     set(WITH_GHOST_WAYLAND_APP_ID "" CACHE STRING "\
-The application ID used for Blender (use default when an empty string), \
-this can be used to differentiate Blender instances by version or branch for example."
+The application ID used for Blender (the default is used when empty). \
+This can be used to differentiate Blender instances by version or branch for example."
     )
     mark_as_advanced(WITH_GHOST_WAYLAND_APP_ID)
   endif()
@@ -375,17 +389,10 @@ endif()
 option(WITH_HEADLESS "Build without graphical support (renderfarm, server mode only)" OFF)
 mark_as_advanced(WITH_HEADLESS)
 
-option(WITH_QUADRIFLOW "Build with quadriflow remesher support" ON)
+option(WITH_QUADRIFLOW "Build with QuadriFlow remesher support" ON)
 
-option(WITH_AUDASPACE "\
-Build with blenders audio library (only disable if you know what you're doing!)"
-  ON
-)
-option(WITH_SYSTEM_AUDASPACE "\
-Build with external audaspace library installed on the system \
-(only enable if you know what you're doing!)"
-  OFF
-)
+option(WITH_AUDASPACE "Build with Audaspace (base Blender audio library)" ON)
+option(WITH_SYSTEM_AUDASPACE "Build with external Audaspace library installed on the system" OFF)
 option(WITH_RUBBERBAND "\
 Build with Rubber Band for audio time-stretching and pitch-scaling (used by Audaspace)"
   ON
@@ -399,12 +406,12 @@ set_and_warn_dependency(WITH_AUDASPACE WITH_RUBBERBAND OFF)
 set_and_warn_incompatible(WITH_SYSTEM_AUDASPACE WITH_RUBBERBAND OFF)
 
 if(WITH_GHOST_X11)
-  option(WITH_X11_XINPUT "Enable X11 Xinput (tablet support and unicode input)" ON)
+  option(WITH_X11_XINPUT "Enable X11 Xinput (tablet support and Unicode input)" ON)
   option(WITH_X11_XFIXES "Enable X11 XWayland cursor warping workaround" ON)
 endif()
 
 if(UNIX AND NOT APPLE)
-  option(WITH_SYSTEM_FREETYPE "Use the freetype library provided by the operating system" OFF)
+  option(WITH_SYSTEM_FREETYPE "Use the FreeType library provided by the operating system" OFF)
 else()
   set(WITH_SYSTEM_FREETYPE OFF)
 endif()
@@ -428,7 +435,7 @@ option(WITH_MOD_REMESH "Enable Remesh Modifier" ON)
 option(WITH_MOD_OCEANSIM "Enable Ocean Modifier" ON)
 
 # UV solvers.
-option(WITH_UV_SLIM "SLIM UV unwrapping solver" ON)
+option(WITH_UV_SLIM "Enable the SLIM UV unwrapping solver" ON)
 
 # Image format support
 option(WITH_IMAGE_OPENJPEG "Enable OpenJpeg Support (http://www.openjpeg.org)" ON)
@@ -436,7 +443,7 @@ option(WITH_IMAGE_CINEON "Enable CINEON and DPX Image Support" ON)
 option(WITH_IMAGE_WEBP "Enable WebP Image Support" ON)
 
 # Audio/Video format support
-option(WITH_CODEC_FFMPEG "Enable FFMPeg Support (http://ffmpeg.org)" ON)
+option(WITH_CODEC_FFMPEG "Enable FFmpeg Support (http://ffmpeg.org)" ON)
 option(WITH_CODEC_SNDFILE "Enable libsndfile Support (http://www.mega-nerd.com/libsndfile)" ON)
 
 # Alembic support
@@ -459,18 +466,19 @@ Enable Storm tests using the Vulkan backend. Requires WITH_HYDRA."
 mark_as_advanced(WITH_STORM_TESTS_VULKAN)
 
 # RTL Languages, Complex Shaping, OpenType Features
-option(WITH_FRIBIDI "Enable features relying on fribidi" OFF)
-option(WITH_HARFBUZZ "Enable features relying on harfbuzz" OFF)
+option(WITH_FRIBIDI "Enable features relying on FriBidi" OFF)
+option(WITH_HARFBUZZ "Enable features relying on HarfBuzz" OFF)
 
 # 3D format support
 option(WITH_IO_WAVEFRONT_OBJ "Enable Wavefront-OBJ 3D file format support (*.obj)" ON)
 option(WITH_IO_PLY "Enable PLY 3D file format support (*.ply)" ON)
 option(WITH_IO_STL "Enable STL 3D file format support (*.stl)" ON)
 option(WITH_IO_FBX "Enable FBX 3D file format support (*.fbx)" ON)
-option(WITH_IO_GREASE_PENCIL "Enable grease-pencil file format IO (*.svg, *.pdf)" ON)
+option(WITH_IO_GREASE_PENCIL "Enable Grease Pencil file format IO (*.svg, *.pdf)" ON)
+option(WITH_IO_SPZ "Enable SPZ compressed 3D gaussian splats file format support (*.spz)" ON)
 
 # Sound output
-option(WITH_SDL "Enable SDL for sound" OFF)
+option(WITH_SDL_AUDIO "Enable SDL audio support" OFF)
 option(WITH_OPENAL "Enable OpenAL Support (http://www.openal.org)" ON)
 if(APPLE)
   option(WITH_COREAUDIO "Enable CoreAudio for audio support on macOS" ON)
@@ -484,32 +492,32 @@ if(NOT WIN32)
   endif()
   option(WITH_JACK "Enable JACK Support (http://www.jackaudio.org)" ${_option_default})
   unset(_option_default)
-  option(WITH_JACK_DYNLOAD "Enable runtime dynamic JACK libraries loading" OFF)
+  option(WITH_JACK_DYNLOAD "Enable runtime dynamic loading of JACK libraries" OFF)
 else()
   set(WITH_JACK OFF)
 endif()
 if(UNIX AND NOT APPLE)
-  option(WITH_PULSEAUDIO "Enable PulseAudio for audio support on Linux" ON)
-  option(WITH_PULSEAUDIO_DYNLOAD "Enable runtime dynamic PulseAudio libraries loading" OFF)
-  option(WITH_PIPEWIRE "Enable Pipewire for audio support on Linux" ON)
-  option(WITH_PIPEWIRE_DYNLOAD "Enable runtime dynamic Pipewire libraries loading" OFF)
+  option(WITH_PULSEAUDIO "Enable PulseAudio for audio support on Linux/Unix" ON)
+  option(WITH_PULSEAUDIO_DYNLOAD "Enable runtime dynamic loading of PulseAudio libraries" OFF)
+  option(WITH_PIPEWIRE "Enable PipeWire for audio support on Linux/Unix" ON)
+  option(WITH_PIPEWIRE_DYNLOAD "Enable runtime dynamic loading of PipeWire libraries" OFF)
 else()
   set(WITH_PULSEAUDIO OFF)
   set(WITH_PIPEWIRE OFF)
 endif()
 if(WIN32)
-  option(WITH_WASAPI "Enable Windows Audio Sessions API for audio support on Windows" ON)
+  option(WITH_WASAPI "Enable Windows Audio Session API for audio support on Windows" ON)
 else()
   set(WITH_WASAPI OFF)
 endif()
 
 # Compression
-option(WITH_DRACO "Enable Draco mesh compression Python module (used for glTF)" ON)
+option(WITH_DRACO "Enable Draco mesh compression library (used by the glTF add-on)" ON)
+option(WITH_MESHOPTIMIZER "Enable meshoptimizer compression library (used by the glTF add-on)" ON)
+option(WITH_KTX "Enable KTX texture support (used by the glTF add-on)" ON)
 
 # Camera/motion tracking
 option(WITH_LIBMV "Enable Libmv structure from motion library" ON)
-option(WITH_LIBMV_SCHUR_SPECIALIZATIONS "Enable fixed-size schur specializations." ON)
-mark_as_advanced(WITH_LIBMV_SCHUR_SPECIALIZATIONS)
 
 # Logging/unit test libraries.
 option(WITH_SYSTEM_GFLAGS "Use system-wide Gflags instead of a bundled one" OFF)
@@ -520,13 +528,19 @@ mark_as_advanced(WITH_SYSTEM_GLOG)
 # Freestyle
 option(WITH_FREESTYLE "Enable Freestyle (advanced edges rendering)" ON)
 
+# Jolt Physics
+option(WITH_JOLT "Enable the Jolt Physics library" ON)
+
+# OpenTimelineIO
+option(WITH_OPENTIMELINEIO "Enable Video Sequencer OpenTimelineIO support" ON)
+
 # Libraries.
 if(UNIX AND NOT APPLE)
   # Optionally build without pre-compiled libraries.
   # NOTE: this could be supported on all platforms however in practice UNIX is the only platform
   # that has good support for detecting installed libraries.
   option(WITH_LIBS_PRECOMPILED "\
-Detect and link against pre-compiled libraries (typically found under \"../lib/\"). \
+Detect and link against pre-compiled libraries (typically found under \"lib/<platform>/\"). \
 Disabling this option will use the system libraries although cached paths \
 that point to pre-compiled libraries will be left as-is."
     ON
@@ -535,7 +549,7 @@ that point to pre-compiled libraries will be left as-is."
 
   option(WITH_STATIC_LIBS "\
 Try to link with static libraries, as much as possible, \
-to make blender more portable across distributions"
+to make Blender more portable across distributions"
     OFF
   )
 endif()
@@ -551,12 +565,16 @@ option(WITH_INPUT_NDOF "Enable NDOF input devices (SpaceNavigator and friends)" 
 # is the only supported installation type, so there is no option.
 if(UNIX AND (NOT APPLE OR WITH_PYTHON_MODULE))
   option(WITH_INSTALL_PORTABLE "\
-Install redistributable runtime, otherwise install into CMAKE_INSTALL_PREFIX"
+Install a redistributable runtime into CMAKE_INSTALL_PREFIX \
+(otherwise use a system directory layout, \
+or install into PYTHON_SITE_PACKAGES for WITH_PYTHON_MODULE)"
     ON
   )
+else()
+  set(WITH_INSTALL_PORTABLE ON)
 endif()
 
-option(WITH_PYTHON_INSTALL "Copy system python into the blender install directory" ON)
+option(WITH_PYTHON_INSTALL "Copy Python into the Blender install directory" ON)
 
 option(WITH_INSTALL_COPYRIGHT "\
 Copy the official Blender Authors copyright.txt into the Blender install directory"
@@ -579,11 +597,11 @@ Path to python site-packages or dist-packages containing 'numpy' module"
   mark_as_advanced(PYTHON_NUMPY_INCLUDE_DIRS)
 endif()
 if(WITH_PYTHON_INSTALL)
-  option(WITH_PYTHON_INSTALL_NUMPY "Copy system NumPy into the blender install directory" ON)
+  option(WITH_PYTHON_INSTALL_NUMPY "Copy system NumPy into the Blender install directory" ON)
 
   if(UNIX AND NOT APPLE)
     option(WITH_PYTHON_INSTALL_REQUESTS "\
-Copy system requests into the blender install directory"
+Copy system requests into the Blender install directory"
       ON
     )
     set(PYTHON_REQUESTS_PATH "" CACHE PATH "\
@@ -592,21 +610,27 @@ Path to python site-packages or dist-packages containing 'requests' module"
     mark_as_advanced(PYTHON_REQUESTS_PATH)
   endif()
 
-  option(WITH_PYTHON_INSTALL_ZSTANDARD "Copy zstandard into the blender install directory" ON)
+  option(WITH_PYTHON_INSTALL_ZSTANDARD "Copy Zstandard Python module into the Blender install directory" ON)
   set(PYTHON_ZSTANDARD_PATH "" CACHE PATH "\
 Path to python site-packages or dist-packages containing 'zstandard' module"
   )
   mark_as_advanced(PYTHON_ZSTANDARD_PATH)
 endif()
 
-option(WITH_COMPILER_SIMD "Add the recommended Blender default SIMD flags to the compiler's C_FLAGS/CXX_FLAGS" ON)
+option(WITH_COMPILER_SIMD "\
+Add the recommended Blender default SIMD flags to the compiler's C_FLAGS/CXX_FLAGS"
+  ON
+)
 mark_as_advanced(WITH_COMPILER_SIMD)
+
+
+option(WITH_EMBREE "Build Cycles with Embree support, and use Embree BVH in Blender" ON)
+
 
 # Cycles
 option(WITH_CYCLES "Enable Cycles Render Engine" ON)
 option(WITH_CYCLES_OSL "Build Cycles with OpenShadingLanguage support" ON)
 option(WITH_CYCLES_PATH_GUIDING "Build Cycles with path guiding support" ON)
-option(WITH_CYCLES_EMBREE "Build Cycles with Embree support" ON)
 option(WITH_CYCLES_DEBUG "Build Cycles with options useful for debugging (e.g., MIS)" OFF)
 
 option(WITH_CYCLES_STANDALONE "Build Cycles standalone application" OFF)
@@ -616,7 +640,7 @@ option(WITH_CYCLES_PRECOMPUTE "Build Cycles data precomputation tool" OFF)
 option(WITH_CYCLES_HYDRA_RENDER_DELEGATE "Build Cycles Hydra render delegate" OFF)
 
 option(WITH_CYCLES_PARALLEL_DEVICE_KERNEL_BUILD
-       "Build Cycles kernels of difference devices in parallel (faster, but uses more memory)" OFF)
+       "Build Cycles kernels of different devices in parallel (faster, but uses more memory)" OFF)
 mark_as_advanced(WITH_CYCLES_PARALLEL_DEVICE_KERNEL_BUILD)
 
 option(WITH_CYCLES_DEBUG_NAN "\
@@ -624,7 +648,7 @@ Build Cycles with additional asserts for detecting NaNs and invalid values"
   OFF
 )
 option(WITH_CYCLES_NATIVE_ONLY "\
-Build Cycles with native kernel only (which fits current CPU, use for development only)"
+Build Cycles with native kernel only (which fits the current CPU, use for development only)"
   OFF
 )
 option(WITH_CYCLES_KERNEL_ASAN "\
@@ -636,7 +660,7 @@ Run regression tests on the specified device types \
 (CPU CUDA OPTIX HIP HIP-RT METAL METAL-RT ONEAPI ONEAPI-RT)"
 )
 option(WITH_CYCLES_TEST_OSL "\
-Run additional Cycles test with OSL enabled"
+Run additional Cycles tests with OSL enabled"
   OFF
 )
 mark_as_advanced(WITH_CYCLES_KERNEL_ASAN)
@@ -647,14 +671,14 @@ mark_as_advanced(CYCLES_TEST_DEVICES)
 mark_as_advanced(WITH_CYCLES_TEST_OSL)
 
 # NVIDIA CUDA & OptiX
-if(NOT APPLE AND NOT (WIN32 AND CMAKE_SYSTEM_PROCESSOR STREQUAL "ARM64"))
+if(NOT APPLE)
   option(WITH_CYCLES_DEVICE_CUDA "Enable Cycles NVIDIA CUDA compute support" ON)
   option(WITH_CYCLES_DEVICE_OPTIX "Enable Cycles NVIDIA OptiX support" ON)
   mark_as_advanced(WITH_CYCLES_DEVICE_CUDA)
 
   option(WITH_CYCLES_CUDA_BINARIES "Build Cycles NVIDIA CUDA binaries" OFF)
   set(CYCLES_CUDA_BINARIES_ARCH
-    sm_50 sm_52 sm_60 sm_61 sm_70 sm_75 sm_86 sm_89 sm_120 compute_75
+    sm_50 sm_52 sm_60 sm_70 sm_75 sm_86 sm_120 compute_75
     CACHE STRING "CUDA architectures to build binaries for"
   )
   option(WITH_CYCLES_CUDA_BUILD_SERIAL "\
@@ -690,7 +714,8 @@ if(NOT APPLE AND NOT (WIN32 AND CMAKE_SYSTEM_PROCESSOR STREQUAL "ARM64"))
   set(CYCLES_HIP_BINARIES_ARCH
     gfx1010 gfx1011 gfx1012
     gfx1030 gfx1031 gfx1032 gfx1034 gfx1035 gfx1036
-    gfx1100 gfx1101 gfx1102 gfx1103 gfx1150 gfx1151 gfx1152
+    gfx1100 gfx1101 gfx1102 gfx1103
+    gfx1150 gfx1151 gfx1152 gfx1153
     gfx1200 gfx1201
     CACHE STRING "AMD HIP architectures to build binaries for"
   )
@@ -713,6 +738,10 @@ if(NOT APPLE AND NOT (WIN32 AND CMAKE_SYSTEM_PROCESSOR STREQUAL "ARM64"))
 Enable Ahead-Of-Time compilation for Cycles oneAPI device"
     OFF
   )
+  option(WITH_CYCLES_ONEAPI_SOFTWARE_TEXTURING "\
+Use software texture lookup and interpolation instead of GPU hardware samplers"
+    OFF
+  )
 
   # https://www.intel.com/content/www/us/en/develop/documentation/oneapi-dpcpp-cpp-compiler-dev-guide-and-reference/top/compilation/ahead-of-time-compilation.html
   # The supported devices can be retrieved from `ocloc` output when running
@@ -726,6 +755,7 @@ oneAPI Intel GPU architectures to build binaries for"
 oneAPI targets to build AOT binaries for"
   )
 
+  mark_as_advanced(WITH_CYCLES_ONEAPI_SOFTWARE_TEXTURING)
   mark_as_advanced(CYCLES_ONEAPI_INTEL_BINARIES_ARCH)
   mark_as_advanced(CYCLES_ONEAPI_SYCL_TARGETS)
 endif()
@@ -753,7 +783,7 @@ mark_as_advanced(WITH_ASSERT_RELEASE)
 if(UNIX OR (CMAKE_GENERATOR MATCHES "^Visual Studio.+"))
   option(WITH_CLANG_TIDY "\
 Use Clang Tidy to analyze the source code \
-(only enable for development on Linux using Clang, or Windows using the Visual Studio IDE)"
+(only enable for development on Linux/macOS, or Windows using the Visual Studio IDE)"
     OFF
   )
   mark_as_advanced(WITH_CLANG_TIDY)
@@ -771,7 +801,10 @@ if((WIN32 AND NOT CMAKE_SYSTEM_PROCESSOR STREQUAL "ARM64") OR (UNIX AND NOT APPL
   option(WITH_TBB_MALLOC_PROXY "Enable the TBB malloc replacement" ON)
 endif()
 
-option(WITH_EXPERIMENTAL_FEATURES "Enable experimental features" ON)
+option(WITH_EXPERIMENTAL_FEATURES "\
+Enable experimental features (alpha builds only, forced OFF for beta/rc/release)"
+  ON
+)
 
 # This should be turned off when Blender enter beta/rc/release
 if("${BLENDER_VERSION_CYCLE}" STREQUAL "alpha" AND WITH_EXPERIMENTAL_FEATURES)
@@ -783,7 +816,7 @@ endif()
 # Unit testing
 option(WITH_GTESTS "Enable GTest unit testing" OFF)
 option(WITH_GPU_RENDER_TESTS "\
-Enable GPU render related unit testing (EEVEE, Workbench and Grease Pencil)"
+Enable GPU render related unit testing (EEVEE, Workbench, Hydra Storm and Grease Pencil)"
   OFF
 )
 option(WITH_GPU_RENDER_TESTS_VULKAN "\
@@ -794,7 +827,7 @@ mark_as_advanced(WITH_GPU_RENDER_TESTS_VULKAN)
 option(WITH_GPU_RENDER_TESTS_HEADED "\
 Enable GPU render related unit testing that doesn't work in background mode. \
 These tests require an environment with a display server to run. \
-Requires WITH_GPU_RENDER_TESTS "
+Requires WITH_GPU_RENDER_TESTS."
   OFF
 )
 mark_as_advanced(WITH_GPU_RENDER_TESTS_HEADED)
@@ -833,8 +866,8 @@ Currently this depends on WITH_GHOST_WAYLAND and the weston compositor \
 
   option(WITH_LINUX_OFFICIAL_RELEASE_TESTS "\
 Enable sanity check tests for the linux official release. \
-These test are only relevant for checking that our official Linux releases are portable and \
-packaged properly. For example that we don't link to any unexpected system libraries."
+These tests are only relevant for checking that our official Linux releases are portable and \
+packaged properly. For example, that we don't link to any unexpected system libraries."
     OFF
   )
 else()
@@ -903,7 +936,7 @@ endif()
 
 
 # GPU Module
-option(WITH_RENDERDOC "Use Renderdoc API to capture frames" OFF)
+option(WITH_RENDERDOC "Use RenderDoc API to capture frames" OFF)
 
 option(WITH_GPU_SHADER_ASSERT "\
 Globally enable in-shader asserts.
@@ -917,16 +950,26 @@ mark_as_advanced(
 )
 
 option(WITH_GPU_SHADER_CPP_COMPILATION "\
-Compiler shaders using C++. \
-Allows testing shader compilation offline and enable C++ IDE support for shader code"
+Compile shaders using C++. \
+Allows testing shader compilation offline and enables C++ IDE support for shader code"
   ON
 )
 mark_as_advanced(WITH_GPU_SHADER_CPP_COMPILATION)
 
 
+# Profiling
+option(WITH_TRACY "\
+Enable profiling via the Tracy Frame Profiler. \
+This option adds a `tracy_profiler` target for building the profiler GUI front-end. \
+Requires internet access."
+  OFF
+)
+mark_as_advanced(WITH_TRACY)
+
+
 # OpenGL
 if(NOT APPLE)
-  option(WITH_OPENGL_BACKEND "Enable OpenGL support as graphic backend" ON)
+  option(WITH_OPENGL_BACKEND "Enable OpenGL support as graphics backend" ON)
   mark_as_advanced(WITH_OPENGL_BACKEND)
 else()
   set(WITH_OPENGL_BACKEND OFF)
@@ -1266,7 +1309,7 @@ endif()
 
 # Apple
 if(APPLE)
-  include(platform_apple_xcode)
+  include(build_files/cmake/platform/platform_apple_xcode.cmake)
 
   option(WITH_LEGACY_MACOS_X64_LINKER "\
 Use legacy macOS linker on x64 platform. Minutes slower, but emits fewer warnings."
@@ -1299,11 +1342,8 @@ set_and_warn_dependency(WITH_AUDASPACE WITH_OPENAL OFF)
 set_and_warn_dependency(WITH_AUDASPACE WITH_COREAUDIO OFF)
 set_and_warn_dependency(WITH_AUDASPACE WITH_JACK OFF)
 set_and_warn_dependency(WITH_AUDASPACE WITH_PULSEAUDIO OFF)
+set_and_warn_dependency(WITH_AUDASPACE WITH_SDL_AUDIO OFF)
 set_and_warn_dependency(WITH_AUDASPACE WITH_WASAPI OFF)
-
-if(NOT WITH_SDL AND WITH_GHOST_SDL)
-  message(FATAL_ERROR "WITH_GHOST_SDL requires WITH_SDL")
-endif()
 
 # python module, needs some different options
 if(WITH_PYTHON_MODULE AND WITH_PYTHON_INSTALL)
@@ -1312,6 +1352,8 @@ endif()
 
 set_and_warn_dependency(WITH_PYTHON WITH_CYCLES        OFF)
 set_and_warn_dependency(WITH_PYTHON WITH_DRACO         OFF)
+set_and_warn_dependency(WITH_PYTHON WITH_MESHOPTIMIZER OFF)
+set_and_warn_dependency(WITH_PYTHON WITH_KTX           OFF)
 set_and_warn_dependency(WITH_PYTHON WITH_MOD_FLUID     OFF)
 
 if(WITH_CYCLES)
@@ -1341,12 +1383,20 @@ endif()
 
 # don't store paths to libs for portable distribution
 if(WITH_INSTALL_PORTABLE)
-  set(CMAKE_SKIP_BUILD_RPATH TRUE)
+  # TODO: match the CMake option, this check is historic.
+  if(UNIX AND (NOT APPLE OR WITH_PYTHON_MODULE))
+    set(CMAKE_SKIP_BUILD_RPATH TRUE)
+  endif()
 endif()
 
 if(UNIX AND NOT (APPLE OR HAIKU))
   set_and_warn_incompatible(WITH_HEADLESS WITH_GHOST_WAYLAND OFF)
   set_and_warn_incompatible(WITH_HEADLESS WITH_GHOST_X11 OFF)
+  # Only the WAYLAND back-end currently reads desktop settings over DBUS.
+  if (DEFINED WITH_GHOST_DBUS)
+    set_and_warn_dependency(WITH_GHOST_WAYLAND WITH_GHOST_DBUS OFF)
+    set_and_warn_incompatible(WITH_HEADLESS WITH_GHOST_DBUS OFF)
+  endif()
 endif()
 set_and_warn_incompatible(WITH_HEADLESS WITH_GHOST_SDL OFF)
 
@@ -1428,6 +1478,13 @@ set(WITH_BINRELOC OFF)
 
 # MACOSX only, set to avoid uninitialized
 set(EXETYPE "")
+
+# WITH_SDL is uncached, depends on either WITH_SDL_AUDIO, WITH_GHOST_SDL
+# or WITH_CYCLES_STANDALONE_GUI being set.
+set(WITH_SDL OFF)
+if(WITH_SDL_AUDIO OR WITH_GHOST_SDL OR WITH_CYCLES_STANDALONE_GUI)
+  set(WITH_SDL ON)
+endif()
 
 # C/C++ flags
 set(PLATFORM_CFLAGS "")
@@ -1531,11 +1588,11 @@ endif()
 # - APPLE
 
 if(UNIX AND NOT APPLE)
-  include(platform_unix)
+  include(build_files/cmake/platform/platform_unix.cmake)
 elseif(WIN32)
-  include(platform_win32)
+  include(build_files/cmake/platform/platform_win32.cmake)
 elseif(APPLE)
-  include(platform_apple)
+  include(build_files/cmake/platform/platform_apple.cmake)
 endif()
 
 
@@ -1559,14 +1616,11 @@ if(SUPPORTS_NEON_BUILD AND SSE2NEON_FOUND)
 endif()
 
 # Test endianness and set the endian define.
-include(TestBigEndian)
-test_big_endian(_SYSTEM_BIG_ENDIAN)
-if(_SYSTEM_BIG_ENDIAN)
+if(CMAKE_CXX_BYTE_ORDER STREQUAL "BIG_ENDIAN")
   message(FATAL_ERROR "Blender does not support building on Big Endian systems" )
 else()
   add_definitions(-D__LITTLE_ENDIAN__)
 endif()
-unset(_SYSTEM_BIG_ENDIAN)
 
 if(WITH_IMAGE_OPENJPEG)
   # Special handling of Windows platform where openjpeg is always static.
@@ -1670,7 +1724,7 @@ endif()
 # -----------------------------------------------------------------------------
 # Common dependency targets
 
-include(dependency_targets)
+include(build_files/cmake/platform/dependency_targets.cmake)
 
 # -----------------------------------------------------------------------------
 # Ninja Job Limiting
@@ -2036,6 +2090,7 @@ if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
     C_AND_CXX_WARN_NO_FORMAT -Wno-format
     C_AND_CXX_WARN_NO_SWITCH -Wno-switch
     C_AND_CXX_WARN_NO_UNUSED_VARIABLE -Wno-unused-variable
+    C_AND_CXX_WARN_NO_UNUSED_BUT_SET_VARIABLE -Wno-unused-but-set-variable
     C_AND_CXX_WARN_NO_UNINITIALIZED -Wno-uninitialized
     C_AND_CXX_WARN_NO_IMPLICIT_FALLTHROUGH -Wno-implicit-fallthrough
   )
@@ -2520,16 +2575,18 @@ if(FIRST_RUN)
   info_cfg_option(WITH_INPUT_NDOF)
   info_cfg_option(WITH_INPUT_IME)
   info_cfg_option(WITH_INTERNATIONAL)
+  info_cfg_option(WITH_JOLT)
   info_cfg_option(WITH_MANIFOLD)
+  info_cfg_option(WITH_MATERIALX)
   info_cfg_option(WITH_OPENIMAGEDENOISE)
   info_cfg_option(WITH_OPENSUBDIV)
+  info_cfg_option(WITH_OPENTIMELINEIO)
   info_cfg_option(WITH_OPENVDB)
   info_cfg_option(WITH_POTRACE)
   info_cfg_option(WITH_PUGIXML)
   info_cfg_option(WITH_QUADRIFLOW)
   info_cfg_option(WITH_TBB)
   info_cfg_option(WITH_USD)
-  info_cfg_option(WITH_MATERIALX)
   info_cfg_option(WITH_XR_OPENXR)
 
   info_cfg_text("Compiler Options:")
@@ -2555,7 +2612,14 @@ if(FIRST_RUN)
     if(WITH_GHOST_WAYLAND)
       info_cfg_option(WITH_GHOST_WAYLAND_DYNLOAD)
     endif()
+    info_cfg_option(WITH_GHOST_DBUS)
+    if(WITH_GHOST_DBUS)
+      info_cfg_option(WITH_GHOST_DBUS_DYNLOAD)
+    endif()
   endif()
+
+  info_cfg_text("Profiling Options:")
+  info_cfg_option(WITH_TRACY)
 
   info_cfg_text("Image Formats:")
   info_cfg_option(WITH_IMAGE_CINEON)
@@ -2572,7 +2636,7 @@ if(FIRST_RUN)
   info_cfg_option(WITH_OPENAL)
   info_cfg_option(WITH_PULSEAUDIO)
   info_cfg_option(WITH_PULSEAUDIO_DYNLOAD)
-  info_cfg_option(WITH_SDL)
+  info_cfg_option(WITH_SDL_AUDIO)
   info_cfg_option(WITH_WASAPI)
 
   if(WITH_PYTHON)
@@ -2597,7 +2661,7 @@ if(FIRST_RUN)
   if(WITH_CYCLES)
     info_cfg_text("Rendering (Cycles):")
     info_cfg_option(WITH_CYCLES_OSL)
-    info_cfg_option(WITH_CYCLES_EMBREE)
+    info_cfg_option(WITH_EMBREE)
     info_cfg_option(WITH_CYCLES_PATH_GUIDING)
     if(NOT APPLE)
       info_cfg_option(WITH_CYCLES_DEVICE_OPTIX)

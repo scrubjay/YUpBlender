@@ -16,6 +16,7 @@
 #include "ED_transform.hh"
 #include "ED_view3d.hh"
 
+#include "DNA_curve_enums.h"
 #include "DNA_listBase.h"
 #include "DNA_windowmanager_enums.h"
 
@@ -192,6 +193,15 @@ enum eTFlag {
 
   /** Transform origin. */
   T_ORIGIN = 1 << 27,
+
+  /**
+   * The view matrix is flipped (has a negative determinant),
+   * typically from a flipped camera view.
+   *
+   * In most cases there is no need for special handling however
+   * rotation is reversed for some input calculation, which need to account for this.
+   */
+  T_VIEW_NEGATIVE = 1 << 28,
 };
 ENUM_OPERATORS(eTFlag);
 
@@ -337,6 +347,11 @@ enum {
   TFM_MODAL_NODE_FRAME = 37,
 
   TFM_MODAL_STRIP_CLAMP = 38,
+
+  TFM_MODAL_STRIP_OVERLAP_SHUFFLE = 39,
+  TFM_MODAL_STRIP_OVERLAP_RIPPLE = 40,
+  TFM_MODAL_STRIP_OVERLAP_OVERWRITE = 41,
+  TFM_MODAL_STRIP_RIPPLE_INSERT = 42,
 };
 
 /** \} */
@@ -501,8 +516,8 @@ struct TransData2D {
  * Also to unset temporary flags.
  */
 struct TransDataCurveHandleFlags {
-  uint8_t ih1, ih2;
-  uint8_t *h1, *h2;
+  eBezTriple_Handle ih1, ih2;
+  eBezTriple_Handle *h1, *h2;
 };
 
 struct TransData : public TransDataBasic {
@@ -525,6 +540,8 @@ struct TransData : public TransDataBasic {
   /** If set, copy of Object or #bPoseChannel protection. */
   short protectflag;
 };
+
+/** \} */
 
 /* -------------------------------------------------------------------- */
 /** \name Transform Types
@@ -634,7 +651,9 @@ struct MouseInput {
 
 struct TransCustomData {
   void *data;
+  /** Callback to override automatic freeing done by #use_free. Must null #data.  */
   void (*free_cb)(TransInfo *, TransDataContainer *tc, TransCustomData *custom_data);
+  /** Whether to automatically attempt to `MEM_delete_void` #data if not already null. */
   unsigned int use_free : 1;
 };
 
@@ -715,6 +734,9 @@ struct TransDataContainer {
    */
   bool use_local_mat;
 
+  /* True if the mirror modifier's clipping boundary has been hit. */
+  bool has_mirror_clipping;
+
   /** Mirror option. */
   union {
     struct {
@@ -736,7 +758,7 @@ struct TransDataContainer {
    * unselected items are then sorted by their "distance" for proportional editing.
    *
    * At the moment of writing, this map is only used in cases where `tc->data` has a mixture of
-   * selected and unselected items (as far as I, Sybren, know, just for proportial editing).
+   * selected and unselected items (as far as I, Sybren, know, just for proportional editing).
    * Without `tc->sorted_index_map`, all items in `tc->data` are expected to be selected.
    *
    * NOTE: this is set to `nullptr` by default; use one of the sorting functions below to
@@ -824,7 +846,7 @@ struct TransInfo {
   eTFlag flag;
   /** Special modifiers, by function, not key. */
   eTModifier modifiers;
-  /** Current state (running, canceled. */
+  /** Current state (running, canceled, ...). */
   eTState state;
   /** Redraw flag. */
   eRedrawFlag redraw;
@@ -959,7 +981,7 @@ struct TransInfo {
   ToolSettings *settings;
   wmTimer *animtimer;
   /** Needed so we can perform a look up for header text. */
-  wmKeyMap *keymap;
+  const wmKeyMap *keymap;
   /** Assign from the operator, or can be NULL. */
   ReportList *reports;
   /** Current mouse position. */

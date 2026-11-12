@@ -11,8 +11,8 @@
  * that benefit from accessing connectivity information.
  */
 
-#include "BLI_assert.h"
-#include "BLI_sys_types.h"
+#include "BLI_assert.hh"
+#include "BLI_sys_types.hh"
 
 #include "DNA_customdata_types.h"
 #include "DNA_listBase.h"
@@ -136,7 +136,7 @@ struct BMEdge {
   BMVert *v1, *v2;
 
   /**
-   * The list of loops around the edge, see doc-string for #BMLoop.radial_next
+   * The list of loops around the edge, see docstring for #BMLoop.radial_next
    * for an example of using this to loop over all faces used by an edge.
    */
   struct BMLoop *l;
@@ -380,6 +380,9 @@ struct BMesh {
    * - This should be cleared aggressively when there is no need
    *   to store a separate UV selection to avoid unnecessary overhead.
    * - Clear using #BM_mesh_uvselect_clear (instead of setting directly).
+   * - When in `selectmode` is set to #SCE_SELECT_FACE this should typically be false,
+   *   because there is no reason to sync two different selections in this case.
+   *   However it's not an error either. Mode switching is responsible for clearing it.
    *
    * - See `bmesh_uvselect.hh` for a more comprehensive explanation.
    */

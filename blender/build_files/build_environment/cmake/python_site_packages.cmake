@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 if(WIN32 AND BUILD_MODE STREQUAL Debug)
-  set(SITE_PACKAGES_EXTRA --global-option build --global-option --debug)
   # zstandard is determined to build and link release mode libs in a debug
   # configuration, the only way to make it happy is to bend to its will
   # and give it a library to link with.
@@ -36,7 +35,9 @@ ExternalProject_Add(external_python_site_packages
   INSTALL_COMMAND
     ${CMAKE_COMMAND} -E env
       PIP_CONSTRAINT=${PIP_CONSTRAINT_FILE}
+      PIP_BUILD_CONSTRAINT=${PIP_CONSTRAINT_FILE}
       ${PYTHON_BINARY} -m pip install --no-cache-dir ${SITE_PACKAGES_EXTRA}
+      pip==${PYTHON_PIP_VERSION}
       setuptools==${SETUPTOOLS_VERSION}
       meson-python==${MESON_PYTHON_VERSION}
       packaging==${PACKAGING_VERSION}
@@ -48,11 +49,12 @@ ExternalProject_Add(external_python_site_packages
       requests==${REQUESTS_VERSION}
       autopep8==${AUTOPEP8_VERSION}
       pycodestyle==${PYCODESTYLE_VERSION}
+      docutils==${DOCUTILS_VERSION}
       meson==${MESON_VERSION}
       attrs==${ATTRS_VERSION}
       cattrs==${CATTRS_VERSION}
-      fastjsonschema==${FASTJSONSCHEMA_VERSION}
       typing-extensions==${TYPING_EXTENSIONS_VERSION}
+      tomli-w==${TOMLI_W_VERSION}
       --no-binary :all:
 )
 

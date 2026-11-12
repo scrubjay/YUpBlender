@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup edsculpt
+ */
+
 #include "editors/sculpt_paint/mesh/brushes/brushes.hh"
 #include "editors/sculpt_paint/mesh/mesh_brush_common.hh"
 #include "editors/sculpt_paint/mesh/sculpt_automask.hh"
@@ -16,6 +20,8 @@
 #include "BLI_enumerable_thread_specific.hh"
 #include "BLI_math_base.hh"
 #include "BLI_task.hh"
+
+#include "PRF_profile.hh"
 
 #include "editors/sculpt_paint/mesh/sculpt_face_set.hh"
 #include "editors/sculpt_paint/mesh/sculpt_intern.hh"
@@ -41,6 +47,7 @@ static void calc_face_normals(const OffsetIndices<int> faces,
                               const Span<int> face_indices,
                               const MutableSpan<float3> normals)
 {
+  PRF_scope(ProfileCategory::Editor);
   BLI_assert(face_indices.size() == normals.size());
 
   for (const int i : face_indices.index_range()) {
@@ -54,6 +61,7 @@ BLI_NOINLINE static void apply_face_set(const int face_set_id,
                                         const Span<float> factors,
                                         const MutableSpan<int> face_sets)
 {
+  PRF_scope(ProfileCategory::Editor);
   BLI_assert(face_indices.size() == factors.size());
 
   for (const int i : face_indices.index_range()) {
@@ -108,11 +116,11 @@ static void calc_faces(const Depsgraph &depsgraph,
   if (cache.automasking) {
     const OffsetIndices<int> faces = mesh.faces();
     const Span<int> corner_verts = mesh.corner_verts();
-    auto_mask::calc_face_factors(
+    auto_mask::calc_interpolated_face_factors(
         depsgraph, object, faces, corner_verts, *cache.automasking, node, face_indices, factors);
   }
 
-  calc_brush_texture_factors(ss, brush, face_centers, factors);
+  calc_brush_texture_factors(PaintMode::Sculpt, ss, brush, face_centers, factors);
   scale_factors(factors, strength);
 
   apply_face_set(face_set_id, face_indices, factors, face_sets);
@@ -194,7 +202,7 @@ static void calc_grids(const Depsgraph &depsgraph,
 
   auto_mask::calc_grids_factors(depsgraph, object, cache.automasking.get(), node, grids, factors);
 
-  calc_brush_texture_factors(ss, brush, positions, factors);
+  calc_brush_texture_factors(PaintMode::Sculpt, ss, brush, positions, factors);
   scale_factors(factors, strength);
 
   tls.face_indices.resize(positions.size());
@@ -286,7 +294,7 @@ static void calc_bmesh(Object &object,
   apply_hardness_to_distances(cache, distances);
   calc_brush_strength_factors(cache, brush, distances, factors);
 
-  calc_brush_texture_factors(ss, brush, positions, factors);
+  calc_brush_texture_factors(PaintMode::Sculpt, ss, brush, positions, factors);
   scale_factors(factors, strength);
 
   apply_face_set(face_set_id, faces, factors, cd_offset);
@@ -328,6 +336,7 @@ void do_draw_face_sets_brush(const Depsgraph &depsgraph,
                              Object &object,
                              const IndexMask &node_mask)
 {
+  PRF_scope(ProfileCategory::Editor);
   const Brush &brush = *BKE_paint_brush_for_read(&sd.paint);
 
   if (object.runtime->sculpt_session->cache->paint_face_set == face_set_none_id) {

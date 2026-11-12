@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup geo
+ */
+
 #include "GEO_join_geometries.hh"
 #include "GEO_realize_instances.hh"
 
@@ -10,9 +14,11 @@
 #include "DNA_object_types.h"
 
 #include "BLI_array_utils.hh"
-#include "BLI_listbase.h"
+#include "BLI_listbase.hh"
 #include "BLI_math_matrix.hh"
 #include "BLI_noise.hh"
+
+#include "PRF_profile.hh"
 
 #include "BKE_attribute.hh"
 #include "BKE_curves.hh"
@@ -803,7 +809,7 @@ static void gather_realize_tasks_recursive(GatherTasksInfo &gather_info,
         const auto &pointcloud_component = *static_cast<const bke::PointCloudComponent *>(
             component);
         const PointCloud *pointcloud = pointcloud_component.get();
-        if (pointcloud != nullptr && pointcloud->totpoint > 0) {
+        if (pointcloud != nullptr) {
           const int pointcloud_index = gather_info.pointclouds.order.index_of(pointcloud);
           const PointCloudRealizeInfo &pointcloud_info =
               gather_info.pointclouds.realize_info[pointcloud_index];
@@ -1092,6 +1098,7 @@ static OrderedAttributes gather_generic_instance_attributes_to_propagate(
     const RealizeInstancesOptions &options,
     const VariedDepthOptions &varied_depth_option)
 {
+  PRF_scope(ProfileCategory::Default);
   bke::GeometrySet::GatheredAttributes attributes_to_propagate = gather_attributes_to_propagate(
       in_geometry_set, bke::GeometryComponent::Type::Instance, options, varied_depth_option);
   OrderedAttributes ordered_attributes;
@@ -1118,6 +1125,7 @@ static void execute_instances_tasks(
     return;
   }
 
+  PRF_scope(ProfileCategory::Default);
   Array<int> offsets_data(src_components.size() + 1);
   for (const int component_index : src_components.index_range()) {
     const bke::InstancesComponent &src_component = static_cast<const bke::InstancesComponent &>(
@@ -1254,9 +1262,7 @@ static void gather_pointclouds_to_realize(const bke::GeometrySet &geometry_set,
                                           VectorSet<const PointCloud *> &r_pointclouds)
 {
   if (const PointCloud *pointcloud = geometry_set.get_pointcloud()) {
-    if (pointcloud->totpoint > 0) {
-      r_pointclouds.add(pointcloud);
-    }
+    r_pointclouds.add(pointcloud);
   }
   if (const Instances *instances = geometry_set.get_instances()) {
     instances->foreach_referenced_geometry([&](const bke::GeometrySet &instance_geometry_set) {
@@ -1269,6 +1275,7 @@ static AllPointCloudsInfo preprocess_pointclouds(const bke::GeometrySet &geometr
                                                  const RealizeInstancesOptions &options,
                                                  const VariedDepthOptions &varied_depth_option)
 {
+  PRF_scope(ProfileCategory::Default);
   AllPointCloudsInfo info;
   info.attributes = gather_generic_pointcloud_attributes_to_propagate(geometry_set,
                                                                       options,
@@ -1382,6 +1389,7 @@ static void execute_realize_pointcloud_tasks(const RealizeInstancesOptions &opti
     return;
   }
 
+  PRF_scope(ProfileCategory::Default);
   if (tasks.size() == 1) {
     const RealizePointCloudTask &task = tasks.first();
     PointCloud *new_points = BKE_pointcloud_copy_for_eval(task.pointcloud_info->pointcloud);
@@ -1402,12 +1410,12 @@ static void execute_realize_pointcloud_tasks(const RealizeInstancesOptions &opti
   }
 
   /* Allocate new point cloud. */
-  PointCloud *dst_pointcloud = BKE_pointcloud_new_nomain(tot_points);
+  const RealizePointCloudTask &first_task = tasks.first();
+  const PointCloud &first_pointcloud = *first_task.pointcloud_info->pointcloud;
+  PointCloud *dst_pointcloud = BKE_pointcloud_new_nomain(first_pointcloud.type, tot_points);
   r_result.geometry.replace_pointcloud(dst_pointcloud);
   bke::MutableAttributeAccessor dst_attributes = dst_pointcloud->attributes_for_write();
 
-  const RealizePointCloudTask &first_task = tasks.first();
-  const PointCloud &first_pointcloud = *first_task.pointcloud_info->pointcloud;
   dst_pointcloud->mat = MEM_dupalloc(first_pointcloud.mat);
   dst_pointcloud->totcol = first_pointcloud.totcol;
 
@@ -1530,6 +1538,7 @@ static AllMeshesInfo preprocess_meshes(const bke::GeometrySet &geometry_set,
                                        const RealizeInstancesOptions &options,
                                        const VariedDepthOptions &varied_depth_option)
 {
+  PRF_scope(ProfileCategory::Default);
   AllMeshesInfo info;
   info.attributes = gather_generic_mesh_attributes_to_propagate(
       geometry_set,
@@ -1986,11 +1995,15 @@ static void execute_realize_mesh_tasks(const RealizeInstancesOptions &options,
     return;
   }
 
+  PRF_scope(ProfileCategory::Default);
   if (tasks.size() == 1) {
     const RealizeMeshTask &task = tasks.first();
     Mesh *new_mesh = BKE_mesh_copy_for_eval(*task.mesh_info->mesh);
     if (!skip_transform(task.transform)) {
       bke::mesh_transform(*new_mesh, task.transform, false);
+    }
+    if (options.preserve_normals && math::is_negative(task.transform)) {
+      bke::mesh_flip_faces(*new_mesh, IndexMask(new_mesh->faces_num));
     }
     add_instance_attributes_to_single_geometry(
         ordered_attributes, task.attribute_fallbacks, new_mesh->attributes_for_write());
@@ -2045,8 +2058,7 @@ static void execute_realize_mesh_tasks(const RealizeInstancesOptions &options,
   const Mesh &first_mesh = *first_task.mesh_info->mesh;
   BKE_mesh_copy_parameters_for_eval(dst_mesh, &first_mesh);
 
-  BLI_assert(BLI_listbase_count(&dst_mesh->vertex_group_names) ==
-             BLI_listbase_count(&first_mesh.vertex_group_names));
+  BLI_assert(dst_mesh->vertex_group_names.count() == first_mesh.vertex_group_names.count());
   copy_vertex_group_names(
       *dst_mesh, ordered_attributes, all_meshes_info.order.as_span().drop_front(1));
   dst_mesh->vertex_group_active_index = first_mesh.vertex_group_active_index;
@@ -2134,6 +2146,29 @@ static void execute_realize_mesh_tasks(const RealizeInstancesOptions &options,
   vert_ids.finish();
   custom_normals.finish();
 
+  if (options.preserve_normals) {
+    IndexMaskMemory memory;
+    const IndexMask mirrored_tasks = IndexMask::from_predicate(
+        tasks.index_range(),
+        memory,
+        [&](const int task_i) { return math::is_negative(tasks[task_i].transform); },
+        exec_mode::grain_size(1024));
+    if (!mirrored_tasks.is_empty()) {
+      Array<IndexMask::Initializer> mirrored_face_ranges(mirrored_tasks.size());
+      mirrored_tasks.foreach_index(
+          [&](const int task_i, const int pos) {
+            const RealizeMeshTask &task = tasks[task_i];
+            mirrored_face_ranges[pos] = IndexRange(task.start_indices.face,
+                                                   task.mesh_info->mesh->faces_num);
+          },
+          exec_mode::grain_size(1024));
+      const IndexMask mirrored_faces = IndexMask::from_initializers(mirrored_face_ranges, memory);
+      bke::mesh_flip_faces(*dst_mesh, mirrored_faces);
+    }
+  }
+
+  bke::mesh_ensure_default_uv_map(*dst_mesh);
+
   if (all_meshes_info.no_loose_edges_hint) {
     dst_mesh->tag_loose_edges_none();
   }
@@ -2204,6 +2239,7 @@ static AllCurvesInfo preprocess_curves(const bke::GeometrySet &geometry_set,
                                        const RealizeInstancesOptions &options,
                                        const VariedDepthOptions &varied_depth_option)
 {
+  PRF_scope(ProfileCategory::Default);
   AllCurvesInfo info;
   info.attributes = gather_generic_curve_attributes_to_propagate(geometry_set,
                                                                  options,
@@ -2441,6 +2477,7 @@ static void execute_realize_curve_tasks(const RealizeInstancesOptions &options,
     return;
   }
 
+  PRF_scope(ProfileCategory::Default);
   if (tasks.size() == 1) {
     const RealizeCurveTask &task = tasks.first();
     Curves *new_curves = BKE_curves_copy_for_eval(task.curve_info->curves);
@@ -2620,6 +2657,7 @@ static AllGreasePencilsInfo preprocess_grease_pencils(
     const RealizeInstancesOptions &options,
     const VariedDepthOptions &varied_depth_options)
 {
+  PRF_scope(ProfileCategory::Default);
   AllGreasePencilsInfo info;
   info.attributes = gather_generic_grease_pencil_attributes_to_propagate(
       geometry_set, options, varied_depth_options);
@@ -2726,6 +2764,7 @@ static void execute_realize_grease_pencil_tasks(
     return;
   }
 
+  PRF_scope(ProfileCategory::Default);
   if (tasks.size() == 1) {
     const RealizeGreasePencilTask &task = tasks.first();
     GreasePencil *new_gp = BKE_grease_pencil_copy_for_eval(task.grease_pencil_info->grease_pencil);
@@ -2801,6 +2840,9 @@ static void execute_realize_grease_pencil_tasks(
     dst_attribute.finish();
   }
 }
+
+/** \} */
+
 /* -------------------------------------------------------------------- */
 /** \name Edit Data
  * \{ */
@@ -2812,6 +2854,7 @@ static void execute_realize_edit_data_tasks(const Span<RealizeEditDataTask> task
     return;
   }
 
+  PRF_scope(ProfileCategory::Default);
   auto &component = r_realized_geometry.get_component_for_write<bke::GeometryComponentEditData>();
   for (const RealizeEditDataTask &task : tasks) {
     if (!component.curves_edit_hints_) {
@@ -2853,7 +2896,8 @@ static void remove_id_attribute_from_instances(bke::GeometrySet &geometry_set)
   }
 }
 
-/** Propagate instances from the old geometry set to the new geometry set if they are not
+/**
+ * Propagate instances from the old geometry set to the new geometry set if they are not
  * realized.
  */
 static void propagate_instances_to_keep(const bke::GeometrySet &geometry_set,
@@ -2896,6 +2940,7 @@ RealizeInstancesResult realize_instances(bke::GeometrySet geometry_set,
                                          const RealizeInstancesOptions &options,
                                          const VariedDepthOptions &varied_depth_option)
 {
+  PRF_scope(ProfileCategory::Default);
   /* The algorithm works in three steps:
    * 1. Preprocess each unique geometry that is instanced (e.g. each `Mesh`).
    * 2. Gather "tasks" that need to be executed to realize the instances. Each task corresponds
@@ -2950,8 +2995,15 @@ RealizeInstancesResult realize_instances(bke::GeometrySet geometry_set,
 
   initialize_curves_builtin_attribute_defaults(all_curves_info, attribute_fallbacks);
 
-  gather_realize_tasks_recursive(
-      gather_info, 0, VariedDepthOptions::MAX_DEPTH, geometry_set, transform, attribute_fallbacks);
+  {
+    PRF_scope_with_name("gather_realize_tasks_recursive", ProfileCategory::Default);
+    gather_realize_tasks_recursive(gather_info,
+                                   0,
+                                   VariedDepthOptions::MAX_DEPTH,
+                                   geometry_set,
+                                   transform,
+                                   attribute_fallbacks);
+  }
 
   RealizeInstancesResult result;
   execute_instances_tasks(gather_info.instances.instances_components_to_merge,

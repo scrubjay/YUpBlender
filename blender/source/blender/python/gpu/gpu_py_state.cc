@@ -23,7 +23,7 @@
 #include "gpu_py_framebuffer.hh"
 #include "gpu_py_state.hh" /* own include */
 
-/* Doc-string Literal types. */
+/* Docstring Literal types. */
 #define PYDOC_BLEND_LITERAL \
   "Literal['NONE', 'ALPHA', 'ALPHA_PREMULT', 'ADDITIVE', " \
   "'ADDITIVE_PREMULT', 'MULTIPLY', 'SUBTRACT', 'INVERT']"
@@ -253,7 +253,17 @@ static PyObject *pygpu_state_viewport_set(PyObject * /*self*/, PyObject *args)
   BPYGPU_IS_INIT_OR_ERROR_OBJ;
 
   int x, y, xsize, ysize;
-  if (!PyArg_ParseTuple(args, "iiii:viewport_set", &x, &y, &xsize, &ysize)) {
+  if (!PyArg_ParseTuple(args,
+                        "i" /* `x` */
+                        "i" /* `y` */
+                        "i" /* `xsize` */
+                        "i" /* `ysize` */
+                        ":viewport_set",
+                        &x,
+                        &y,
+                        &xsize,
+                        &ysize))
+  {
     return nullptr;
   }
 
@@ -307,7 +317,17 @@ static PyObject *pygpu_state_scissor_set(PyObject * /*self*/, PyObject *args)
   BPYGPU_IS_INIT_OR_ERROR_OBJ;
 
   int x, y, xsize, ysize;
-  if (!PyArg_ParseTuple(args, "iiii:scissor_set", &x, &y, &xsize, &ysize)) {
+  if (!PyArg_ParseTuple(args,
+                        "i" /* `x` */
+                        "i" /* `y` */
+                        "i" /* `xsize` */
+                        "i" /* `ysize` */
+                        ":scissor_set",
+                        &x,
+                        &y,
+                        &xsize,
+                        &ysize))
+  {
     return nullptr;
   }
 
@@ -414,6 +434,12 @@ PyDoc_STRVAR(
     "\n"
     "   Specify the diameter of rasterized points.\n"
     "\n"
+    "   When ``program_point_size_set(False)`` is set, this sets the ``size``\n"
+    "   uniform of point shaders. Any value set by ``uniform_float(\"size\", ...)``\n"
+    "   on a point shader will be overwritten by this function. Use\n"
+    "   ``program_point_size_set(True)`` to disable this override and control\n"
+    "   point size via ``gl_PointSize`` in the vertex shader.\n"
+    "\n"
     "   :param size: New diameter.\n"
     "   :type size: float\n");
 static PyObject *pygpu_state_point_size_set(PyObject * /*self*/, PyObject *value)
@@ -449,7 +475,17 @@ static PyObject *pygpu_state_color_mask_set(PyObject * /*self*/, PyObject *args)
   BPYGPU_IS_INIT_OR_ERROR_OBJ;
 
   int r, g, b, a;
-  if (!PyArg_ParseTuple(args, "pppp:color_mask_set", &r, &g, &b, &a)) {
+  if (!PyArg_ParseTuple(args,
+                        "p" /* `r` */
+                        "p" /* `g` */
+                        "p" /* `b` */
+                        "p" /* `a` */
+                        ":color_mask_set",
+                        &r,
+                        &g,
+                        &b,
+                        &a))
+  {
     return nullptr;
   }
 
@@ -506,10 +542,12 @@ PyDoc_STRVAR(
     pygpu_state_program_point_size_set_doc,
     ".. function:: program_point_size_set(enable)\n"
     "\n"
-    "   If enabled, the derived point size is taken from the (potentially clipped) "
-    "shader builtin gl_PointSize.\n"
+    "   When enabled (True), point size is taken from the shader builtin\n"
+    "   ``gl_PointSize``. When disabled (False), the global state value can\n"
+    "   be applied to the shader ``size`` uniform, overwriting any user-set\n"
+    "   value.\n"
     "\n"
-    "   :param enable: True for shader builtin gl_PointSize.\n"
+    "   :param enable: True to use shader ``gl_PointSize``, False for global state.\n"
     "   :type enable: bool\n");
 static PyObject *pygpu_state_program_point_size_set(PyObject * /*self*/, PyObject *value)
 {

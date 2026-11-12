@@ -28,30 +28,18 @@
 
 CCL_NAMESPACE_BEGIN
 
-#ifdef _WIN32
 double time_dt()
 {
-  __int64 frequency, counter;
-
-  QueryPerformanceFrequency((LARGE_INTEGER *)&frequency);
-  QueryPerformanceCounter((LARGE_INTEGER *)&counter);
-
-  return (double)counter / (double)frequency;
+  return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch())
+      .count();
 }
 
+#ifdef _WIN32
 void time_sleep(const double t)
 {
   Sleep((int)(t * 1000));
 }
 #else
-double time_dt()
-{
-  struct timeval now;
-  gettimeofday(&now, nullptr);
-
-  return now.tv_sec + now.tv_usec * 1e-6;
-}
-
 /* sleep t seconds */
 void time_sleep(double t)
 {
@@ -107,21 +95,17 @@ uint64_t time_fast_tick(uint32_t *last_cpu)
 }
 uint64_t time_fast_frequency()
 {
-  static bool initialized = false;
-  static uint64_t frequency;
-
   /* Unfortunately TSC does not provide a easily accessible frequency value, so roughly calibrate
    * by sleeping a millisecond. Not ideal, but good enough for our purposes. */
-  if (!initialized) {
+  static const uint64_t frequency = []() {
     uint32_t cpu;
     uint64_t start_tick = time_fast_tick(&cpu);
     double start_precise = time_dt();
     time_sleep(0.001);
     uint64_t end_tick = time_fast_tick(&cpu);
     double end_precise = time_dt();
-    frequency = uint64_t(double(end_tick - start_tick) / (end_precise - start_precise));
-    initialized = true;
-  }
+    return uint64_t(double(end_tick - start_tick) / (end_precise - start_precise));
+  }();
 
   return frequency;
 }

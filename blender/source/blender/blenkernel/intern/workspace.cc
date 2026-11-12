@@ -12,10 +12,10 @@
 
 #include "DNA_listBase.h"
 
-#include "BLI_listbase.h"
-#include "BLI_string.h"
+#include "BLI_listbase.hh"
+#include "BLI_string.hh"
 #include "BLI_string_utils.hh"
-#include "BLI_utildefines.h"
+#include "BLI_utildefines.hh"
 
 #include "BLT_translation.hh"
 
@@ -58,11 +58,11 @@ static void workspace_free_data(ID *id)
 
   BKE_workspace_relations_free(&workspace->hook_layout_relations);
 
-  BLI_freelistN(&workspace->owner_ids);
-  BLI_freelistN(&workspace->layouts);
+  workspace->owner_ids.free_no_destruct();
+  workspace->layouts.free_no_destruct();
 
-  while (!BLI_listbase_is_empty(&workspace->tools)) {
-    BKE_workspace_tool_remove(workspace, static_cast<bToolRef *>(workspace->tools.first));
+  while (!workspace->tools.is_empty()) {
+    BKE_workspace_tool_remove(workspace, workspace->tools.first());
   }
 
   BKE_workspace_status_clear(workspace);
@@ -92,16 +92,16 @@ static void workspace_copy_data(
   BLI_duplicatelist(&workspace_dst->owner_ids, &workspace_src->owner_ids);
 
   /* TODO(@ideasman42): tools */
-  BLI_listbase_clear(&workspace_dst->tools);
+  workspace_dst->tools.clear_no_delete();
 
-  BLI_listbase_clear(&workspace_dst->hook_layout_relations);
+  workspace_dst->hook_layout_relations.clear_no_delete();
 
   /* WARNING! This is effectively duplicating other IDs (bScreen ones) inside the copying callback
    * of a workspace.
    *
    * This is similar to what is already done with ShapeKeys.
    */
-  BLI_listbase_clear(&workspace_dst->layouts);
+  workspace_dst->layouts.clear_no_delete();
   for (WorkSpaceLayout &layout_src : workspace_src->layouts) {
     if (flag & LIB_ID_COPY_SCREEN) {
       BKE_workspace_layout_add_from_layout(bmain, *workspace_dst, layout_src, flag);
@@ -159,11 +159,11 @@ static void workspace_blend_read_data(BlendDataReader *reader, ID *id)
   for (WorkSpaceDataRelation &relation : workspace->hook_layout_relations) {
     /* Parent pointer does not belong to workspace data and is therefore restored in lib_link step
      * of window manager. */
-    /* FIXME: Should not use that untyped #BLO_read_data_address call, especially since it's
+    /* FIXME: Should not use that untyped #BLO_read_raw_address call, especially since it's
      * reference-counting the matching data in readfile code. Problem currently is that there is no
      * type info available for this void pointer (_should_ be pointing to a #WorkSpaceLayout ?), so
-     * #BLO_read_get_new_data_address_no_us cannot be used here. */
-    BLO_read_data_address(reader, &relation.value);
+     * #BLO_read_struct_no_us cannot be used here. */
+    BLO_read_raw_address(reader, &relation.value);
   }
 
   for (bToolRef &tref : workspace->tools) {
@@ -244,6 +244,7 @@ IDTypeInfo IDType_ID_WS = {
     .foreach_cache = nullptr,
     .foreach_path = nullptr,
     .foreach_working_space_color = nullptr,
+    .foreach_asset_weak_reference = nullptr,
     .owner_pointer_get = nullptr,
 
     .blend_write = workspace_blend_write,
@@ -348,7 +349,7 @@ static bool UNUSED_FUNCTION(workspaces_is_screen_used)
 #endif
     (const Main *bmain, bScreen *screen)
 {
-  for (WorkSpace *workspace = static_cast<WorkSpace *>(bmain->workspaces.first); workspace;
+  for (WorkSpace *workspace = bmain->workspaces.first(); workspace;
        workspace = static_cast<WorkSpace *>(workspace->id.next))
   {
     if (workspace_layout_find_exec(workspace, screen)) {
@@ -374,9 +375,7 @@ WorkSpace *BKE_workspace_add(Main *bmain, const char *name)
 
 void BKE_workspace_remove(Main *bmain, WorkSpace *workspace)
 {
-  for (WorkSpaceLayout *layout = static_cast<WorkSpaceLayout *>(workspace->layouts.first),
-                       *layout_next;
-       layout;
+  for (WorkSpaceLayout *layout = workspace->layouts.first(), *layout_next; layout;
        layout = layout_next)
   {
     layout_next = layout->next;
@@ -390,11 +389,10 @@ WorkSpaceInstanceHook *BKE_workspace_instance_hook_create(const Main *bmain, con
   WorkSpaceInstanceHook *hook = MEM_new<WorkSpaceInstanceHook>(__func__);
 
   /* set an active screen-layout for each possible window/workspace combination */
-  for (WorkSpace *workspace = static_cast<WorkSpace *>(bmain->workspaces.first); workspace;
+  for (WorkSpace *workspace = bmain->workspaces.first(); workspace;
        workspace = static_cast<WorkSpace *>(workspace->id.next))
   {
-    BKE_workspace_active_layout_set(
-        hook, winid, workspace, static_cast<WorkSpaceLayout *>(workspace->layouts.first));
+    BKE_workspace_active_layout_set(hook, winid, workspace, workspace->layouts.first());
   }
 
   return hook;
@@ -404,14 +402,13 @@ void BKE_workspace_instance_hook_free(const Main *bmain, WorkSpaceInstanceHook *
   /* workspaces should never be freed before wm (during which we call this function).
    * However, when running in background mode, loading a blend file may allocate windows (that need
    * to be freed) without creating workspaces. This happens in BlendfileLoadingBaseTest. */
-  BLI_assert(!BLI_listbase_is_empty(&bmain->workspaces) || G.background);
+  BLI_assert(!bmain->workspaces.is_empty() || G.background);
 
   /* Free relations for this hook */
-  for (WorkSpace *workspace = static_cast<WorkSpace *>(bmain->workspaces.first); workspace;
+  for (WorkSpace *workspace = bmain->workspaces.first(); workspace;
        workspace = static_cast<WorkSpace *>(workspace->id.next))
   {
-    for (WorkSpaceDataRelation *relation = static_cast<WorkSpaceDataRelation *>(
-                                   workspace->hook_layout_relations.first),
+    for (WorkSpaceDataRelation *relation = workspace->hook_layout_relations.first(),
                                *relation_next;
          relation;
          relation = relation_next)
@@ -485,10 +482,7 @@ void BKE_workspace_layout_remove(Main *bmain, WorkSpace *workspace, WorkSpaceLay
 
 void BKE_workspace_relations_free(ListBaseT<WorkSpaceDataRelation> *relation_list)
 {
-  for (WorkSpaceDataRelation *
-           relation = static_cast<WorkSpaceDataRelation *>(relation_list->first),
-          *relation_next;
-       relation;
+  for (WorkSpaceDataRelation *relation = relation_list->first(), *relation_next; relation;
        relation = relation_next)
   {
     relation_next = relation->next;
@@ -527,7 +521,7 @@ WorkSpaceLayout *BKE_workspace_layout_find_global(const Main *bmain,
     *r_workspace = nullptr;
   }
 
-  for (WorkSpace *workspace = static_cast<WorkSpace *>(bmain->workspaces.first); workspace;
+  for (WorkSpace *workspace = bmain->workspaces.first(); workspace;
        workspace = static_cast<WorkSpace *>(workspace->id.next))
   {
     WorkSpaceLayout *layout = workspace_layout_find_exec(workspace, screen);
@@ -623,7 +617,7 @@ bool BKE_workspace_owner_id_check(const WorkSpace *workspace, const char *owner_
 void BKE_workspace_id_tag_all_visible(Main *bmain, int tag)
 {
   BKE_main_id_tag_listbase(&bmain->workspaces.cast<ID>(), tag, false);
-  wmWindowManager *wm = static_cast<wmWindowManager *>(bmain->wm.first);
+  wmWindowManager *wm = bmain->wm.first();
   for (wmWindow &win : wm->windows) {
     WorkSpace *workspace = BKE_workspace_active_get(win.workspace_hook);
     workspace->id.tag |= tag;

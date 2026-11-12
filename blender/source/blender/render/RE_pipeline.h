@@ -16,11 +16,11 @@ class GHOST_IContext;
 
 namespace blender {
 
-namespace gpu {
-class Texture;
+namespace bke {
+class BlenderProject;
 }
 
-struct ExrHandle;
+struct ExrReadHandle;
 struct ImBuf;
 struct Image;
 struct ImageFormatData;
@@ -170,7 +170,8 @@ struct RenderStats {
 /**
  * The owner is a unique identifier for the render, either an original scene
  * datablock for regular renders, or an area for preview renders.
- * Calling a new render with an existing owner frees the existing render. */
+ * Calling a new render with an existing owner frees the existing render.
+ */
 struct Render *RE_NewRender(const void *owner);
 struct Render *RE_GetRender(const void *owner);
 
@@ -265,10 +266,9 @@ void RE_ClearResult(struct Render *re);
 struct RenderStats *RE_GetStats(struct Render *re);
 
 /**
- * Caller is responsible for allocating `rect` in correct size!
+ * Caller is responsible for allocating `dst` in correct size!
  */
-void RE_ResultGet32(struct Render *re, unsigned int *rect);
-void RE_ResultGetFloat(struct Render *re, float *rect);
+void RE_ResultGet32(Render *re, uint8_t *dst);
 
 bool RE_ResultIsMultiView(struct RenderResult *rr);
 
@@ -317,7 +317,7 @@ void RE_create_render_pass(struct RenderResult *rr,
  */
 void RE_InitState(struct Render *re,
                   struct Render *source,
-                  struct RenderData *rd,
+                  const struct RenderData *rd,
                   ListBaseT<ViewLayer> *render_layers,
                   struct ViewLayer *single_layer,
                   int winx,
@@ -350,8 +350,9 @@ void RE_init_threadcount(Render *re);
 
 bool RE_WriteRenderViewsMovie(struct ReportList *reports,
                               struct RenderResult *rr,
+                              const bke::BlenderProject *project,
                               struct Scene *scene,
-                              struct RenderData *rd,
+                              const struct RenderData *rd,
                               struct MovieWriter **movie_writers,
                               int totvideos,
                               bool preview);
@@ -411,11 +412,11 @@ void RE_PreviewRender(struct Render *re, struct Main *bmain, struct Scene *scene
 bool RE_ReadRenderResult(struct Scene *scene, struct Scene *scenode);
 
 struct RenderResult *RE_MultilayerConvert(
-    ExrHandle *exrhandle, const char *colorspace, bool predivide, int rectx, int recty);
+    ExrReadHandle *exrhandle, const char *colorspace, bool predivide, int rectx, int recty);
 
-/**
+/*
  * Display, event callbacks and GPU contexts
- * */
+ */
 
 void RE_display_init(Render *re);
 void RE_display_ensure_gpu_context(Render *re);
@@ -424,7 +425,7 @@ void RE_display_free(Render *re);
 
 void RE_display_update_cb(struct Render *re,
                           void *handle,
-                          void (*f)(void *handle, RenderResult *rr, struct rcti *rect));
+                          void (*f)(void *handle, RenderResult *rr));
 void RE_stats_draw_cb(struct Render *re, void *handle, void (*f)(void *handle, RenderStats *rs));
 void RE_progress_cb(struct Render *re, void *handle, void (*f)(void *handle, float));
 void RE_draw_lock_cb(struct Render *re, void *handle, void (*f)(void *handle, bool lock));
@@ -439,7 +440,7 @@ void RE_current_scene_update_cb(struct Render *re,
 GHOST_IContext *RE_system_gpu_context_get(Render *re);
 void *RE_blender_gpu_context_ensure(Render *re);
 
-bool RE_seq_render_active(struct Scene *scene, struct RenderData *rd);
+bool RE_seq_render_active(struct Scene *scene, const struct RenderData *rd);
 
 /**
  * Used in the interface to decide whether to show layers or passes.
@@ -457,11 +458,6 @@ struct RenderPass *RE_pass_find_by_name(struct RenderLayer *rl,
  * sharing with other users.
  */
 void RE_pass_set_buffer_data(struct RenderPass *pass, float *data);
-
-/**
- * Ensure a GPU texture corresponding to the render buffer data exists.
- */
-gpu::Texture *RE_pass_ensure_gpu_texture_cache(struct Render *re, struct RenderPass *rpass);
 
 void RE_GetCameraWindow(struct Render *re, const struct Object *camera, float r_winmat[4][4]);
 /**
@@ -481,6 +477,10 @@ void RE_GetWindowMatrixWithOverscan(bool is_ortho,
 
 struct Scene *RE_GetScene(struct Render *re);
 void RE_SetScene(struct Render *re, struct Scene *sce);
+
+/* When rendering an animation, saving files is required, either through scene saving or through
+ * a compositor File Output node. */
+bool RE_disable_save_output_allowed(const bool is_animation, Scene &scene, ReportList *reports);
 
 bool RE_is_rendering_allowed(const Main &bmain,
                              struct Scene *scene,

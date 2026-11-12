@@ -5,8 +5,9 @@
 #include "BKE_attribute_math.hh"
 
 #include "BLI_array.hh"
+#include "BLI_array_utils.hh"
 #include "BLI_generic_virtual_array.hh"
-#include "BLI_math_vector.h"
+#include "BLI_math_vector_c.hh"
 #include "BLI_vector.hh"
 #include "BLI_virtual_array.hh"
 
@@ -20,8 +21,6 @@
 #include "UI_interface_layout.hh"
 #include "UI_resources.hh"
 
-#include <numeric>
-
 namespace blender::nodes::node_geo_field_average_cc {
 
 static void node_declare(NodeDeclarationBuilder &b)
@@ -31,23 +30,25 @@ static void node_declare(NodeDeclarationBuilder &b)
   if (node != nullptr) {
     const eCustomDataType data_type = eCustomDataType(node->custom1);
     b.add_input(data_type, "Value"_ustr)
-        .supports_field()
+        .structure_type(StructureType::Field)
         .description("The values the mean and median will be calculated from");
   }
 
   b.add_input<decl::Int>("Group ID"_ustr, "Group Index"_ustr)
-      .supports_field()
+      .structure_type(StructureType::Field)
       .hide_value()
       .description("An index used to group values together for multiple separate operations");
 
   if (node != nullptr) {
     const eCustomDataType data_type = eCustomDataType(node->custom1);
     b.add_output(data_type, "Mean"_ustr)
-        .field_source_reference_all()
+        .structure_type(StructureType::Field)
+        .propagate_references()
         .description("The sum of all values in each group divided by the size of said group");
     b.add_output(data_type, "Median"_ustr)
         .translation_context(BLT_I18NCONTEXT_ID_NODETREE)
-        .field_source_reference_all()
+        .structure_type(StructureType::Field)
+        .propagate_references()
         .description(
             "The middle value in each group when all values are sorted from lowest to highest");
   }
@@ -192,7 +193,7 @@ class FieldAverageInput final : public bke::GeometryFieldInput {
 
       if (operation_ == Operation::Mean) {
         if (group_indices.is_single()) {
-          const T mean = std::reduce(values.begin(), values.end(), T()) / domain_size;
+          const T mean = array_utils::compute_sum<T>(values) / domain_size;
           g_outputs = VArray<T>::from_single(mean, domain_size);
         }
         else {

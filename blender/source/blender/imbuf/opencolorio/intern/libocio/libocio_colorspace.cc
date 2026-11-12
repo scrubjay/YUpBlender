@@ -7,10 +7,6 @@
 #include "error_handling.hh"
 #include "intern/cpu_processor_cache.hh"
 
-#include <cmath>
-
-#include "BLI_math_color.h"
-
 #include "CLG_log.h"
 
 #include "../description.hh"
@@ -23,92 +19,14 @@ static CLG_LogRef LOG = {"color_management"};
 
 namespace ocio {
 
-static bool compare_floats(float a, float b, float abs_diff, int ulp_diff)
-{
-  /* Returns true if the absolute difference is smaller than abs_diff (for numbers near zero)
-   * or their relative difference is less than ulp_diff ULPs. Based on:
-   * https://randomascii.wordpress.com/2012/02/25/comparing-floating-point-numbers-2012-edition/
-   */
-  if (fabsf(a - b) < abs_diff) {
-    return true;
-  }
-
-  if ((a < 0.0f) != (b < 0.0f)) {
-    return false;
-  }
-
-  return (abs((*(int *)&a) - (*(int *)&b)) < ulp_diff);
-}
-
-static void color_space_is_builtin(const OCIO_NAMESPACE::ConstConfigRcPtr &ocio_config,
-                                   const OCIO_NAMESPACE::ConstColorSpaceRcPtr &ocio_color_space,
-                                   bool &is_scene_linear,
-                                   bool &is_srgb)
-{
-  OCIO_NAMESPACE::ConstProcessorRcPtr processor = create_ocio_processor_silent(
-      ocio_config, ocio_color_space->getName(), OCIO_NAMESPACE::ROLE_SCENE_LINEAR);
-  if (!processor) {
-    /* Silently ignore if no conversion possible, then it's not scene linear or sRGB. */
-    is_scene_linear = false;
-    is_srgb = false;
-    return;
-  }
-
-  OCIO_NAMESPACE::ConstCPUProcessorRcPtr cpu_processor = processor->getDefaultCPUProcessor();
-
-  is_scene_linear = true;
-  is_srgb = true;
-  for (int i = 0; i < 256; i++) {
-    float v = i / 255.0f;
-
-    float cR[3] = {v, 0, 0};
-    float cG[3] = {0, v, 0};
-    float cB[3] = {0, 0, v};
-    float cW[3] = {v, v, v};
-    cpu_processor->applyRGB(cR);
-    cpu_processor->applyRGB(cG);
-    cpu_processor->applyRGB(cB);
-    cpu_processor->applyRGB(cW);
-
-    /* Make sure that there is no channel crosstalk. */
-    if (fabsf(cR[1]) > 1e-5f || fabsf(cR[2]) > 1e-5f || fabsf(cG[0]) > 1e-5f ||
-        fabsf(cG[2]) > 1e-5f || fabsf(cB[0]) > 1e-5f || fabsf(cB[1]) > 1e-5f)
-    {
-      is_scene_linear = false;
-      is_srgb = false;
-      break;
-    }
-    /* Make sure that the three primaries combine linearly. */
-    if (!compare_floats(cR[0], cW[0], 1e-6f, 64) || !compare_floats(cG[1], cW[1], 1e-6f, 64) ||
-        !compare_floats(cB[2], cW[2], 1e-6f, 64))
-    {
-      is_scene_linear = false;
-      is_srgb = false;
-      break;
-    }
-    /* Make sure that the three channels behave identically. */
-    if (!compare_floats(cW[0], cW[1], 1e-6f, 64) || !compare_floats(cW[1], cW[2], 1e-6f, 64)) {
-      is_scene_linear = false;
-      is_srgb = false;
-      break;
-    }
-
-    float out_v = (cW[0] + cW[1] + cW[2]) * (1.0f / 3.0f);
-    if (!compare_floats(v, out_v, 1e-6f, 64)) {
-      is_scene_linear = false;
-    }
-    if (!compare_floats(srgb_to_linearrgb(v), out_v, 1e-4f, 64)) {
-      is_srgb = false;
-    }
-  }
-}
-
 LibOCIOColorSpace::LibOCIOColorSpace(const int index,
                                      const OCIO_NAMESPACE::ConstConfigRcPtr &ocio_config,
-                                     const OCIO_NAMESPACE::ConstColorSpaceRcPtr &ocio_color_space)
+                                     const OCIO_NAMESPACE::ConstColorSpaceRcPtr &ocio_color_space,
+                                     Set<StringRef> &primary_interop_ids)
     : ocio_config_(ocio_config),
       ocio_color_space_(ocio_color_space),
-      clean_description_(cleanup_description(ocio_color_space->getDescription()))
+      clean_description_(cleanup_description(ocio_color_space->getDescription())),
+      scene_linear_config_(ocio_config)
 {
   const char *family = ocio_color_space->getFamily();
   this->family_ = (family) ? family : "";
@@ -117,6 +35,7 @@ LibOCIOColorSpace::LibOCIOColorSpace(const int index,
 #if OCIO_VERSION_HEX >= 0x02050000
   interop_id_ = ocio_color_space->getInteropID();
 #endif
+  bool is_legacy_interop_id = false;
 
   if (interop_id_.is_empty()) {
     /* For older configs and older OpenColorIO versions, check the aliases as fallback.
@@ -168,28 +87,34 @@ LibOCIOColorSpace::LibOCIOColorSpace(const int index,
         interop_id_ = alias;
       }
     }
-    is_primary_interop_id_ = !interop_id_.is_empty();
+    is_legacy_interop_id = !interop_id_.is_empty();
   }
-  else {
-    is_primary_interop_id_ = (interop_id_ == name());
-    if (!is_primary_interop_id_) {
-      const int num_aliases = ocio_color_space->getNumAliases();
-      for (int i = 0; i < num_aliases; i++) {
-        if (interop_id_ == ocio_color_space_->getAlias(i)) {
-          is_primary_interop_id_ = true;
-          break;
-        }
-      }
-    }
+
+  if (!interop_id_.is_empty()) {
+    /* Detect if this is the primary interop ID, either because the colorspace
+     * name or an alias is the same, or because it's a legacy interop ID and
+     * there is no other color space that has it as a name or alias. */
+    const OCIO_NAMESPACE::ConstColorSpaceRcPtr owner = ocio_config->getColorSpace(
+        interop_id_.c_str());
+    const bool is_owner = owner && name() == owner->getName();
+    is_primary_interop_id_ = is_owner || (is_legacy_interop_id && !owner);
   }
 
   /* Special case that we can not handle as an alias, because it's a role too. */
-  if (interop_id_.is_empty()) {
+  if (interop_id_.is_empty() || interop_id_ == "data") {
     const char *data_name = ocio_config->getRoleColorSpace(OCIO_NAMESPACE::ROLE_DATA);
     if (data_name && STREQ(ocio_color_space->getName(), data_name)) {
       interop_id_ = "data";
+      is_primary_interop_id_ = true;
     }
   }
+
+  /* If multiple legacy aliases are found for the same interop ID, the first one wins. */
+  if (is_primary_interop_id_ && !primary_interop_ids.add(interop_id_)) {
+    is_primary_interop_id_ = false;
+  }
+
+  initialize_alternate_interop_id();
 
   CLOG_TRACE(&LOG,
              "Add colorspace: %s (interop ID: %s)",
@@ -200,6 +125,33 @@ LibOCIOColorSpace::LibOCIOColorSpace(const int index,
 bool LibOCIOColorSpace::is_primary_interop_id() const
 {
   return is_primary_interop_id_;
+}
+
+void LibOCIOColorSpace::initialize_alternate_interop_id()
+{
+  if (!is_primary_interop_id_) {
+    return;
+  }
+
+  const StringRef interop_id = interop_id_;
+  std::string other_interop_id;
+  if (interop_id.endswith("_scene")) {
+    other_interop_id = interop_id.drop_known_suffix("_scene") + "_display";
+  }
+  else if (interop_id.endswith("_display")) {
+    other_interop_id = interop_id.drop_known_suffix("_display") + "_scene";
+  }
+  else {
+    return;
+  }
+
+  const int num_aliases = ocio_color_space_->getNumAliases();
+  for (int i = 0; i < num_aliases; i++) {
+    if (ocio_color_space_->getAlias(i) == other_interop_id) {
+      alternate_interop_id_ = std::move(other_interop_id);
+      return;
+    }
+  }
 }
 
 std::string LibOCIOColorSpace::icc_profile_path() const
@@ -223,21 +175,32 @@ std::string LibOCIOColorSpace::icc_profile_path() const
 
 bool LibOCIOColorSpace::is_scene_linear() const
 {
-  ensure_srgb_scene_linear_info();
-  return is_scene_linear_;
+  /* The color space is the scene linear working space when the conversion is a no-op. */
+  const CPUProcessor *cpu_processor = get_to_scene_linear_cpu_processor();
+  return cpu_processor && cpu_processor->is_noop();
 }
 
 bool LibOCIOColorSpace::is_srgb() const
 {
-  ensure_srgb_scene_linear_info();
-  return is_srgb_;
+  /* Detected from the primary interop ID. For additional interop IDs it's not necessarily
+   * sRGB, but rather a color space that can be saved as sRGB. */
+  return is_primary_interop_id_ && ELEM(interop_id_, "srgb_rec709_scene", "srgb_rec709_display");
 }
 
 const CPUProcessor *LibOCIOColorSpace::get_to_scene_linear_cpu_processor() const
 {
   return to_scene_linear_cpu_processor_.get([&]() -> std::unique_ptr<CPUProcessor> {
-    OCIO_NAMESPACE::ConstProcessorRcPtr ocio_processor = create_ocio_processor(
-        ocio_config_, ocio_color_space_->getName(), OCIO_NAMESPACE::ROLE_SCENE_LINEAR);
+    OCIO_NAMESPACE::ConstProcessorRcPtr ocio_processor;
+    if (scene_linear_config_ != ocio_config_) {
+      ocio_processor = create_ocio_processor_between_configs(ocio_config_,
+                                                             ocio_color_space_->getName(),
+                                                             scene_linear_config_,
+                                                             OCIO_NAMESPACE::ROLE_SCENE_LINEAR);
+    }
+    if (!ocio_processor) {
+      ocio_processor = create_ocio_processor(
+          ocio_config_, ocio_color_space_->getName(), OCIO_NAMESPACE::ROLE_SCENE_LINEAR);
+    }
     if (!ocio_processor) {
       return nullptr;
     }
@@ -248,8 +211,17 @@ const CPUProcessor *LibOCIOColorSpace::get_to_scene_linear_cpu_processor() const
 const CPUProcessor *LibOCIOColorSpace::get_from_scene_linear_cpu_processor() const
 {
   return from_scene_linear_cpu_processor_.get([&]() -> std::unique_ptr<CPUProcessor> {
-    OCIO_NAMESPACE::ConstProcessorRcPtr ocio_processor = create_ocio_processor(
-        ocio_config_, OCIO_NAMESPACE::ROLE_SCENE_LINEAR, ocio_color_space_->getName());
+    OCIO_NAMESPACE::ConstProcessorRcPtr ocio_processor;
+    if (scene_linear_config_ != ocio_config_) {
+      ocio_processor = create_ocio_processor_between_configs(scene_linear_config_,
+                                                             OCIO_NAMESPACE::ROLE_SCENE_LINEAR,
+                                                             ocio_config_,
+                                                             ocio_color_space_->getName());
+    }
+    if (!ocio_processor) {
+      ocio_processor = create_ocio_processor(
+          ocio_config_, OCIO_NAMESPACE::ROLE_SCENE_LINEAR, ocio_color_space_->getName());
+    }
     if (!ocio_processor) {
       return nullptr;
     }
@@ -257,20 +229,20 @@ const CPUProcessor *LibOCIOColorSpace::get_from_scene_linear_cpu_processor() con
   });
 }
 
-void LibOCIOColorSpace::ensure_srgb_scene_linear_info() const
+void LibOCIOColorSpace::switch_scene_linear_config(
+    const OCIO_NAMESPACE::ConstConfigRcPtr &ocio_config)
 {
-  if (is_info_cached_) {
+  if (scene_linear_config_ == ocio_config) {
     return;
   }
-  color_space_is_builtin(ocio_config_, ocio_color_space_, is_scene_linear_, is_srgb_);
-  is_info_cached_ = true;
+  scene_linear_config_ = ocio_config;
+  clear_caches();
 }
 
 void LibOCIOColorSpace::clear_caches()
 {
   from_scene_linear_cpu_processor_ = CPUProcessorCache();
   to_scene_linear_cpu_processor_ = CPUProcessorCache();
-  is_info_cached_ = false;
 }
 
 }  // namespace ocio

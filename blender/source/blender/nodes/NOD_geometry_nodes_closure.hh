@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup nodes
+ */
+
 #pragma once
 
 #include "BKE_node_socket_value.hh"
@@ -113,6 +117,11 @@ class Closure : public ImplicitSharingMixin {
   const bke::SocketValueVariant &default_input_value(const int index) const
   {
     return default_input_values_[index];
+  }
+
+  Span<bke::SocketValueVariant> default_input_values() const
+  {
+    return default_input_values_;
   }
 
   Span<const bke::SocketValueVariant *> captured_values() const

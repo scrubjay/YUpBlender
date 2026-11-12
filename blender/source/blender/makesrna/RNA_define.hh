@@ -80,12 +80,12 @@ void RNA_def_struct_sdna_from(StructRNA *srna, const char *structname, const cha
  * Define the struct's String property used to retrieve the name of a PointerRNA of that type.
  * Used e.g. in several UI widget displaying content of RNA collections.
  *
- * \param allow_replace If true, allow replacing an already defined struct name property.
+ * \param allow_replace: If true, allow replacing an already defined struct name property.
  */
 void RNA_def_struct_name_property(StructRNA *srna, PropertyRNA *prop, bool allow_replace = false);
 void RNA_def_struct_nested(BlenderRNA *brna, StructRNA *srna, const char *structname);
-void RNA_def_struct_flag(StructRNA *srna, int flag);
-void RNA_def_struct_clear_flag(StructRNA *srna, int flag);
+void RNA_def_struct_flag(StructRNA *srna, StructFlag flag);
+void RNA_def_struct_clear_flag(StructRNA *srna, StructFlag flag);
 void RNA_def_struct_property_tags(StructRNA *srna, const EnumPropertyItem *prop_tag_defines);
 void RNA_def_struct_refine_func(StructRNA *srna, const char *refine);
 void RNA_def_struct_idprops_func(StructRNA *srna, const char *idproperties);
@@ -510,13 +510,21 @@ void RNA_def_property_ui_text(PropertyRNA *prop, const char *name, const char *d
 void RNA_def_property_ui_name_func(PropertyRNA *prop, const char *name_func);
 void RNA_def_property_ui_description_func(PropertyRNA *prop, const char *description_func);
 
+/**
+ * Mark a property as deprecated.
+ *
+ * See #DeprecatedRNA for details.
+ *
+ * \note The version values represent major, minor versions (sub-version isn't supported).
+ * Compatible with #Main::versionfile (e.g. `502` for `v5.2`).
+ */
 void RNA_def_property_deprecated(PropertyRNA *prop,
                                  const char *note,
                                  short version,
                                  short removal_version);
 
 /**
- * The values hare are a little confusing:
+ * The values here are a little confusing:
  *
  * \param step: Used as the value to increase/decrease when clicking on number buttons,
  * as well as scaling mouse input for click-dragging number buttons.
@@ -664,6 +672,7 @@ void RNA_def_property_pointer_funcs_runtime(PropertyRNA *prop,
                                             PointerPropertyGetFunc getfunc,
                                             PointerPropertySetFunc setfunc,
                                             PointerPropertyTypeFunc typefunc);
+void RNA_def_property_pointer_default_runtime(PropertyRNA *prop, uint32_t id_session_uid);
 
 void RNA_def_property_translation_context(PropertyRNA *prop, const char *context);
 
@@ -676,7 +685,7 @@ FunctionRNA *RNA_def_function_runtime(StructRNA *srna, const char *identifier, C
  */
 void RNA_def_function_return(FunctionRNA *func, PropertyRNA *ret);
 void RNA_def_function_output(FunctionRNA *func, PropertyRNA *ret);
-void RNA_def_function_flag(FunctionRNA *func, int flag);
+void RNA_def_function_flag(FunctionRNA *func, FunctionFlag flag);
 void RNA_def_function_ui_description(FunctionRNA *func, const char *description);
 
 void RNA_def_parameter_flags(PropertyRNA *prop,
@@ -721,12 +730,6 @@ void RNA_def_property_free_pointers_set_py_data_callback(
 /* Utilities. */
 
 const char *RNA_property_typename(PropertyType type);
-#define IS_DNATYPE_FLOAT_COMPAT(_str) (strcmp(_str, "float") == 0 || strcmp(_str, "double") == 0)
-#define IS_DNATYPE_INT_COMPAT(_str) \
-  (strcmp(_str, "int") == 0 || strcmp(_str, "short") == 0 || strcmp(_str, "char") == 0 || \
-   strcmp(_str, "uchar") == 0 || strcmp(_str, "ushort") == 0 || strcmp(_str, "int8_t") == 0)
-#define IS_DNATYPE_BOOLEAN_COMPAT(_str) \
-  (IS_DNATYPE_INT_COMPAT(_str) || strcmp(_str, "int64_t") == 0 || strcmp(_str, "uint64_t") == 0)
 
 bool RNA_validate_identifier(const char *identifier,
                              bool is_property,

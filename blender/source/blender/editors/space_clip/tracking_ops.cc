@@ -11,11 +11,11 @@
 #include "DNA_screen_types.h"
 #include "DNA_space_types.h"
 
-#include "BLI_listbase.h"
-#include "BLI_math_geom.h"
-#include "BLI_math_vector.h"
+#include "BLI_listbase.hh"
+#include "BLI_math_geom_c.hh"
+#include "BLI_math_vector_c.hh"
 #include "BLI_set.hh"
-#include "BLI_utildefines.h"
+#include "BLI_utildefines.hh"
 
 #include "BKE_context.hh"
 #include "BKE_image.hh"
@@ -1052,7 +1052,7 @@ static wmOperatorStatus hide_tracks_exec(bContext *C, wmOperator *op)
   }
 
   const MovieTrackingPlaneTrack *active_plane_track = tracking_object->active_plane_track;
-  if (active_plane_track != nullptr && active_plane_track->flag & TRACK_HIDDEN) {
+  if (active_plane_track != nullptr && active_plane_track->flag & PLANE_TRACK_HIDDEN) {
     tracking_object->active_plane_track = nullptr;
   }
 
@@ -1133,7 +1133,7 @@ void CLIP_OT_hide_tracks_clear(wmOperatorType *ot)
 static bool frame_jump_poll(bContext *C)
 {
   SpaceClip *space_clip = CTX_wm_space_clip(C);
-  return space_clip != nullptr;
+  return space_clip != nullptr && ED_space_clip_get_clip(space_clip) != nullptr;
 }
 
 static wmOperatorStatus frame_jump_exec(bContext *C, wmOperator *op)
@@ -1722,7 +1722,7 @@ static wmOperatorStatus clean_tracks_exec(bContext *C, wmOperator *op)
 
       if (!ok) {
         if (action == TrackingCleanAction::Select) {
-          BKE_tracking_track_flag_set(&track, TRACK_AREA_ALL, SELECT);
+          BKE_tracking_track_flag_set(&track, TRACK_AREA_ALL, TRACK_SELECT);
         }
         else if (action == TrackingCleanAction::DeleteTrack) {
           if (&track == tracking_object->active_track) {
@@ -2211,8 +2211,6 @@ static wmOperatorStatus update_image_from_plane_marker_exec(bContext *C, wmOpera
 
   WM_event_add_notifier(C, NC_MOVIECLIP | NA_EDITED, clip);
   WM_event_add_notifier(C, NC_IMAGE | NA_EDITED, plane_track->image);
-
-  BKE_image_partial_update_mark_full_update(plane_track->image);
 
   return OPERATOR_FINISHED;
 }

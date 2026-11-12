@@ -2,16 +2,24 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup buttons
+ */
+
+#include <fmt/format.h>
+
 #include "BKE_screen.hh"
 
 #include "BLF_api.hh"
 
-#include "BLI_listbase.h"
+#include "BLI_listbase.hh"
 #include "BLI_listbase_iterator.hh"
-#include "BLI_rect.h"
-#include "BLI_string.h"
+#include "BLI_rect.hh"
+#include "BLI_string.hh"
 
 #include "DNA_screen_types.h"
+
+#include "RNA_access.hh"
 
 #include "UI_interface_c.hh"
 
@@ -23,19 +31,26 @@ namespace blender::ui {
 void invalidate_text_wrap_cache(const ARegion &region)
 {
   for (Block &block : region.runtime->uiblocks) {
+    block.text_wrap_cache.clear();
+    block.markdown_layout_cache.clear();
     for (Button &button : block.buttons()) {
-      if (button.type != ButtonType::TextBox) {
-        continue;
+      if (button.type == ButtonType::TextBox) {
+        auto &textbox = static_cast<ButtonTextBox &>(button);
+        textbox.wrap_cache.reset();
+        textbox.placeholder_wrap_cache.reset();
       }
-      ButtonTextBox &textbox = static_cast<ButtonTextBox &>(button);
-      textbox.wrap_cache.reset();
+      if (button.type == ButtonType::Label) {
+        auto &label = static_cast<ButtonLabel &>(button);
+        label.wrap_cache.reset();
+        label.markdown_cache.reset();
+      }
     }
   }
 }
 
 void textbox_add_scroll(ButtonTextBox *textbox, int step)
 {
-  textbox->last_total_lines = textbox_wrap_lines(textbox).size();
+  textbox_wrap_lines(textbox);
   textbox->line_scroll_set(textbox->line_scroll() + step);
 }
 
@@ -47,7 +62,7 @@ void textbox_scroll_to_cursor(ButtonTextBox *textbox)
 #ifdef WITH_INPUT_IME
   /* Include the ime composition string when scrolling to the cursor. */
   const wmIMEData *ime_data = button_ime_data_get(textbox);
-  if (ime_data && ime_data->composite.size() && ime_data->cursor_pos != -1) {
+  if (ime_data && !ime_data->composite.empty() && ime_data->cursor_pos != -1) {
     but_pos += ime_data->cursor_pos;
   }
 #endif
@@ -77,15 +92,15 @@ void textbox_textedit_set_cursor_pos(ButtonTextBox *textbox,
                                      const float2 xy)
 {
 
-  /* Don't include grip bounds when selecting text with the mouse.*/
+  /* Don't include grip bounds when selecting text with the mouse. */
   float2 start = {textbox->rect.xmin, textbox->rect.ymin};
   float2 end = {textbox->rect.xmax, textbox->rect.ymax};
 
   block_to_window_fl(region, textbox->block, &start.x, &start.y);
   block_to_window_fl(region, textbox->block, &end.x, &end.y);
 
-  start.y += textbox_padding_bottom() / textbox->block->aspect;
-  end.y -= textbox_padding_top() / textbox->block->aspect;
+  start.y += textbox_vertical_padding() / textbox->block->aspect;
+  end.y -= textbox_vertical_padding() / textbox->block->aspect;
 
   const Vector<StringRef> lines = textbox_wrap_lines(textbox);
   uiFontStyle fstyle = style_get()->widget;
@@ -109,9 +124,8 @@ void textbox_textedit_set_cursor_pos(ButtonTextBox *textbox,
       fstyle.uifont_id, line.data(), line.size(), int(xy.x - start.x));
   int position = line.begin() - lines[0].data() + offset;
 #ifdef WITH_INPUT_IME
-  /* Textbox text wrap includes the IME composition string, remove the ime string pad from the
-   * selection.
-   */
+  /* Text-box text wrap includes the IME composition string, remove the IME string pad from the
+   * selection. */
   const wmIMEData *ime_data = button_ime_data_get(textbox);
   if (ime_data && position > int(textbox->pos)) {
     position = std::max<int>(int(textbox->pos), position - int(ime_data->composite.size()));
@@ -206,14 +220,14 @@ Vector<StringRef> textbox_wrap_lines(ButtonTextBox *textbox)
                     aspect;
   StringRef text = textbox->drawstr;
 #ifdef WITH_INPUT_IME
+  std::string ime_text;
   const wmIMEData *ime_data = button_ime_data_get(textbox);
-  if (ime_data && ime_data->composite.size() > 0) {
+  if (ime_data && !ime_data->composite.empty()) {
     StringRef edit_str = textbox->editstr;
     StringRef l = edit_str.is_empty() ? StringRef("") : edit_str.substr(0, textbox->pos);
     StringRef r = edit_str.is_empty() ? StringRef("") : edit_str.substr(textbox->pos);
-    StringRef ime_str = ime_data->composite;
-    textbox->drawstr = fmt::format("{}{}{}", l, ime_str, r);
-    text = textbox->drawstr;
+    ime_text = fmt::format("{}{}{}", l, ime_data->composite, r);
+    text = ime_text;
   }
   else
 #endif
@@ -221,23 +235,19 @@ Vector<StringRef> textbox_wrap_lines(ButtonTextBox *textbox)
   {
     text = textbox->editstr;
   }
-  constexpr int textbox_min_string_size_for_wrap_cache = sizeof(std::string);
-  if (text.size() >= textbox_min_string_size_for_wrap_cache) {
-    if (!textbox->wrap_cache) {
-      textbox->wrap_cache = std::make_unique<TextWrapCache>();
-    }
-    TextWrapCache &cache = *textbox->wrap_cache;
-    if (cache.aspect == aspect && cache.wrap_width == width && text == cache.text) {
-      return cache.wrapped_lines;
-    }
-    cache.text = text;
-    text = cache.text;
-    cache.wrap_width = width;
-    cache.aspect = aspect;
+  if (!textbox->wrap_cache) {
+    textbox->wrap_cache = std::make_unique<TextWrapCache>();
   }
-  else {
-    textbox->wrap_cache.reset();
+  TextWrapCache &cache = *textbox->wrap_cache;
+  if (cache.aspect == aspect && cache.wrap_width == width && text == cache.text) {
+    textbox->last_total_lines = cache.wrapped_lines.size();
+    return cache.wrapped_lines;
   }
+  cache.text = text;
+  text = cache.text;
+  cache.wrap_width = width;
+  cache.aspect = aspect;
+
   fontscale(&fstyle.points, aspect);
   fontstyle_set(&fstyle);
   Vector<StringRef> lines = BLF_string_wrap(
@@ -251,19 +261,48 @@ Vector<StringRef> textbox_wrap_lines(ButtonTextBox *textbox)
   }
   textbox->last_total_lines = lines.size();
 
-  /* WORKAROUND: Textbox event handling and drawing requires lines to not include line breaks, but
-   * sometimes text wrap adds them and other times not. */
+  /* WORKAROUND: Text-box event handling and drawing requires lines to not include line breaks,
+   * but sometimes text wrap adds them and other times not. */
   for (int i : lines.index_range()) {
     if (lines[i].endswith("\n")) {
       lines[i] = lines[i].drop_suffix(1);
     }
   }
 
-  if (textbox->wrap_cache) {
-    textbox->wrap_cache->wrapped_lines = lines;
-  }
+  cache.wrapped_lines = lines;
 
   return lines;
+}
+
+Vector<StringRef> textbox_wrap_placeholder(ButtonTextBox *textbox)
+{
+  BLI_assert(textbox->placeholder);
+  uiFontStyle fstyle = style_get()->widget;
+  const float aspect = textbox->block->aspect;
+  const int width = std::max<int>(std::ceil(BLI_rctf_size_x(&textbox->rect) -
+                                            2.0f * UI_TEXT_MARGIN_X * float(U.widget_unit) - 2.0f),
+                                  0) /
+                    aspect;
+  StringRef text = textbox->placeholder;
+
+  if (!textbox->placeholder_wrap_cache) {
+    textbox->placeholder_wrap_cache = std::make_unique<TextWrapCache>();
+  }
+  TextWrapCache &cache = *textbox->placeholder_wrap_cache;
+  if (cache.aspect == aspect && cache.wrap_width == width && text == cache.text) {
+    return cache.wrapped_lines;
+  }
+  cache.text = text;
+  cache.wrap_width = width;
+  cache.aspect = aspect;
+
+  fontscale(&fstyle.points, aspect);
+  fontstyle_set(&fstyle);
+
+  cache.wrapped_lines = BLF_string_wrap(
+      fstyle.uifont_id, cache.text, width, BLFWrapMode::HardLimit | BLFWrapMode::Typographical);
+
+  return cache.wrapped_lines;
 }
 
 float textbox_grip_height()
@@ -278,17 +317,15 @@ void ButtonTextBox::line_scroll_set(int line_scroll)
   this->state->scroll = this->line_scroll();
 }
 
-float textbox_padding_top()
+float textbox_vertical_padding()
 {
-  return U.pixelsize + 2.0f * UI_SCALE_FAC;
+  /* Allow aligning text buttons with single line text-box buttons. */
+  return float(UI_UNIT_Y - fontstyle_height_max(UI_FSTYLE_WIDGET)) / 2.0f;
 }
 
-float textbox_padding_bottom()
-{
-  return textbox_grip_height() + 0.25f * UI_SCALE_FAC;
-}
-
-TextboxState *textbox_ensure_state(ARegion *region, StringRefNull idname)
+TextboxState *textbox_ensure_state(ARegion *region,
+                                   StringRefNull idname,
+                                   const int initial_visible_lines)
 {
   for (uiTextboxStateLink &link : region->textbox_states) {
     if (link.idname == idname) {
@@ -297,7 +334,7 @@ TextboxState *textbox_ensure_state(ARegion *region, StringRefNull idname)
   }
   uiTextboxStateLink *link = MEM_new<uiTextboxStateLink>(__func__);
   link->idname = BLI_strdupn(idname.data(), idname.size());
-  link->state.visible_lines = textbox_minimum_visible_lines;
+  link->state.visible_lines = std::max(initial_visible_lines, textbox_minimum_visible_lines);
   BLI_addtail(&region->textbox_states, link);
   return &link->state;
 }
@@ -310,7 +347,58 @@ int ButtonTextBox::line_scroll() const
 
 int ButtonTextBox::visible_lines() const
 {
-  return std::max<int>(this->state->visible_lines, 3);
+  return std::max<int>(this->state->visible_lines, textbox_minimum_visible_lines);
+}
+
+int textbox_but_height(const TextboxState &state)
+{
+  const int visible_lines = std::max(state.visible_lines, textbox_minimum_visible_lines);
+  const float line_height = fontstyle_height_max(UI_FSTYLE_WIDGET);
+  return std::max<int>(
+      UI_UNIT_Y, int(std::round(line_height * visible_lines + textbox_vertical_padding() * 2.0f)));
+}
+
+Button *uiDefButTextBoxR(Block *block,
+                         PointerRNA *ptr,
+                         StringRefNull propname,
+                         TextboxState *state,
+                         const int x,
+                         const int y,
+                         const short width)
+{
+  BLI_assert(state);
+
+  PropertyRNA *prop = RNA_struct_find_property_check(*ptr, propname.c_str(), PROP_STRING);
+  if (!prop) {
+    RNA_warning(
+        "string property not found: %s.%s", RNA_struct_identifier(ptr->type), propname.c_str());
+    return nullptr;
+  }
+
+  state->visible_lines = std::max(state->visible_lines, textbox_minimum_visible_lines);
+
+  Button *but = uiDefButR_prop(block,
+                               ButtonType::TextBox,
+                               RNA_property_ui_name(prop),
+                               x,
+                               y,
+                               width,
+                               textbox_but_height(*state),
+                               ptr,
+                               prop,
+                               0,
+                               0,
+                               0,
+                               std::nullopt);
+
+  ButtonTextBox *textbox = static_cast<ButtonTextBox *>(but);
+  textbox->state = state;
+
+  if (RNA_property_flag(prop) & PROP_TEXTEDIT_UPDATE) {
+    button_flag_enable(but, BUT_TEXTEDIT_UPDATE);
+  }
+
+  return but;
 }
 
 }  // namespace blender::ui

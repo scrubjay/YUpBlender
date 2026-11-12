@@ -32,11 +32,46 @@ class Test:
         """
         return ['CPU']
 
+    def remove_redundant_device_types(self, devices: list) -> list:
+        """
+        Remove redundant device types that do not improve coverage.
+        """
+        return devices
+
+    def remove_redundant_hwrt_device_types(self, devices: list) -> list:
+        """
+        Remove HW-RT devices from the list if the corresponding non-HW-RT device is present.
+        """
+        new_devices = []
+        for device in devices:
+            device_id = device.id.replace("-RT", "", 1)
+            found = any(d.id == device_id for d in new_devices)
+            if not found:
+                new_devices.append(device)
+        return new_devices
+
     def use_background(self) -> bool:
         """
         Test runs in background mode and requires no display.
         """
         return True
+
+    @staticmethod
+    def blender_gpu_arguments(device_id: str, gpu_backend: str) -> list:
+        """
+        Return GPU arguments for blender.
+
+        Always includes --gpu-backend and optional include --gpu-device when device_id isn't
+        default (0 or missing).
+        """
+        args = ['--gpu-backend', gpu_backend]
+        if '_' in device_id:
+            parts = device_id.rsplit('_', 1)
+            device_index = int(parts[1])
+            # Only specify --gpu-device for non-zero indices. Older builds could not support it.
+            if device_index > 0:
+                args += ['--gpu-device', str(device_index)]
+        return args
 
     @abc.abstractmethod
     def run(self, env, device_id: str, gpu_backend: str) -> dict:

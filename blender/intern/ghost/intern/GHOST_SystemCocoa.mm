@@ -526,13 +526,15 @@ extern "C" int GHOST_HACK_getFirstFile(char buf[FIRSTFILEBUFLG])
  * Initialization / Finalization.
  */
 
-GHOST_SystemCocoa::GHOST_SystemCocoa()
+GHOST_SystemCocoa::GHOST_SystemCocoa(const bool background)
 {
   modifier_mask_ = 0;
   outside_loop_event_processed_ = false;
   need_delayed_application_become_active_event_processing_ = false;
 
   ignore_window_sized_messages_ = false;
+  background_mode_ = background;
+
   ignore_momentum_scroll_ = false;
   multi_touch_scroll_ = false;
   last_warp_timestamp_ = 0;
@@ -658,6 +660,12 @@ GHOST_TSuccess GHOST_SystemCocoa::init()
        * application without a macOS tab bar, and should explicitly opt-out of this.
        * This is also controlled by the macOS user default #NSWindowTabbingEnabled. */
       NSWindow.allowsAutomaticWindowTabbing = NO;
+
+      if (background_mode_) {
+        /* Do not display the application in the Dock when started in background-mode,
+         * without which the app icon would bounce indefinitely. */
+        [NSApp setActivationPolicy:NSApplicationActivationPolicyProhibited];
+      }
 
       [NSApp finishLaunching];
     }
@@ -841,6 +849,31 @@ GHOST_TSuccess GHOST_SystemCocoa::getCursorPosition(int32_t &x, int32_t &y) cons
   x = int32_t(mouseLoc.x);
   y = int32_t(mouseLoc.y);
   return GHOST_kSuccess;
+}
+
+/* Private CoreGraphicsSPI used to read the Accessibility cursor scale factor.
+ * Available since macOS 10.7, but not in the public headers. */
+extern "C" {
+typedef int CGSConnectionID;
+CGSConnectionID CGSMainConnectionID(void);
+CGError CGSGetCursorScale(CGSConnectionID connection, CGFloat *scale);
+}
+
+uint32_t GHOST_SystemCocoa::getCursorPreferredLogicalSize() const
+{
+  /* Apply the Accessibility pointer-size scale (1.0 .. 4.0) to a default base size.
+   *
+   * Take care, for hardware cursors this is already applied on-top of the cursor bitmap,
+   * there doesn't seem to be a way to express that the cursor data is pre-scaled.
+   * Therefore, a larger cursor will work but look blurry.
+   * Only use this for software cursors. */
+  const CGFloat default_size = 21.0;
+
+  CGFloat scale = 1.0;
+  if (CGSGetCursorScale(CGSMainConnectionID(), &scale) != kCGErrorSuccess || !(scale > 0.0)) {
+    scale = 1.0;
+  }
+  return lround(default_size * scale);
 }
 
 /**
@@ -1245,7 +1278,7 @@ static blender::ImBuf *NSImageToImBuf(NSImage *image)
 {
   const NSSize imageSize = getNSImagePixelSize(image);
   blender::ImBuf *ibuf = blender::IMB_allocImBuf(
-      imageSize.width, imageSize.height, 32, blender::IB_byte_data);
+      imageSize.width, imageSize.height, blender::ImBufFlags::ByteData);
 
   if (!ibuf) {
     return nullptr;

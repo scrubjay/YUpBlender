@@ -21,6 +21,7 @@
 #include "rna_internal.hh"
 
 #include "UI_interface.hh"
+#include "UI_interface_c.hh"
 #include "UI_interface_layout.hh"
 
 #include "WM_toolsystem.hh"
@@ -65,10 +66,10 @@ const EnumPropertyItem rna_enum_uilist_layout_type_items[] = {
 
 #  include "RNA_access.hh"
 
-#  include "BLI_dynstr.h"
-#  include "BLI_listbase.h"
-#  include "BLI_string.h"
-#  include "BLI_string_utf8.h"
+#  include "BLI_dynstr.hh"
+#  include "BLI_listbase.hh"
+#  include "BLI_string.hh"
+#  include "BLI_string_utf8.hh"
 
 #  include "BKE_context.hh"
 #  include "BKE_main.hh"
@@ -91,9 +92,7 @@ static ARegionType *region_type_find(ReportList *reports, int space_type, int re
 
   st = BKE_spacetype_from_id(space_type);
 
-  for (art = (st) ? static_cast<ARegionType *>(st->regiontypes.first) : nullptr; art;
-       art = art->next)
-  {
+  for (art = (st) ? st->regiontypes.first() : nullptr; art; art = art->next) {
     if (art->regionid == region_type) {
       break;
     }
@@ -211,6 +210,7 @@ static bool rna_Panel_unregister(Main *bmain, StructRNA *type)
     return false;
   }
 
+  ui::refresh_for_srna_unregister(bmain, type);
   RNA_struct_free_extension(type, &pt->rna_ext);
   RNA_struct_free(&RNA_blender_rna_get(), type);
 
@@ -230,8 +230,8 @@ static bool rna_Panel_unregister(Main *bmain, StructRNA *type)
   for (bScreen &screen : bmain->screens) {
     for (ScrArea &area : screen.areabase) {
       for (SpaceLink &sl : area.spacedata) {
-        ListBaseT<ARegion> *regionbase = (&sl == area.spacedata.first) ? &area.regionbase :
-                                                                         &sl.regionbase;
+        ListBaseT<ARegion> *regionbase = (&sl == area.spacedata.first()) ? &area.regionbase :
+                                                                           &sl.regionbase;
         for (ARegion &region : *regionbase) {
           for (Panel &panel : region.panels) {
             panel_type_clear_recursive(&panel, pt);
@@ -244,7 +244,7 @@ static bool rna_Panel_unregister(Main *bmain, StructRNA *type)
     }
   }
 
-  BLI_freelistN(&pt->children);
+  pt->children.free_no_destruct();
   BLI_freelinkN(&art->paneltypes, pt);
 
   /* update while blender is running */
@@ -321,7 +321,7 @@ static StructRNA *rna_Panel_register(Main *bmain,
   }
 
   /* check if we have registered this panel type before, and remove it */
-  for (pt = static_cast<PanelType *>(art->paneltypes.first); pt; pt = pt->next) {
+  for (pt = art->paneltypes.first(); pt; pt = pt->next) {
     if (STREQ(pt->idname, dummy_pt.idname)) {
       PanelType *pt_next = pt->next;
       StructRNA *srna = pt->rna_ext.srna;
@@ -411,7 +411,7 @@ static StructRNA *rna_Panel_register(Main *bmain,
   pt->draw_header_preset = (have_function[3]) ? panel_draw_header_preset : nullptr;
 
   /* Find position to insert panel based on order. */
-  PanelType *pt_iter = static_cast<PanelType *>(art->paneltypes.last);
+  PanelType *pt_iter = art->paneltypes.last();
 
   for (; pt_iter; pt_iter = pt_iter->prev) {
     /* No header has priority. */
@@ -428,7 +428,7 @@ static StructRNA *rna_Panel_register(Main *bmain,
 
   if (parent) {
     pt->parent = parent;
-    LinkData *pt_child_iter = static_cast<LinkData *>(parent->children.last);
+    LinkData *pt_child_iter = parent->children.last();
     for (; pt_child_iter; pt_child_iter = pt_child_iter->prev) {
       PanelType *pt_child = static_cast<PanelType *>(pt_child_iter->data);
       if (pt_child->order <= pt->order) {
@@ -650,7 +650,7 @@ static void uilist_filter_items(uiList *ui_list,
         items_shown = flt_data->items_shown = shown_idx;
         flt_data->items_filter_neworder = MEM_new_array_uninitialized<int>(size_t(items_shown),
                                                                            __func__);
-        /* And now, bring back new indices into the [0, items_shown[ range!
+        /* And now, bring back new indices into the [0, items_shown) range!
          * XXX This is O(N^2). :/
          */
         for (shown_idx = 0, prev_ni = -1; shown_idx < items_shown; shown_idx++) {
@@ -697,7 +697,7 @@ static bool rna_UIList_unregister(Main *bmain, StructRNA *type)
   if (!ult) {
     return false;
   }
-
+  ui::refresh_for_srna_unregister(bmain, type);
   RNA_struct_free_extension(type, &ult->rna_ext);
   RNA_struct_free(&RNA_blender_rna_get(), type);
 
@@ -817,7 +817,7 @@ static void header_draw(const bContext *C, Header *hdr)
   RNA_parameter_list_free(&list);
 }
 
-static bool rna_Header_unregister(Main * /*bmain*/, StructRNA *type)
+static bool rna_Header_unregister(Main *bmain, StructRNA *type)
 {
   ARegionType *art;
   HeaderType *ht = static_cast<HeaderType *>(RNA_struct_blender_type_get(type));
@@ -825,10 +825,12 @@ static bool rna_Header_unregister(Main * /*bmain*/, StructRNA *type)
   if (!ht) {
     return false;
   }
+
   if (!(art = region_type_find(nullptr, ht->space_type, ht->region_type))) {
     return false;
   }
 
+  ui::refresh_for_srna_unregister(bmain, type);
   RNA_struct_free_extension(type, &ht->rna_ext);
   RNA_struct_free(&RNA_blender_rna_get(), type);
 
@@ -978,7 +980,7 @@ static void menu_draw(const bContext *C, Menu *menu)
   RNA_parameter_list_free(&list);
 }
 
-static bool rna_Menu_unregister(Main * /*bmain*/, StructRNA *type)
+static bool rna_Menu_unregister(Main *bmain, StructRNA *type)
 {
   MenuType *mt = static_cast<MenuType *>(RNA_struct_blender_type_get(type));
 
@@ -986,6 +988,7 @@ static bool rna_Menu_unregister(Main * /*bmain*/, StructRNA *type)
     return false;
   }
 
+  ui::refresh_for_srna_unregister(bmain, type);
   RNA_struct_free_extension(type, &mt->rna_ext);
   RNA_struct_free(&RNA_blender_rna_get(), type);
 
@@ -1222,6 +1225,7 @@ static bool rna_AssetShelf_unregister(Main *bmain, StructRNA *type)
 
   ed::asset::shelf::type_unlink(*bmain, *shelf_type);
 
+  ui::refresh_for_srna_unregister(bmain, type);
   RNA_struct_free_extension(type, &shelf_type->rna_ext);
   RNA_struct_free(&RNA_blender_rna_get(), type);
 
@@ -1520,6 +1524,11 @@ static float rna_UILayout_units_y_get(PointerRNA *ptr)
   return ptr->data_as<const Layout>()->ui_units_y();
 }
 
+static float rna_UIlayout_property_split_factor_get(PointerRNA * /*ptr*/)
+{
+  return Layout::PROPERTY_SPLIT_FACTOR;
+}
+
 static void rna_UILayout_units_y_set(PointerRNA *ptr, float value)
 {
   ptr->data_as<Layout>()->ui_units_y_set(value);
@@ -1670,6 +1679,14 @@ static StructRNA *rna_FileHandler_refine(PointerRNA *file_handler_ptr)
              RNA_FileHandler;
 }
 
+static void rna_FileHandler_label_with_extensions(const char *idname, char *result)
+{
+  const bke::FileHandlerType *file_handler = bke::file_handler_find(idname);
+  BLI_strncpy(result,
+              file_handler ? file_handler->label_with_extensions().c_str() : "",
+              FH_MAX_FILE_EXTENSIONS_STR + OP_MAX_TYPENAME + 3);
+}
+
 }  // namespace blender
 
 #else /* RNA_RUNTIME */
@@ -1720,6 +1737,10 @@ static void rna_def_ui_layout(BlenderRNA *brna)
 
   prop = RNA_def_property(srna, "active", PROP_BOOLEAN, PROP_NONE);
   RNA_def_property_boolean_funcs(prop, "rna_UILayout_active_get", "rna_UILayout_active_set");
+  RNA_def_property_ui_text(prop,
+                           "Active",
+                           "When false, all items within this layout are grayed out. Values can "
+                           "still be changed and interactions are allowed");
 
   prop = RNA_def_property(srna, "active_default", PROP_BOOLEAN, PROP_NONE);
   RNA_def_property_boolean_funcs(
@@ -1750,7 +1771,10 @@ static void rna_def_ui_layout(BlenderRNA *brna)
 
   prop = RNA_def_property(srna, "enabled", PROP_BOOLEAN, PROP_NONE);
   RNA_def_property_boolean_funcs(prop, "rna_UILayout_enabled_get", "rna_UILayout_enabled_set");
-  RNA_def_property_ui_text(prop, "Enabled", "When false, this (sub)layout is grayed out");
+  RNA_def_property_ui_text(prop,
+                           "Enabled",
+                           "When false, all items within this layout are grayed out. Values "
+                           "cannot be changed and interactions are disabled");
 
   prop = RNA_def_property(srna, "alert", PROP_BOOLEAN, PROP_NONE);
   RNA_def_property_boolean_funcs(prop, "rna_UILayout_alert_get", "rna_UILayout_alert_set");
@@ -1797,6 +1821,18 @@ static void rna_def_ui_layout(BlenderRNA *brna)
   prop = RNA_def_property(srna, "use_property_split", PROP_BOOLEAN, PROP_NONE);
   RNA_def_property_boolean_funcs(
       prop, "rna_UILayout_property_split_get", "rna_UILayout_property_split_set");
+
+  prop = RNA_def_float(srna,
+                       "property_split_factor",
+                       ui::Layout::PROPERTY_SPLIT_FACTOR,
+                       ui::Layout::PROPERTY_SPLIT_FACTOR,
+                       ui::Layout::PROPERTY_SPLIT_FACTOR,
+                       "Property Split Factor",
+                       "Factor used by the layout system when property split is enabled",
+                       ui::Layout::PROPERTY_SPLIT_FACTOR,
+                       ui::Layout::PROPERTY_SPLIT_FACTOR);
+  RNA_def_property_clear_flag(prop, PROP_EDITABLE);
+  RNA_def_property_float_funcs(prop, "rna_UIlayout_property_split_factor_get", nullptr, nullptr);
 
   prop = RNA_def_property(srna, "use_property_decorate", PROP_BOOLEAN, PROP_NONE);
   RNA_def_property_boolean_funcs(
@@ -2092,7 +2128,7 @@ static void rna_def_uilist(BlenderRNA *brna)
       "Draw an item in the list (NOTE: when you define your own draw_item "
       "function, you may want to check given 'item' is of the right type...)");
   RNA_def_function_flag(func, FUNC_REGISTER_OPTIONAL);
-  parm = RNA_def_pointer(func, "context", "Context", "", "");
+  parm = RNA_def_pointer(func, "context", "Context", "", "The context");
   RNA_def_parameter_flags(parm, PropertyFlag(0), PARM_REQUIRED);
   parm = RNA_def_pointer(func, "layout", "UILayout", "", "Layout to draw the item");
   RNA_def_parameter_flags(parm, PROP_NEVER_NULL, PARM_REQUIRED);
@@ -2128,7 +2164,7 @@ static void rna_def_uilist(BlenderRNA *brna)
   func = RNA_def_function(srna, "draw_filter", nullptr);
   RNA_def_function_ui_description(func, "Draw filtering options");
   RNA_def_function_flag(func, FUNC_REGISTER_OPTIONAL);
-  parm = RNA_def_pointer(func, "context", "Context", "", "");
+  parm = RNA_def_pointer(func, "context", "Context", "", "The context");
   RNA_def_parameter_flags(parm, PropertyFlag(0), PARM_REQUIRED);
   parm = RNA_def_pointer(func, "layout", "UILayout", "", "Layout to draw the item");
   RNA_def_parameter_flags(parm, PROP_NEVER_NULL, PARM_REQUIRED);
@@ -2140,7 +2176,7 @@ static void rna_def_uilist(BlenderRNA *brna)
       "Filter and/or re-order items of the collection (output filter results in "
       "filter_flags, and reorder results in filter_neworder arrays)");
   RNA_def_function_flag(func, FUNC_REGISTER_OPTIONAL);
-  parm = RNA_def_pointer(func, "context", "Context", "", "");
+  parm = RNA_def_pointer(func, "context", "Context", "", "The context");
   RNA_def_parameter_flags(parm, PropertyFlag(0), PARM_REQUIRED);
   parm = RNA_def_pointer(
       func, "data", "AnyType", "", "Data from which to take Collection property");
@@ -2202,7 +2238,7 @@ static void rna_def_header(BlenderRNA *brna)
   func = RNA_def_function(srna, "draw", nullptr);
   RNA_def_function_ui_description(func, "Draw UI elements into the header UI layout");
   RNA_def_function_flag(func, FUNC_REGISTER);
-  parm = RNA_def_pointer(func, "context", "Context", "", "");
+  parm = RNA_def_pointer(func, "context", "Context", "", "The context");
   RNA_def_parameter_flags(parm, PropertyFlag(0), PARM_REQUIRED);
 
   RNA_define_verify_sdna(false); /* not in sdna */
@@ -2273,14 +2309,14 @@ static void rna_def_menu(BlenderRNA *brna)
       func, "If this method returns a non-null output, then the menu can be drawn");
   RNA_def_function_flag(func, FUNC_NO_SELF | FUNC_REGISTER_OPTIONAL);
   RNA_def_function_return(func, RNA_def_boolean(func, "visible", false, "", ""));
-  parm = RNA_def_pointer(func, "context", "Context", "", "");
+  parm = RNA_def_pointer(func, "context", "Context", "", "The context");
   RNA_def_parameter_flags(parm, PropertyFlag(0), PARM_REQUIRED);
 
   /* draw */
   func = RNA_def_function(srna, "draw", nullptr);
   RNA_def_function_ui_description(func, "Draw UI elements into the menu UI layout");
   RNA_def_function_flag(func, FUNC_REGISTER);
-  parm = RNA_def_pointer(func, "context", "Context", "", "");
+  parm = RNA_def_pointer(func, "context", "Context", "", "The context");
   RNA_def_parameter_flags(parm, PropertyFlag(0), PARM_REQUIRED);
 
   RNA_define_verify_sdna(false); /* not in sdna */
@@ -2447,7 +2483,7 @@ static void rna_def_asset_shelf(BlenderRNA *brna)
       func, "If this method returns a non-null output, the asset shelf will be visible");
   RNA_def_function_flag(func, FUNC_NO_SELF | FUNC_REGISTER_OPTIONAL);
   RNA_def_function_return(func, RNA_def_boolean(func, "visible", false, "", ""));
-  parm = RNA_def_pointer(func, "context", "Context", "", "");
+  parm = RNA_def_pointer(func, "context", "Context", "", "The context");
   RNA_def_parameter_flags(parm, PropertyFlag(0), PARM_REQUIRED);
 
   func = RNA_def_function(srna, "asset_poll", nullptr);
@@ -2457,7 +2493,8 @@ static void rna_def_asset_shelf(BlenderRNA *brna)
       "non-null output, the asset will be visible.");
   RNA_def_function_flag(func, FUNC_NO_SELF | FUNC_REGISTER_OPTIONAL);
   RNA_def_function_return(func, RNA_def_boolean(func, "visible", false, "", ""));
-  parm = RNA_def_pointer(func, "asset", "AssetRepresentation", "", "");
+  parm = RNA_def_pointer(
+      func, "asset", "AssetRepresentation", "", "The asset to test for visibility");
   RNA_def_parameter_flags(parm, PropertyFlag(0), PARM_REQUIRED);
 
   func = RNA_def_function(srna, "get_active_asset", nullptr);
@@ -2477,14 +2514,14 @@ static void rna_def_asset_shelf(BlenderRNA *brna)
   RNA_def_function_ui_description(
       func, "Draw UI elements into the context menu UI layout displayed on right click");
   RNA_def_function_flag(func, FUNC_NO_SELF | FUNC_REGISTER_OPTIONAL);
-  parm = RNA_def_pointer(func, "context", "Context", "", "");
+  parm = RNA_def_pointer(func, "context", "Context", "", "The context");
   RNA_def_parameter_flags(parm, PropertyFlag(0), PARM_REQUIRED);
-  parm = RNA_def_pointer(func, "asset", "AssetRepresentation", "", "");
+  parm = RNA_def_pointer(func, "asset", "AssetRepresentation", "", "The active asset");
   RNA_def_parameter_flags(parm, PropertyFlag(0), PARM_REQUIRED);
-  parm = RNA_def_pointer(func, "layout", "UILayout", "", "");
+  parm = RNA_def_pointer(func, "layout", "UILayout", "", "The layout to draw into");
   RNA_def_parameter_flags(parm, PropertyFlag(0), PARM_REQUIRED);
 
-  prop = rna_def_asset_library_reference_common(
+  prop = rna_def_asset_library_ui_reference_common(
       srna, "rna_AssetShelf_asset_library_get", "rna_AssetShelf_asset_library_set");
   RNA_def_property_ui_text(
       prop, "Asset Library", "Choose the asset library to display assets from");
@@ -2581,8 +2618,19 @@ static void rna_def_file_handler(BlenderRNA *brna)
       "If this method returns True, can be used to handle the drop of a drag-and-drop action");
   RNA_def_function_flag(func, FUNC_NO_SELF | FUNC_REGISTER_OPTIONAL);
   RNA_def_function_return(func, RNA_def_boolean(func, "is_usable", false, "", ""));
-  parm = RNA_def_pointer(func, "context", "Context", "", "");
+  parm = RNA_def_pointer(func, "context", "Context", "", "The context");
   RNA_def_parameter_flags(parm, PropertyFlag(0), PARM_REQUIRED);
+
+  func = RNA_def_function(srna, "label_with_extensions", "rna_FileHandler_label_with_extensions");
+  RNA_def_function_ui_description(
+      func, "Return the label of the file handler with the given ID, with its file extensions");
+  RNA_def_function_flag(func, FUNC_NO_SELF);
+  parm = RNA_def_string(func, "idname", nullptr, sizeof(bke::FileHandlerType::idname), "", "");
+  RNA_def_parameter_flags(parm, PropertyFlag(0), PARM_REQUIRED);
+  parm = RNA_def_string(
+      func, "result", nullptr, FH_MAX_FILE_EXTENSIONS_STR + OP_MAX_TYPENAME + 3, "result", "");
+  RNA_def_parameter_flags(parm, PROP_THICK_WRAP, ParameterFlag(0));
+  RNA_def_function_output(func, parm);
 }
 
 static void rna_def_layout_panel_state(BlenderRNA *brna)

@@ -17,6 +17,8 @@
 
 #include "DRW_render.hh"
 
+#include "draw_common.hh"
+
 #include "GPU_debug.hh"
 
 #include "eevee_instance.hh"
@@ -33,19 +35,15 @@ void ShadingView::init() {}
 
 void ShadingView::sync()
 {
-  int2 render_extent = inst_.film.render_extent_get();
+  extent_ = inst_.film.render_extent_get();
+  const CameraData &cam = inst_.camera.data_get();
 
-  if (false /* inst_.camera.is_panoramic() */) {
-    int64_t render_pixel_count = render_extent.x * int64_t(render_extent.y);
-    /* Divide pixel count between the 6 views. Rendering to a square target. */
-    extent_[0] = extent_[1] = ceilf(sqrtf(1 + (render_pixel_count / 6)));
-    /* TODO(@fclem): Clip unused views here. */
-    is_enabled_ = true;
+  if (inst_.camera.is_panoramic()) {
+    is_enabled_ = (cam.panoramic_view_mask & (1u << uint(face_id_))) != 0u;
   }
   else {
-    extent_ = render_extent;
     /* Only enable -Z view. */
-    is_enabled_ = (StringRefNull(name_) == "negZ_view");
+    is_enabled_ = (face_id_ == PANORAMIC_FACE_NEG_Z);
   }
 
   if (!is_enabled_) {
@@ -53,13 +51,13 @@ void ShadingView::sync()
   }
 
   /* Create views. */
-  const CameraData &cam = inst_.camera.data_get();
-
   float4x4 viewmat, winmat;
-  if (false /* inst_.camera.is_panoramic() */) {
-    /* TODO(@fclem) Over-scans. */
-    /* For now a mandatory 5% over-scan for DoF. */
-    float side = cam.clip_near * 1.05f;
+  if (inst_.camera.is_panoramic()) {
+    /* panoramic_view_overscan has included the 5% overscan (see Camera::sync). */
+    float side = cam.clip_near * cam.panoramic_view_overscan;
+    if (face_id_ == PANORAMIC_FACE_NEG_Z) {
+      side *= cam.panoramic_front_face_extent;
+    }
     float near = cam.clip_near;
     float far = cam.clip_far;
     winmat = math::projection::perspective(-side, side, -side, side, near, far);
@@ -72,7 +70,7 @@ void ShadingView::sync()
 
   main_view_.sync(viewmat, winmat);
 
-  inst_.uniform_data.data.pipeline.is_main_view_inverted = main_view_.is_inverted();
+  inst_.uniform_data.pipeline.is_main_view_inverted = main_view_.is_inverted();
 }
 
 void ShadingView::render()
@@ -82,16 +80,24 @@ void ShadingView::render()
   }
 
   update_view();
+  inst_.shadows.set_view(render_view_, extent_);
+  inst_.volume.set_view(main_view_, extent_);
+  inst_.uniform_data.data.push_update();
+  /* Need to be set early for planar probe rendering (if using ray-cast node) and ray-cast nodes in
+   * deferred / forward pipelines. */
+  inst_.raytracing.thickness_parameters_setup(render_view_.winmat(), extent_);
+  inst_.uniform_data.raytrace.push_update();
 
   GPU_debug_group_begin(name_);
 
-  /* Needs to be before planar_probes because it needs correct crypto-matte & render-pass buffers
-   * to reuse the same deferred shaders. */
-  RenderBuffers &rbufs = inst_.render_buffers;
-  rbufs.acquire(extent_);
-
   /* Needs to be before anything else because it query its own gbuffer. */
   inst_.planar_probes.set_view(render_view_, extent_);
+
+  /* Hand off gsplat compute workload for the current view before draws. */
+  DRW_gsplat_ensure_radiance(*inst_.manager, render_view_);
+
+  RenderBuffers &rbufs = inst_.render_buffers;
+  rbufs.acquire(extent_);
 
   combined_fb_.ensure(GPU_ATTACHMENT_TEXTURE(rbufs.depth_tx),
                       GPU_ATTACHMENT_TEXTURE(rbufs.combined_tx));
@@ -139,7 +145,6 @@ void ShadingView::render()
 
   inst_.volume.draw_prepass(main_view_);
 
-  /* TODO(Miguel Pozo): Deferred and forward prepass should happen before the GBuffer pass. */
   inst_.pipelines.deferred.render(main_view_,
                                   render_view_,
                                   prepass_fb_,
@@ -162,6 +167,8 @@ void ShadingView::render()
   inst_.pipelines.forward.render(
       render_view_, rbufs.depth_tx, prepass_fb_, transparent_fb_, combined_fb_, extent_);
 
+  inst_.lights.shape_display_draw(render_view_, combined_fb_);
+
   inst_.lights.debug_draw(render_view_, combined_fb_);
   inst_.hiz_buffer.debug_draw(render_view_, combined_fb_);
   inst_.shadows.debug_draw(render_view_, combined_fb_);
@@ -183,7 +190,7 @@ gpu::Texture *ShadingView::render_postfx(gpu::Texture *input_tx)
   if (!inst_.depth_of_field.postfx_enabled() && !inst_.motion_blur.postfx_enabled()) {
     return input_tx;
   }
-  postfx_tx_.acquire(extent_, gpu::TextureFormat::SFLOAT_16_16_16_16);
+  postfx_tx_.acquire_2d(extent_, gpu::TextureFormat::SFLOAT_16_16_16_16);
 
   /* Fix a sync bug on AMD + Mesa when volume + motion blur create artifacts
    * except if there is a clear event between them. */
@@ -241,7 +248,7 @@ void ShadingView::update_view()
     const float2 pixel_size = render_size / float2(film.film_extent_get());
 
     /* Render extent in final film pixel unit. */
-    const int2 render_extent = film.render_extent_get() * film.scaling_factor_get();
+    const int2 render_extent = film.render_extent_original_get() * film.scaling_factor_get();
     const int overscan_pixels = film.render_overscan_get() * film.scaling_factor_get();
 
     const float2 render_bottom_left = bottom_left - pixel_size * float(overscan_pixels);
@@ -296,9 +303,11 @@ void CaptureView::render_world()
   GPU_debug_group_begin("World.Capture");
 
   if (update_info->do_render) {
+    inst_.sphere_probes.ensure_cubemap_render_target(update_info->cube_target_extent);
+
     auto render_cubemap = [&](RayPipelineType ray_type) {
       if (assign_if_different(inst_.pipelines.data.ray_type, ray_type)) {
-        inst_.uniform_data.push_update();
+        inst_.uniform_data.pipeline.push_update();
       }
 
       for (int face : IndexRange(6)) {
@@ -338,8 +347,10 @@ void CaptureView::render_world()
     inst_.volume_probes.update_world_irradiance();
   }
 
+  inst_.sphere_probes.release_render_target();
+
   if (assign_if_different(inst_.pipelines.data.ray_type, RAY_TYPE_CAMERA)) {
-    inst_.uniform_data.push_update();
+    inst_.uniform_data.pipeline.push_update();
   }
 
   GPU_debug_group_end();
@@ -349,12 +360,27 @@ void CaptureView::render_probes()
 {
   Framebuffer prepass_fb;
   View view = {"Capture.View"};
+
+  /* Any 90 degree FOV view will do it. */
+  float4x4 win_m4 = math::projection::perspective(-0.1f, 0.1f, -0.1f, 0.1f, 0.1f, 10.0f);
+  /* Check if uniform_data needs to be updated. */
+  int prev_extent = 0;
+
   while (const auto update_info = inst_.sphere_probes.probe_update_info_pop()) {
     GPU_debug_group_begin("Probe.Capture");
 
+    inst_.sphere_probes.ensure_cubemap_render_target(update_info->cube_target_extent);
+
     if (assign_if_different(inst_.pipelines.data.ray_type, RAY_TYPE_GLOSSY)) {
-      inst_.uniform_data.push_update();
+      inst_.uniform_data.pipeline.push_update();
     }
+    if (prev_extent != update_info->cube_target_extent) {
+      /* Set correct thickness for raycast node in probe pipelines. */
+      inst_.raytracing.thickness_parameters_setup(win_m4, int2(update_info->cube_target_extent));
+      inst_.uniform_data.raytrace.push_update();
+    }
+
+    prev_extent = update_info->cube_target_extent;
 
     int2 extent = int2(update_info->cube_target_extent);
     RenderBuffers &rbufs = inst_.render_buffers;
@@ -365,13 +391,7 @@ void CaptureView::render_probes()
         GPU_ATTACHMENT_TEXTURE(rbufs.depth_tx),
         with_raycast ? GPU_ATTACHMENT_TEXTURE(rbufs.prepass_normal_tx) : GPU_ATTACHMENT_NONE,
         with_raycast ? GPU_ATTACHMENT_TEXTURE(rbufs.object_id_tx) : GPU_ATTACHMENT_NONE,
-        GPU_ATTACHMENT_TEXTURE(rbufs.vector_tx));
-
-    rbufs.vector_tx.clear(float4(0.0f));
-    if (with_raycast) {
-      rbufs.object_id_tx.clear(uint4(0));
-      rbufs.prepass_normal_tx.clear(float4(0.0f));
-    }
+        GPU_ATTACHMENT_NONE /* Motion vectors not supported. */);
 
     inst_.gbuffer.acquire(extent,
                           inst_.pipelines.probe.header_layer_count(),
@@ -389,6 +409,13 @@ void CaptureView::render_probes()
                                                       update_info->clipping_distances.y);
       view.sync(view_m4, win_m4);
 
+      /* Hand off gsplat compute workload for the capture before draws. */
+      DRW_gsplat_ensure_radiance(*inst_.manager, view);
+
+      inst_.shadows.set_view(view, extent);
+      inst_.volume.set_view(view, extent);
+      inst_.uniform_data.data.push_update();
+
       combined_fb_.ensure(GPU_ATTACHMENT_TEXTURE(inst_.render_buffers.depth_tx),
                           GPU_ATTACHMENT_TEXTURE_CUBEFACE(inst_.sphere_probes.cubemap_tx_, face));
 
@@ -399,10 +426,10 @@ void CaptureView::render_probes()
                          GPU_ATTACHMENT_TEXTURE_LAYER(inst_.gbuffer.closure_tx.layer_view(0), 0),
                          GPU_ATTACHMENT_TEXTURE_LAYER(inst_.gbuffer.closure_tx.layer_view(1), 0));
 
+      /* TODO: Clear from gbuffer.bind ? */
       GPU_framebuffer_bind(combined_fb_);
       /* Alpha stores transmittance. So start at 1. */
-      GPU_framebuffer_clear_color_depth(
-          combined_fb_, {0.0, 0.0, 0.0, 1.0}, inst_.film.depth.clear_value);
+      GPU_framebuffer_clear_color(combined_fb_, {0.0, 0.0, 0.0, 1.0});
       inst_.pipelines.probe.render(view, prepass_fb, combined_fb_, gbuffer_fb_, extent);
     }
 
@@ -412,8 +439,10 @@ void CaptureView::render_probes()
     inst_.sphere_probes.remap_to_octahedral_projection(update_info->atlas_coord, true, false);
   }
 
+  inst_.sphere_probes.release_render_target();
+
   if (assign_if_different(inst_.pipelines.data.ray_type, RAY_TYPE_CAMERA)) {
-    inst_.uniform_data.push_update();
+    inst_.uniform_data.pipeline.push_update();
   }
 }
 

@@ -16,6 +16,7 @@ set(INC_SYS
 set(SRC
   sequencer_add.cc
   sequencer_add_menu_scene.cc
+  sequencer_add_modifier_assets.cc
   sequencer_buttons.cc
   sequencer_channels_draw.cc
   sequencer_channels_edit.cc
@@ -63,11 +64,18 @@ set(LIB
   PRIVATE bf::imbuf::opencolorio
   PRIVATE bf::intern::atomic
   PRIVATE bf::intern::guardedalloc
+  PRIVATE bf::intern::profile
   PRIVATE bf::animrig
+  PRIVATE bf::nodes
   PRIVATE bf::sequencer
   PRIVATE bf::windowmanager
   PRIVATE bf::dependencies::optional::audaspace
+  PRIVATE bf::intern::clog
 )
+
+if(WITH_INPUT_IME)
+  add_definitions(-DWITH_INPUT_IME)
+endif()
 
 blender_add_lib(bf_editor_space_sequencer "${SRC}" "${INC}" "${INC_SYS}" "${LIB}")
 

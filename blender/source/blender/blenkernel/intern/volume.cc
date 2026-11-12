@@ -16,15 +16,15 @@
 #include "DNA_volume_types.h"
 
 #include "BLI_bounds.hh"
-#include "BLI_fileops.h"
+#include "BLI_fileops.hh"
 #include "BLI_index_range.hh"
-#include "BLI_math_base.h"
+#include "BLI_math_base_c.hh"
 #include "BLI_math_matrix_types.hh"
 #include "BLI_math_vector_types.hh"
 #include "BLI_path_utils.hh"
-#include "BLI_string.h"
+#include "BLI_string.hh"
 #include "BLI_string_ref.hh"
-#include "BLI_utildefines.h"
+#include "BLI_utildefines.hh"
 
 #include "BKE_anim_data.hh"
 #include "BKE_bake_data_block_id.hh"
@@ -224,13 +224,35 @@ static void volume_foreach_path(ID *id, BPathForeachPathData *bpath_data)
     return;
   }
 
+  if (volume->is_sequence && (bpath_data->flag & BKE_BPATH_FOREACH_PATH_EXPAND_SEQUENCES) != 0 &&
+      volume->filepath[0] != '\0')
+  {
+    char abs_filepath[FILE_MAX];
+    STRNCPY(abs_filepath, volume->filepath);
+    if (bpath_data->absolute_base_path) {
+      BLI_path_abs(abs_filepath, bpath_data->absolute_base_path);
+    }
+    else {
+      BLI_path_abs(abs_filepath, ID_BLEND_PATH(bpath_data->bmain, &volume->id));
+    }
+
+    bpath_data->is_expanded = true;
+    BKE_bpath_sequence_filepaths_foreach(abs_filepath, [&](StringRef frame_filepath) {
+      char frame_path[FILE_MAX];
+      frame_filepath.copy_utf8_truncated(frame_path);
+      BKE_bpath_foreach_path_readonly_process(bpath_data, frame_path);
+    });
+    bpath_data->is_expanded = false;
+    return;
+  }
+
   BKE_bpath_foreach_path_fixed_process(bpath_data, volume->filepath, sizeof(volume->filepath));
 }
 
 static void volume_blend_write(BlendWriter *writer, ID *id, const void *id_address)
 {
   Volume *volume = id_cast<Volume *>(id);
-  const bool is_undo = BLO_write_is_undo(writer);
+  const bool is_undo = writer->is_undo();
 
   /* Do not store packed files in case this is a library override ID. */
   if (ID_IS_OVERRIDE_LIBRARY(volume) && !is_undo) {
@@ -256,7 +278,7 @@ static void volume_blend_read_data(BlendDataReader *reader, ID *id)
   volume->runtime->frame = 0;
 
   /* materials */
-  BLO_read_pointer_array(reader, volume->totcol, reinterpret_cast<void **>(&volume->mat));
+  BLO_read_pointer_array_and_validate_size(reader, &volume->mat, &volume->totcol);
 }
 
 static void volume_blend_read_after_liblink(BlendLibReader * /*reader*/, ID *id)
@@ -289,6 +311,7 @@ IDTypeInfo IDType_ID_VO = {
     .foreach_cache = volume_foreach_cache,
     .foreach_path = volume_foreach_path,
     .foreach_working_space_color = nullptr,
+    .foreach_asset_weak_reference = nullptr,
     .owner_pointer_get = nullptr,
 
     .blend_write = volume_blend_write,
@@ -703,7 +726,7 @@ static void volume_evaluate_modifiers(Depsgraph *depsgraph,
 
   /* Evaluate modifiers. */
   for (; md; md = md->next) {
-    const ModifierTypeInfo *mti = BKE_modifier_get_info(ModifierType(md->type));
+    const ModifierTypeInfo *mti = BKE_modifier_get_info(md->type);
 
     if (!BKE_modifier_is_enabled(scene, md, required_mode)) {
       continue;
@@ -1121,7 +1144,8 @@ openvdb::math::Transform BKE_volume_transform_to_openvdb(const float4x4 &transfo
 /**
  * Returns a grid of the same type as the input, but with more/less resolution. If
  * resolution_factor is 1/2, the resolution on each axis is halved. The transform of the returned
- * grid is adjusted to match the original grid. */
+ * grid is adjusted to match the original grid.
+ */
 template<typename GridType>
 static typename GridType::Ptr create_grid_with_changed_resolution(const GridType &old_grid,
                                                                   const float resolution_factor)

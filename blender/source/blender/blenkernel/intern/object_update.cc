@@ -12,10 +12,10 @@
 #include "DNA_modifier_types.h"
 #include "DNA_scene_types.h"
 
-#include "BLI_listbase.h"
-#include "BLI_math_matrix.h"
-#include "BLI_math_vector.h"
-#include "BLI_string.h"
+#include "BLI_listbase.hh"
+#include "BLI_math_matrix_c.hh"
+#include "BLI_math_vector_c.hh"
+#include "BLI_string.hh"
 
 #include "BKE_armature.hh"
 #include "BKE_constraint.h"
@@ -25,10 +25,12 @@
 #include "BKE_editmesh.hh"
 #include "BKE_grease_pencil.h"
 #include "BKE_grease_pencil.hh"
+#include "BKE_instances.hh"
 #include "BKE_lattice.hh"
 #include "BKE_layer.hh"
 #include "BKE_mball.hh"
 #include "BKE_mesh.hh"
+#include "BKE_modifier.hh"
 #include "BKE_object.hh"
 #include "BKE_particle.h"
 #include "BKE_pointcache.h"
@@ -98,7 +100,7 @@ void BKE_object_eval_constraints(Depsgraph *depsgraph, Scene *scene, Object *ob)
 
   /* evaluate constraints stack */
   /* TODO: split this into:
-   * - pre (i.e. BKE_constraints_make_evalob, per-constraint (i.e.
+   * - pre (i.e. BKE_constraints_make_evalob), per-constraint (i.e.
    * - inner body of BKE_constraints_solve),
    * - post (i.e. BKE_constraints_clear_evalob)
    *
@@ -126,12 +128,64 @@ void BKE_object_eval_transform_final(Depsgraph *depsgraph, Object *ob)
   ob->runtime->last_update_transform = DEG_get_update_count(depsgraph);
 }
 
+static void empty_object_apply_modifiers(Depsgraph *depsgraph,
+                                         Scene *scene,
+                                         Object *object,
+                                         bke::GeometrySet &geometry_set)
+{
+  const bool use_render = (DEG_get_mode(depsgraph) == DAG_EVAL_RENDER);
+  const int required_mode = use_render ? eModifierMode_Render : eModifierMode_Realtime;
+  ModifierApplyFlag apply_flag = use_render ? MOD_APPLY_RENDER : MOD_APPLY_USECACHE;
+  const ModifierEvalContext mectx = {depsgraph, object, apply_flag};
+
+  BKE_modifiers_clear_errors(object);
+
+  VirtualModifierData virtual_modifier_data;
+  ModifierData *md = BKE_modifiers_get_virtual_modifierlist(object, &virtual_modifier_data);
+
+  /* Evaluate modifiers. */
+  for (; md; md = md->next) {
+    const ModifierTypeInfo *mti = BKE_modifier_get_info(md->type);
+
+    if (!BKE_modifier_is_enabled(scene, md, required_mode)) {
+      continue;
+    }
+
+    if (mti->modify_geometry_set) {
+      mti->modify_geometry_set(md, &mectx, &geometry_set);
+    }
+  }
+}
+
+static void empty_object_update(Depsgraph *depsgraph, Scene *scene, Object *object)
+{
+  BKE_object_free_derived_caches(object);
+
+  bke::GeometrySet geometry_set;
+  /* If the empty is instancing a collection, create an input geometry set of this collection. */
+  if (object->instance_collection != nullptr) {
+    Collection &collection = *object->instance_collection;
+    auto instances = std::make_unique<bke::Instances>(1);
+    instances->reference_handles_for_write().first() = instances->add_reference(collection);
+    instances->transforms_for_write().first() = float4x4::identity();
+    geometry_set = bke::GeometrySet::from_instances(std::move(instances));
+  }
+  /* Evaluate modifiers. */
+  empty_object_apply_modifiers(depsgraph, scene, object, geometry_set);
+
+  object->runtime->geometry_set_eval = new bke::GeometrySet(std::move(geometry_set));
+}
+
 void BKE_object_handle_data_update(Depsgraph *depsgraph, Scene *scene, Object *ob)
 {
   DEG_debug_print_eval(depsgraph, __func__, ob->id.name, ob);
 
   /* includes all keys and modifiers */
   switch (ob->type) {
+    case OB_EMPTY: {
+      empty_object_update(depsgraph, scene, ob);
+      break;
+    }
     case OB_MESH: {
       CustomData_MeshMasks cddata_masks = scene->customdata_mask;
       CustomData_MeshMasks_update(&cddata_masks, &CD_MASK_BAREMESH);
@@ -181,14 +235,16 @@ void BKE_object_handle_data_update(Depsgraph *depsgraph, Scene *scene, Object *o
     case OB_GREASE_PENCIL:
       BKE_object_eval_grease_pencil(depsgraph, scene, ob);
       break;
+    default:
+      break;
   }
 
   /* particles */
-  if (!(ob->mode & OB_MODE_EDIT) && ob->particlesystem.first) {
+  if (!(ob->mode & OB_MODE_EDIT) && ob->particlesystem.first()) {
     const bool use_render_params = (DEG_get_mode(depsgraph) == DAG_EVAL_RENDER);
     ParticleSystem *tpsys, *psys;
     ob->transflag &= ~OB_DUPLIPARTS;
-    psys = static_cast<ParticleSystem *>(ob->particlesystem.first);
+    psys = ob->particlesystem.first();
     while (psys) {
       if (psys_check_enabled(ob, psys, use_render_params)) {
         /* check use of dupli objects here */
@@ -215,8 +271,8 @@ void BKE_object_handle_data_update(Depsgraph *depsgraph, Scene *scene, Object *o
   }
 
   /* Cache the contained geometry types of the #geometry_set_eval. */
+  ob->runtime->contained_geometry_types = 0;
   if (ob->runtime->geometry_set_eval) {
-    ob->runtime->contained_geometry_types = 0;
     for (const bke::GeometryComponent::Type type :
          ob->runtime->geometry_set_eval->gather_component_types(true, true))
     {
@@ -242,9 +298,8 @@ void BKE_object_sync_to_original(Depsgraph *depsgraph, Object *object)
 
   /* Particle edit mode draws from the original object, so sync imat from evaluated to original
    * object so drawing uses the correct transform. */
-  for (ParticleSystem *
-           psys_eval = static_cast<ParticleSystem *>(object->particlesystem.first),
-          *psys_orig = static_cast<ParticleSystem *>(object_orig->particlesystem.first);
+  for (ParticleSystem *psys_eval = object->particlesystem.first(),
+                      *psys_orig = object_orig->particlesystem.first();
        psys_eval && psys_orig;
        psys_eval = psys_eval->next, psys_orig = psys_orig->next)
   {
@@ -259,8 +314,7 @@ void BKE_object_sync_to_original(Depsgraph *depsgraph, Object *object)
   object_orig->flag = object->flag;
 
   /* Copy back error messages from modifiers. */
-  for (ModifierData *md = static_cast<ModifierData *>(object->modifiers.first),
-                    *md_orig = static_cast<ModifierData *>(object_orig->modifiers.first);
+  for (ModifierData *md = object->modifiers.first(), *md_orig = object_orig->modifiers.first();
        md != nullptr && md_orig != nullptr;
        md = md->next, md_orig = md_orig->next)
   {
@@ -339,7 +393,7 @@ void BKE_object_eval_transform_all(Depsgraph *depsgraph, Scene *scene, Object *o
   if (object->parent != nullptr) {
     BKE_object_eval_parent(depsgraph, object);
   }
-  if (!BLI_listbase_is_empty(&object->constraints)) {
+  if (!object->constraints.is_empty()) {
     BKE_object_eval_constraints(depsgraph, scene, object);
   }
   BKE_object_eval_uber_transform(depsgraph, object);
@@ -390,10 +444,8 @@ void BKE_object_eval_eval_base_flags(Depsgraph *depsgraph,
   ViewLayer *view_layer = static_cast<ViewLayer *>(
       BLI_findlink(&scene->view_layers, view_layer_index));
   BLI_assert(view_layer != nullptr);
-  BLI_assert(view_layer->object_bases_array != nullptr);
   BLI_assert(base_index >= 0);
-  BLI_assert(base_index < MEM_allocN_len(view_layer->object_bases_array) / sizeof(Base *));
-  Base *base = view_layer->object_bases_array[base_index];
+  Base *base = view_layer->object_bases_array()[base_index];
   BLI_assert(base->object == object);
 
   DEG_debug_print_eval(depsgraph, __func__, object->id.name, object);
@@ -422,9 +474,7 @@ void BKE_object_eval_eval_base_flags(Depsgraph *depsgraph,
   object->runtime->local_collections_bits = base->local_collections_bits;
 
   if (object->mode == OB_MODE_PARTICLE_EDIT) {
-    for (ParticleSystem *psys = static_cast<ParticleSystem *>(object->particlesystem.first);
-         psys != nullptr;
-         psys = psys->next)
+    for (ParticleSystem *psys = object->particlesystem.first(); psys != nullptr; psys = psys->next)
     {
       BKE_particle_batch_cache_dirty_tag(psys, BKE_PARTICLE_BATCH_DIRTY_ALL);
     }

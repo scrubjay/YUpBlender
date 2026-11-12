@@ -23,13 +23,13 @@
 #include "DNA_scene_types.h"
 
 #include "BLI_array.hh"
-#include "BLI_listbase.h"
-#include "BLI_math_geom.h"
-#include "BLI_math_matrix.h"
+#include "BLI_listbase.hh"
+#include "BLI_math_geom_c.hh"
 #include "BLI_math_matrix.hh"
-#include "BLI_math_rotation.h"
+#include "BLI_math_matrix_c.hh"
+#include "BLI_math_rotation_c.hh"
 #include "BLI_task.hh"
-#include "BLI_utildefines.h"
+#include "BLI_utildefines.hh"
 #include "BLI_vector.hh"
 
 #include "BKE_armature.hh"
@@ -982,7 +982,8 @@ static wmOperatorStatus apply_objects_internal(bContext *C,
        */
 
       if (apply_scale) {
-        float max_scale = max_fff(fabsf(ob->scale[0]), fabsf(ob->scale[1]), fabsf(ob->scale[2]));
+        float max_scale = std::max(
+            {fabsf(ob->scale[0]), fabsf(ob->scale[1]), fabsf(ob->scale[2])});
         ob->empty_drawsize *= max_scale;
       }
     }
@@ -1334,7 +1335,7 @@ static wmOperatorStatus object_origin_set_exec(bContext *C, wmOperator *op)
   if (obedit) {
     if (obedit->type == OB_MESH) {
       Mesh *mesh = id_cast<Mesh *>(obedit->data);
-      BMEditMesh *em = mesh->runtime->edit_mesh.get();
+      BMesh *bm = BKE_editmesh_bmesh_get_for_write(mesh);
       BMVert *eve;
       BMIter iter;
 
@@ -1347,26 +1348,26 @@ static wmOperatorStatus object_origin_set_exec(bContext *C, wmOperator *op)
         if (around == V3D_AROUND_CENTER_BOUNDS) {
           float min[3], max[3];
           INIT_MINMAX(min, max);
-          BM_ITER_MESH (eve, &iter, em->bm, BM_VERTS_OF_MESH) {
+          BM_ITER_MESH (eve, &iter, bm, BM_VERTS_OF_MESH) {
             minmax_v3v3_v3(min, max, eve->co);
           }
           mid_v3_v3v3(cent, min, max);
         }
         else { /* #V3D_AROUND_CENTER_MEDIAN. */
-          if (em->bm->totvert) {
-            const float total_div = 1.0f / float(em->bm->totvert);
-            BM_ITER_MESH (eve, &iter, em->bm, BM_VERTS_OF_MESH) {
+          if (bm->totvert) {
+            const float total_div = 1.0f / float(bm->totvert);
+            BM_ITER_MESH (eve, &iter, bm, BM_VERTS_OF_MESH) {
               madd_v3_v3fl(cent, eve->co, total_div);
             }
           }
         }
       }
 
-      BM_ITER_MESH (eve, &iter, em->bm, BM_VERTS_OF_MESH) {
+      BM_ITER_MESH (eve, &iter, bm, BM_VERTS_OF_MESH) {
         sub_v3_v3(eve->co, cent);
       }
 
-      EDBM_mesh_normals_update(em);
+      EDBM_mesh_normals_update(bm);
       tot_change++;
       DEG_id_tag_update(&obedit->id, ID_RECALC_GEOMETRY);
     }
@@ -1675,8 +1676,11 @@ static wmOperatorStatus object_origin_set_exec(bContext *C, wmOperator *op)
       }
       else if (around == V3D_AROUND_CENTER_BOUNDS) {
         const int current_frame = scene->r.cfra;
-        const Bounds<float3> bounds = *grease_pencil.bounds_min_max(current_frame);
-        cent = math::midpoint(bounds.min, bounds.max);
+        if (const std::optional<Bounds<float3>> bounds = grease_pencil.bounds_min_max(
+                current_frame))
+        {
+          cent = math::midpoint(bounds->min, bounds->max);
+        }
       }
       else if (around == V3D_AROUND_CENTER_MEDIAN) {
         const int current_frame = scene->r.cfra;
@@ -2155,7 +2159,7 @@ static wmOperatorStatus object_transform_axis_target_invoke(bContext *C,
   }
 
 #ifdef USE_RENDER_OVERRIDE
-  int flag2_prev = vc.v3d->flag2;
+  eView3D_Flag2 flag2_prev = vc.v3d->flag2;
   vc.v3d->flag2 |= V3D_HIDE_OVERLAYS;
 #endif
 

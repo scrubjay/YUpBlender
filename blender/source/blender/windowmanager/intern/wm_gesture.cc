@@ -15,12 +15,12 @@
 
 #include "MEM_guardedalloc.h"
 
-#include "BLI_bitmap_draw_2d.h"
+#include "BLI_bitmap_draw_2d.hh"
 #include "BLI_lasso_2d.hh"
-#include "BLI_listbase.h"
-#include "BLI_math_vector.h"
-#include "BLI_rect.h"
-#include "BLI_utildefines.h"
+#include "BLI_listbase.hh"
+#include "BLI_math_vector_c.hh"
+#include "BLI_rect.hh"
+#include "BLI_utildefines.hh"
 
 #include "WM_api.hh"
 #include "WM_types.hh"
@@ -32,6 +32,8 @@
 #include "GPU_state.hh"
 
 #include "BIF_glutil.hh"
+
+#include "UI_view2d.hh"
 
 namespace blender {
 
@@ -76,14 +78,14 @@ wmGesture *WM_gesture_new(wmWindow *window, const ARegion *region, const wmEvent
     float *lasso;
     gesture->points_alloc = 1024;
     gesture->customdata = lasso = MEM_new_array_uninitialized<float>(
-        size_t(2 * gesture->points_alloc), "lasso points");
+        size_t(2) * gesture->points_alloc, "lasso points");
     lasso[0] = xy[0] - gesture->winrct.xmin;
     lasso[1] = xy[1] - gesture->winrct.ymin;
     gesture->points = 1;
   }
   else if (ELEM(type, WM_GESTURE_POLYLINE)) {
     gesture->points_alloc = 64;
-    short *border = MEM_new_array_uninitialized<short>(size_t(2 * gesture->points_alloc),
+    short *border = MEM_new_array_uninitialized<short>(size_t(2) * gesture->points_alloc,
                                                        "polyline points");
     gesture->customdata = border;
     border[0] = xy[0] - gesture->winrct.xmin;
@@ -101,20 +103,21 @@ void WM_gesture_end(wmWindow *win, wmGesture *gesture)
   BLI_remlink(&win->runtime->gesture, gesture);
   MEM_delete_void(gesture->customdata);
   WM_generic_user_data_free(&gesture->user_data);
+  MEM_delete(gesture->edge_pan_data);
   MEM_delete(gesture);
 }
 
 void WM_gestures_free_all(wmWindow *win)
 {
-  while (win->runtime->gesture.first) {
-    WM_gesture_end(win, static_cast<wmGesture *>(win->runtime->gesture.first));
+  while (win->runtime->gesture.first()) {
+    WM_gesture_end(win, win->runtime->gesture.first());
   }
 }
 
 void WM_gestures_remove(wmWindow *win)
 {
-  while (win->runtime->gesture.first) {
-    WM_gesture_end(win, static_cast<wmGesture *>(win->runtime->gesture.first));
+  while (win->runtime->gesture.first()) {
+    WM_gesture_end(win, win->runtime->gesture.first());
   }
 }
 
@@ -350,24 +353,19 @@ static void draw_filled_lasso(wmGesture *gt, const int2 *lasso_pt_extra)
 
     GPU_blend(GPU_BLEND_ADDITIVE_PREMULT);
 
-    IMMDrawPixelsTexState state = immDrawPixelsTexSetup(GPU_SHADER_2D_IMAGE_SHUFFLE_COLOR);
-    GPU_shader_bind(state.shader);
+    PixelBitmapDrawer drawer(GPU_SHADER_2D_IMAGE_SHUFFLE_COLOR);
     GPU_shader_uniform_float_ex(
-        state.shader, GPU_shader_get_uniform(state.shader, "shuffle"), 4, 1, red);
-
-    immDrawPixelsTexTiled(&state,
-                          rect.xmin,
-                          rect.ymin,
-                          w,
-                          h,
-                          gpu::TextureFormat::UNORM_8,
-                          false,
-                          pixel_buf,
-                          1.0f,
-                          1.0f,
-                          nullptr);
-
-    GPU_shader_unbind();
+        drawer.shader_get(), GPU_shader_get_uniform(drawer.shader_get(), "shuffle"), 4, 1, red);
+    drawer.draw(rect.xmin,
+                rect.ymin,
+                w,
+                h,
+                gpu::TextureFormat::UNORM_8,
+                false,
+                pixel_buf,
+                1.0f,
+                1.0f,
+                nullptr);
 
     MEM_delete(pixel_buf);
 
@@ -577,7 +575,7 @@ static void wm_gesture_draw_cross(const wmWindow *win, const wmGesture *gt)
 
 void wm_gesture_draw(wmWindow *win)
 {
-  wmGesture *gt = static_cast<wmGesture *>(win->runtime->gesture.first);
+  wmGesture *gt = win->runtime->gesture.first();
 
   GPU_line_width(1.0f);
   for (; gt; gt = gt->next) {

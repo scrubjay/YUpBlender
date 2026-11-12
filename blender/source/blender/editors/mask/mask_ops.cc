@@ -10,12 +10,12 @@
 
 #include "MEM_guardedalloc.h"
 
-#include "BLI_listbase.h"
-#include "BLI_math_matrix.h"
-#include "BLI_math_vector.h"
-#include "BLI_string.h"
+#include "BLI_listbase.hh"
+#include "BLI_math_matrix_c.hh"
+#include "BLI_math_vector_c.hh"
+#include "BLI_string.hh"
 #include "BLI_string_utils.hh"
-#include "BLI_utildefines.h"
+#include "BLI_utildefines.hh"
 
 #include "BKE_context.hh"
 #include "BKE_lib_id.hh"
@@ -60,10 +60,10 @@ Mask *ED_mask_new(bContext *C, const char *name)
 
   mask = BKE_mask_new(bmain, name);
 
-  if (area && area->spacedata.first) {
+  if (area && area->spacedata.first_) {
     switch (area->spacetype) {
       case SPACE_CLIP: {
-        SpaceClip *sc = static_cast<SpaceClip *>(area->spacedata.first);
+        SpaceClip *sc = area->spacedata.first_as<SpaceClip>();
         ED_space_clip_set_mask(C, sc, mask);
         break;
       }
@@ -72,7 +72,7 @@ Mask *ED_mask_new(bContext *C, const char *name)
         break;
       }
       case SPACE_IMAGE: {
-        SpaceImage *sima = static_cast<SpaceImage *>(area->spacedata.first);
+        SpaceImage *sima = area->spacedata.first_as<SpaceImage>();
         ED_space_image_set_mask(C, sima, mask);
         break;
       }
@@ -276,7 +276,7 @@ struct SlidePointData {
 
   /* Data needed to restore the state. */
   float vec[3][3];
-  char old_h1, old_h2;
+  eBezTriple_Handle old_h1, old_h2;
 
   /* Point sliding. */
 
@@ -324,16 +324,16 @@ static bool spline_under_mouse_get(const bContext *C,
                 (sc->user.render_flag & MCLIP_PROXY_RENDER_UNDISTORT) != 0;
   }
 
-  for (MaskLayer *mask_layer_orig = static_cast<MaskLayer *>(mask_orig->masklayers.first),
-                 *mask_layer_eval = static_cast<MaskLayer *>(mask_eval->masklayers.first);
+  for (MaskLayer *mask_layer_orig = mask_orig->masklayers.first(),
+                 *mask_layer_eval = mask_eval->masklayers.first();
        mask_layer_orig != nullptr;
        mask_layer_orig = mask_layer_orig->next, mask_layer_eval = mask_layer_eval->next)
   {
     if (mask_layer_orig->visibility_flag & (MASK_HIDE_VIEW | MASK_HIDE_SELECT)) {
       continue;
     }
-    for (MaskSpline *spline_orig = static_cast<MaskSpline *>(mask_layer_orig->splines.first),
-                    *spline_eval = static_cast<MaskSpline *>(mask_layer_eval->splines.first);
+    for (MaskSpline *spline_orig = mask_layer_orig->splines.first(),
+                    *spline_eval = mask_layer_eval->splines.first();
          spline_orig != nullptr;
          spline_orig = spline_orig->next, spline_eval = spline_eval->next)
     {
@@ -425,14 +425,14 @@ static void select_sliding_point(Mask *mask,
       BKE_mask_point_select_set(point, true);
       break;
     case MASK_WHICH_HANDLE_LEFT:
-      point->bezt.f1 |= SELECT;
+      point->bezt.f1 |= BEZT_FLAG_SELECT;
       break;
     case MASK_WHICH_HANDLE_RIGHT:
-      point->bezt.f3 |= SELECT;
+      point->bezt.f3 |= BEZT_FLAG_SELECT;
       break;
     case MASK_WHICH_HANDLE_STICK:
-      point->bezt.f1 |= SELECT;
-      point->bezt.f3 |= SELECT;
+      point->bezt.f1 |= BEZT_FLAG_SELECT;
+      point->bezt.f3 |= BEZT_FLAG_SELECT;
       break;
     default:
       BLI_assert_msg(0, "Unexpected situation in select_sliding_point()");
@@ -916,7 +916,7 @@ static wmOperatorStatus slide_point_modal(bContext *C, wmOperator *op, const wmE
         /* Don't key sliding feather UW's. */
         if ((data->action == SLIDE_ACTION_FEATHER && data->uw) == false) {
           if (animrig::is_autokey_on(scene)) {
-            ED_mask_layer_shape_auto_key(data->mask_layer, scene->r.cfra);
+            ED_mask_layer_shape_auto_key(C, data->mask_layer, scene->r.cfra);
           }
         }
 
@@ -1124,15 +1124,15 @@ static SlideSplineCurvatureData *slide_spline_curvature_customdata(bContext *C,
 
   /* Change selection */
   ED_mask_select_toggle_all(mask, SEL_DESELECT);
-  slide_data->adjust_bezt->f2 |= SELECT;
-  slide_data->other_bezt->f2 |= SELECT;
+  slide_data->adjust_bezt->f2 |= BEZT_FLAG_SELECT;
+  slide_data->other_bezt->f2 |= BEZT_FLAG_SELECT;
   if (u < 0.5f) {
-    slide_data->adjust_bezt->f3 |= SELECT;
-    slide_data->other_bezt->f1 |= SELECT;
+    slide_data->adjust_bezt->f3 |= BEZT_FLAG_SELECT;
+    slide_data->other_bezt->f1 |= BEZT_FLAG_SELECT;
   }
   else {
-    slide_data->adjust_bezt->f1 |= SELECT;
-    slide_data->other_bezt->f3 |= SELECT;
+    slide_data->adjust_bezt->f1 |= BEZT_FLAG_SELECT;
+    slide_data->other_bezt->f3 |= BEZT_FLAG_SELECT;
   }
   mask_layer->act_spline = spline;
   mask_layer->act_point = point;
@@ -1333,7 +1333,7 @@ static wmOperatorStatus slide_spline_curvature_modal(bContext *C,
       if (event->type == slide_data->event_invoke_type && event->val == KM_RELEASE) {
         /* Don't key sliding feather UW's. */
         if (animrig::is_autokey_on(scene)) {
-          ED_mask_layer_shape_auto_key(slide_data->mask_layer, scene->r.cfra);
+          ED_mask_layer_shape_auto_key(C, slide_data->mask_layer, scene->r.cfra);
         }
 
         WM_event_add_notifier(C, NC_MASK | NA_EDITED, slide_data->mask);
@@ -1469,7 +1469,7 @@ static wmOperatorStatus delete_exec(bContext *C, wmOperator * /*op*/)
       continue;
     }
 
-    spline = static_cast<MaskSpline *>(mask_layer.splines.first);
+    spline = mask_layer.splines.first();
 
     while (spline) {
       const int tot_point_orig = spline->tot_point;
@@ -1547,7 +1547,7 @@ static wmOperatorStatus delete_exec(bContext *C, wmOperator * /*op*/)
 
     /* Not essential but confuses users when there are keys with no data!
      * Assume if they delete all data from the layer they also don't care about keys. */
-    if (BLI_listbase_is_empty(&mask_layer.splines)) {
+    if (mask_layer.splines.is_empty()) {
       BKE_mask_layer_free_shapes(&mask_layer);
     }
   }
@@ -1620,7 +1620,7 @@ static wmOperatorStatus mask_switch_direction_exec(bContext *C, wmOperator * /*o
 
     if (changed_layer) {
       if (animrig::is_autokey_on(scene)) {
-        ED_mask_layer_shape_auto_key(&mask_layer, scene->r.cfra);
+        ED_mask_layer_shape_auto_key(C, &mask_layer, scene->r.cfra);
       }
     }
   }
@@ -1682,7 +1682,7 @@ static wmOperatorStatus mask_normals_make_consistent_exec(bContext *C, wmOperato
 
     if (changed_layer) {
       if (animrig::is_autokey_on(scene)) {
-        ED_mask_layer_shape_auto_key(&mask_layer, scene->r.cfra);
+        ED_mask_layer_shape_auto_key(C, &mask_layer, scene->r.cfra);
       }
     }
   }
@@ -1719,7 +1719,7 @@ void MASK_OT_normals_make_consistent(wmOperatorType *ot)
 static wmOperatorStatus set_handle_type_exec(bContext *C, wmOperator *op)
 {
   Mask *mask = CTX_data_edit_mask(C);
-  int handle_type = RNA_enum_get(op->ptr, "type");
+  eBezTriple_Handle handle_type = eBezTriple_Handle(RNA_enum_get(op->ptr, "type"));
 
   bool changed = false;
 
@@ -1806,9 +1806,9 @@ static wmOperatorStatus mask_hide_view_clear_exec(bContext *C, wmOperator *op)
 
   for (MaskLayer &mask_layer : mask->masklayers) {
 
-    if (mask_layer.visibility_flag & OB_HIDE_VIEWPORT) {
+    if (mask_layer.visibility_flag & MASK_HIDE_VIEW) {
       ED_mask_layer_select_set(&mask_layer, select);
-      mask_layer.visibility_flag &= ~OB_HIDE_VIEWPORT;
+      mask_layer.visibility_flag &= ~MASK_HIDE_VIEW;
       changed = true;
     }
   }
@@ -1856,7 +1856,7 @@ static wmOperatorStatus mask_hide_view_set_exec(bContext *C, wmOperator *op)
       if (ED_mask_layer_select_check(&mask_layer)) {
         ED_mask_layer_select_set(&mask_layer, false);
 
-        mask_layer.visibility_flag |= OB_HIDE_VIEWPORT;
+        mask_layer.visibility_flag |= MASK_HIDE_VIEW;
         changed = true;
         if (&mask_layer == BKE_mask_layer_active(mask)) {
           BKE_mask_layer_active_set(mask, nullptr);
@@ -1865,7 +1865,7 @@ static wmOperatorStatus mask_hide_view_set_exec(bContext *C, wmOperator *op)
     }
     else {
       if (!ED_mask_layer_select_check(&mask_layer)) {
-        mask_layer.visibility_flag |= OB_HIDE_VIEWPORT;
+        mask_layer.visibility_flag |= MASK_HIDE_VIEW;
         changed = true;
         if (&mask_layer == BKE_mask_layer_active(mask)) {
           BKE_mask_layer_active_set(mask, nullptr);
@@ -2221,7 +2221,7 @@ static wmOperatorStatus mask_duplicate_exec(bContext *C, wmOperator * /*op*/)
           }
 
           /* animation requires points added one by one */
-          if (mask_layer.splines_shapes.first) {
+          if (mask_layer.splines_shapes.first_) {
             new_spline->tot_point = 0;
             tot_point_shape_start = BKE_mask_layer_shape_spline_to_index(&mask_layer, new_spline);
           }
@@ -2233,7 +2233,7 @@ static wmOperatorStatus mask_duplicate_exec(bContext *C, wmOperator * /*op*/)
             }
             BKE_mask_point_select_set(new_point, true);
 
-            if (mask_layer.splines_shapes.first) {
+            if (mask_layer.splines_shapes.first_) {
               new_spline->tot_point++;
               BKE_mask_layer_shape_changed_add(
                   &mask_layer, tot_point_shape_start + b, true, false);
@@ -2248,8 +2248,8 @@ static wmOperatorStatus mask_duplicate_exec(bContext *C, wmOperator * /*op*/)
           }
 
           /* Flush selection to splines. */
-          new_spline->flag |= SELECT;
-          spline.flag &= ~SELECT;
+          new_spline->flag |= MASK_SPLINE_SELECT;
+          spline.flag &= ~MASK_SPLINE_SELECT;
         }
         i++;
         point++;

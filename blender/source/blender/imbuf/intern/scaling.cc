@@ -10,7 +10,7 @@
 #include "BLI_math_interp.hh"
 #include "BLI_math_vector.hh"
 #include "BLI_task.hh"
-#include "BLI_utildefines.h"
+#include "BLI_utildefines.hh"
 
 #include "MEM_guardedalloc.h"
 
@@ -19,7 +19,7 @@
 #include "IMB_imbuf_types.hh"
 #include "IMB_metadata.hh"
 
-#include "BLI_sys_types.h" /* for intptr_t support */
+#include "BLI_sys_types.hh" /* for intptr_t support */
 
 namespace blender {
 
@@ -95,6 +95,7 @@ static void to_static_pixel_type(const BufferT *src_buffer,
 template<typename BufferT>
 static void scale_down_x_func(const BufferT *src_buffer,
                               const int2 src_size,
+                              const int src_stride,
                               const int channels,
                               BufferT *dst_buffer,
                               const int2 dst_size,
@@ -110,7 +111,7 @@ static void scale_down_x_func(const BufferT *src_buffer,
     const int grain_size = threaded ? 32 : ibufy;
     threading::parallel_for(IndexRange(ibufy), grain_size, [&](IndexRange range) {
       for (const int y : range) {
-        const T *src_ptr = src + (int64_t(y) * ibufx);
+        const T *src_ptr = src + (int64_t(y) * src_stride);
         T *dst_ptr = dst + (int64_t(y) * newx);
         float sample = 0.0f;
         float4 val(0.0f);
@@ -187,6 +188,7 @@ static void scale_down_y_func(const BufferT *src_buffer,
 template<typename BufferT>
 static void scale_up_x_func(const BufferT *src_buffer,
                             const int2 src_size,
+                            const int src_stride,
                             const int channels,
                             BufferT *dst_buffer,
                             const int2 dst_size,
@@ -198,13 +200,13 @@ static void scale_up_x_func(const BufferT *src_buffer,
   to_static_pixel_type(src_buffer, channels, dst_buffer, [&]<typename T>(const T *src, T *dst) {
     const float add = (ibufx - 0.001f) / newx;
     /* Special case: source is 1px wide (see #70356). */
-    if (UNLIKELY(ibufx == 1)) {
+    if (ibufx == 1) [[unlikely]] {
       for (int y = ibufy; y > 0; y--) {
         for (int x = newx; x > 0; x--) {
           *dst = *src;
           dst++;
         }
-        src++;
+        src += src_stride;
       }
     }
     else {
@@ -213,7 +215,7 @@ static void scale_up_x_func(const BufferT *src_buffer,
         for (const int y : range) {
           float sample = -0.5f + add * 0.5f;
           int counter = 0;
-          const T *src_ptr = src + (int64_t(y) * ibufx);
+          const T *src_ptr = src + (int64_t(y) * src_stride);
           T *dst_ptr = dst + (int64_t(y) * newx);
           float4 val = load_pixel(src_ptr);
           float4 nval = load_pixel(src_ptr + 1);
@@ -258,7 +260,7 @@ static void scale_up_y_func(const BufferT *src_buffer,
   to_static_pixel_type(src_buffer, channels, dst_buffer, [&]<typename T>(const T *src, T *dst) {
     const float add = (ibufy - 0.001f) / newy;
     /* Special case: source is 1px high (see #70356). */
-    if (UNLIKELY(ibufy == 1)) {
+    if (ibufy == 1) [[unlikely]] {
       for (int y = newy; y > 0; y--) {
         memcpy(reinterpret_cast<void *>(dst), src, sizeof(T) * ibufx);
         dst += ibufx;
@@ -309,17 +311,29 @@ static void imb_scale_box(const BufferT *src_buffer,
                           const int channels,
                           BufferT *dst_buffer,
                           const int2 dst_size,
-                          const bool threaded)
+                          const bool threaded,
+                          const int src_stride = 0)
 {
+  const int stride = (src_stride != 0) ? src_stride : src_size.x;
   BufferT *tmp_buffer = MEM_new_array_uninitialized<BufferT>(
       int64_t(channels) * dst_size.x * src_size.y, __func__);
   if (dst_size.x < src_size.x) {
-    scale_down_x_func(
-        src_buffer, src_size, channels, tmp_buffer, int2(dst_size.x, src_size.y), threaded);
+    scale_down_x_func(src_buffer,
+                      src_size,
+                      stride,
+                      channels,
+                      tmp_buffer,
+                      int2(dst_size.x, src_size.y),
+                      threaded);
   }
   else {
-    scale_up_x_func(
-        src_buffer, src_size, channels, tmp_buffer, int2(dst_size.x, src_size.y), threaded);
+    scale_up_x_func(src_buffer,
+                    src_size,
+                    stride,
+                    channels,
+                    tmp_buffer,
+                    int2(dst_size.x, src_size.y),
+                    threaded);
   }
 
   if (dst_size.y < src_size.y) {
@@ -332,6 +346,28 @@ static void imb_scale_box(const BufferT *src_buffer,
   }
 
   MEM_delete(tmp_buffer);
+}
+
+void IMB_scale_box(const float *src_buffer,
+                   const int2 src_size,
+                   const int channels,
+                   float *dst_buffer,
+                   const int2 dst_size,
+                   const bool threaded,
+                   const int src_stride)
+{
+  imb_scale_box(src_buffer, src_size, channels, dst_buffer, dst_size, threaded, src_stride);
+}
+
+void IMB_scale_box(const uchar *src_buffer,
+                   const int2 src_size,
+                   const int channels,
+                   uchar *dst_buffer,
+                   const int2 dst_size,
+                   const bool threaded,
+                   const int src_stride)
+{
+  imb_scale_box(src_buffer, src_size, channels, dst_buffer, dst_size, threaded, src_stride);
 }
 
 template<typename T>
@@ -446,13 +482,13 @@ bool IMB_scale(ImBuf *ibuf, const int2 new_size, IMBScaleFilter filter, bool thr
         float *dst = MEM_new_array_uninitialized<float>(
             size_t(ibuf->channels) * new_size.x * new_size.y, __func__);
         scale_nearest_func(src, src_size, ibuf->channels, dst, new_size, threaded);
-        IMB_assign_float_buffer(ibuf, dst, IB_TAKE_OWNERSHIP);
+        ibuf->assign_float_data(dst);
       }
       if (const uchar *src = ibuf->byte_data()) {
         uchar *dst = MEM_new_array_uninitialized<uchar>(size_t(new_size.x) * new_size.y * 4,
                                                         __func__);
         scale_nearest_func(src, src_size, 4, dst, new_size, threaded);
-        IMB_assign_byte_buffer(ibuf, dst, IB_TAKE_OWNERSHIP);
+        ibuf->assign_byte_data(dst);
       }
       break;
     }
@@ -461,13 +497,13 @@ bool IMB_scale(ImBuf *ibuf, const int2 new_size, IMBScaleFilter filter, bool thr
         float *dst = MEM_new_array_uninitialized<float>(
             size_t(ibuf->channels) * new_size.x * new_size.y, __func__);
         scale_bilinear(src, src_size, ibuf->channels, dst, new_size, threaded);
-        IMB_assign_float_buffer(ibuf, dst, IB_TAKE_OWNERSHIP);
+        ibuf->assign_float_data(dst);
       }
       if (const uchar *src = ibuf->byte_data()) {
         uchar *dst = MEM_new_array_uninitialized<uchar>(size_t(new_size.x) * new_size.y * 4,
                                                         __func__);
         scale_bilinear(src, src_size, 4, dst, new_size, threaded);
-        IMB_assign_byte_buffer(ibuf, dst, IB_TAKE_OWNERSHIP);
+        ibuf->assign_byte_data(dst);
       }
       break;
     }
@@ -476,13 +512,13 @@ bool IMB_scale(ImBuf *ibuf, const int2 new_size, IMBScaleFilter filter, bool thr
         float *dst = MEM_new_array_uninitialized<float>(
             size_t(ibuf->channels) * new_size.x * new_size.y, __func__);
         imb_scale_box(src, src_size, ibuf->channels, dst, new_size, threaded);
-        IMB_assign_float_buffer(ibuf, dst, IB_TAKE_OWNERSHIP);
+        ibuf->assign_float_data(dst);
       }
       if (const uchar *src = ibuf->byte_data()) {
         uchar *dst = MEM_new_array_uninitialized<uchar>(size_t(new_size.x) * new_size.y * 4,
                                                         __func__);
         imb_scale_box(src, src_size, 4, dst, new_size, threaded);
-        IMB_assign_byte_buffer(ibuf, dst, IB_TAKE_OWNERSHIP);
+        ibuf->assign_byte_data(dst);
       }
       break;
     }
@@ -505,23 +541,21 @@ ImBuf *IMB_scale_into_new(const ImBuf *ibuf,
   /* Size same as source: just copy source image. */
   const int2 src_size = int2(ibuf->x, ibuf->y);
   if (src_size == new_size) {
-    ImBuf *dst = IMB_dupImBuf(ibuf);
-    IMB_metadata_copy(dst, ibuf);
-    return dst;
+    return IMB_dupImBuf(ibuf);
   }
 
   /* Allocate destination buffers. */
-  eImBufFlags flags = IB_uninitialized_pixels;
+  ImBufFlags flags = ImBufFlags::UninitializedPixels;
   if (ibuf->byte_data()) {
-    flags |= IB_byte_data;
+    flags |= ImBufFlags::ByteData;
   }
   if (ibuf->float_data()) {
-    flags |= IB_float_data;
+    flags |= ImBufFlags::FloatData;
   }
-  ImBuf *dst = IMB_allocImBuf(new_size.x, new_size.y, ibuf->planes, flags);
+  ImBuf *dst = IMB_allocImBuf(new_size.x, new_size.y, flags);
+  dst->color_mode = ibuf->color_mode;
   dst->channels = ibuf->channels;
   IMB_metadata_copy(dst, ibuf);
-  dst->colormanage_flag = ibuf->colormanage_flag;
   uchar *dst_byte = dst->byte_data_for_write();
   float *dst_float = dst->float_data_for_write();
   if (dst_byte == nullptr && dst_float == nullptr) {
@@ -558,6 +592,10 @@ ImBuf *IMB_scale_into_new(const ImBuf *ibuf,
       break;
     }
   }
+
+  dst->byte_buffer.colorspace = ibuf->byte_buffer.colorspace;
+  dst->float_buffer.colorspace = ibuf->float_buffer.colorspace;
+
   return dst;
 }
 

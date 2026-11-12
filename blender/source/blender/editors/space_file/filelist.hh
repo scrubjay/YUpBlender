@@ -56,7 +56,7 @@ void filelist_setfilter_options(FileList *filelist,
                                 uint64_t filter_id,
                                 bool filter_assets_only,
                                 bool filter_assets_hide_online,
-                                const char *filter_glob,
+                                bool filter_assets_hide_offline,
                                 const char *filter_search);
 /**
  * Set the indexer to be used by the filelist.
@@ -64,8 +64,8 @@ void filelist_setfilter_options(FileList *filelist,
  * The given indexer allocation should be handled by the caller or defined statically.
  */
 void filelist_setindexer(FileList *filelist, const FileIndexerType *indexer);
-void filelist_remote_asset_library_refresh_online_assets_status(const FileList *filelist,
-                                                                StringRef remote_url);
+void filelist_remote_asset_library_refresh_online_assets_status(
+    const FileList *filelist, StringRef remote_url, StringRef absolute_downloaded_file);
 void filelist_set_asset_include_online(FileList *filelist, bool show_online_assets);
 /**
  * \param catalog_id: The catalog that should be filtered by if \a catalog_visibility is
@@ -80,8 +80,12 @@ void filelist_tag_needs_filtering(FileList *filelist);
 void filelist_filter(FileList *filelist);
 /**
  * \param asset_library_ref: May be NULL to unset the library.
+ * \param on_change: Called when a different asset library was set. NOT called when the asset
+ *     library was unset (i.e. \a asset_library_ref is null).
  */
-void filelist_setlibrary(FileList *filelist, const AssetLibraryReference *asset_library_ref);
+void filelist_setlibrary(FileList *filelist,
+                         const AssetLibraryReference *asset_library_ref,
+                         FunctionRef<void()> on_change = nullptr);
 
 void filelist_init_icons();
 void filelist_free_icons();
@@ -222,6 +226,8 @@ void filelist_entry_parent_select_set(FileList *filelist,
                                       FileCheckType check);
 
 void filelist_setrecursion(FileList *filelist, int recursion_level);
+/** Set the extension glob used to tag entries with #FILE_TYPE_OPERATOR. */
+void filelist_setglob(FileList *filelist, const char *filter_glob);
 
 asset_system::AssetLibrary *filelist_asset_library(FileList *filelist);
 

@@ -17,7 +17,7 @@
 #include "DNA_object_types.h"
 #include "DNA_scene_types.h"
 
-#include "BLI_listbase.h"
+#include "BLI_listbase.hh"
 
 #include "BKE_action.hh"
 #include "BKE_armature.hh"
@@ -141,15 +141,20 @@ void DepsgraphNodeBuilder::build_rig(Object *object)
     /* By definition, no need to tag depsgraph as dirty from here, so we can pass nullptr bmain. */
     BKE_pose_rebuild(nullptr, object, armature, true);
   }
+  else {
+    /* Ensure the pose bone indices are up to date, so that the rest of the depsgraph building code
+     * can use `pchan->bone_get(armature)`, which is faster than passing the object. */
+    BKE_pose_ensure_bone_indices(*object);
+  }
+
   /* Speed optimization for animation lookups. */
   if (object->pose != nullptr) {
     BKE_pose_channels_hash_ensure(object->pose);
     if (object->pose->flag & POSE_CONSTRAINTS_NEED_UPDATE_FLAGS) {
-      BKE_pose_update_constraint_flags(object->pose);
+      BKE_pose_update_constraint_flags(*object);
     }
   }
-  /**
-   * Pose Rig Graph
+  /* Pose Rig Graph
    * ==============
    *
    * Pose Component:
@@ -258,11 +263,10 @@ void DepsgraphNodeBuilder::build_rig(Object *object)
           &object->id, NodeType::PARAMETERS, OperationCode::PARAMETERS_EVAL, nullptr, pchan.name);
     }
     /* Build constraints. */
-    if (pchan.constraints.first != nullptr) {
+    if (pchan.constraints.first() != nullptr) {
       build_pose_constraints(object, &pchan, pchan_index);
     }
-    /**
-     * IK Solvers.
+    /* IK Solvers.
      *
      * - These require separate processing steps are pose-level
      *   to be executed between chains of bones (i.e. once the

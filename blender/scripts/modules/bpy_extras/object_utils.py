@@ -77,7 +77,7 @@ def add_object_align_init(context, operator):
         elif add_align_preference == 'CURSOR':
             rotation = context.scene.cursor.rotation_euler.to_matrix().to_4x4()
         else:
-            rotation = Matrix()
+            rotation = Matrix.Identity(4)
 
     return location @ rotation
 
@@ -166,10 +166,16 @@ def object_data_add(context, obdata, operator=None, name=None):
 
 
 class AddObjectHelper:
-    def align_update_callback(self, _context):
-        """Update callback for the align property, resets rotation for world alignment."""
+    def align_update_callback(self, context):
+        """
+        Update callback for the align property, resets rotation for world alignment.
+
+        :param context: The context.
+        :type context: :class:`bpy.types.Context`
+        """
+        del context
         if self.align == 'WORLD':
-            self.rotation.zero()
+            self.rotation = (0.0, 0.0, 0.0)
 
     align: EnumProperty(
         name="Align",
@@ -188,6 +194,7 @@ class AddObjectHelper:
     rotation: FloatVectorProperty(
         name="Rotation",
         subtype='EULER',
+        default=(0.0, 0.0, 0.0),
     )
 
     @classmethod

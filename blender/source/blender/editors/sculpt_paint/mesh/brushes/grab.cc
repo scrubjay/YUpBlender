@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup edsculpt
+ */
+
 #include <queue>
 
 #include "editors/sculpt_paint/mesh/brushes/brushes.hh"
@@ -45,6 +49,7 @@ BLI_NOINLINE static void calc_silhouette_factors(const StrokeCache &cache,
                                                  const Span<float3> normals,
                                                  const MutableSpan<float> factors)
 {
+  PRF_scope(ProfileCategory::Editor);
   BLI_assert(normals.size() == factors.size());
 
   const float sign = math::sign(math::dot(cache.initial_normal_symm, cache.grab_delta_symm));
@@ -61,7 +66,6 @@ static void calc_faces(const Depsgraph &depsgraph,
                        const MeshAttributeData &attribute_data,
                        const bke::pbvh::MeshNode &node,
                        Object &object,
-                       LocalData &tls,
                        const PositionDeformData &position_data)
 {
   SculptSession &ss = *object.runtime->sculpt_session;
@@ -70,6 +74,8 @@ static void calc_faces(const Depsgraph &depsgraph,
   const OrigPositionData orig_data = orig_position_data_get_mesh(object, node);
   const Span<int> verts = node.verts();
 
+  Array<float, bke::pbvh::MESH_LEAF_LIMIT> factors(verts.size());
+  Array<float, bke::pbvh::MESH_LEAF_LIMIT> distances(verts.size());
   calc_factors_common_from_orig_data_mesh(depsgraph,
                                           brush,
                                           object,
@@ -77,16 +83,15 @@ static void calc_faces(const Depsgraph &depsgraph,
                                           orig_data.positions,
                                           orig_data.normals,
                                           node,
-                                          tls.factors,
-                                          tls.distances);
+                                          factors,
+                                          distances);
 
   if (brush.flag2 & BRUSH_GRAB_SILHOUETTE) {
-    calc_silhouette_factors(cache, offset, orig_data.normals, tls.factors);
+    calc_silhouette_factors(cache, offset, orig_data.normals, factors);
   }
 
-  tls.translations.resize(verts.size());
-  const MutableSpan<float3> translations = tls.translations;
-  translations_from_offset_and_factors(offset, tls.factors, translations);
+  Array<float3, bke::pbvh::MESH_LEAF_LIMIT> translations(verts.size());
+  translations_from_offset_and_factors(offset, factors, translations);
 
   clip_and_lock_translations(sd, ss, position_data.eval, verts, translations);
   position_data.deform(translations, verts);
@@ -169,6 +174,7 @@ void do_grab_brush(const Depsgraph &depsgraph,
                    Object &object,
                    const IndexMask &node_mask)
 {
+  PRF_scope(ProfileCategory::Editor);
   const SculptSession &ss = *object.runtime->sculpt_session;
   bke::pbvh::Tree &pbvh = *bke::object::pbvh_get(object);
   const Brush &brush = *BKE_paint_brush_for_read(&sd.paint);
@@ -184,16 +190,8 @@ void do_grab_brush(const Depsgraph &depsgraph,
       MutableSpan<bke::pbvh::MeshNode> nodes = pbvh.nodes<bke::pbvh::MeshNode>();
       node_mask.foreach_index(
           [&](const int i) {
-            LocalData &tls = all_tls.local();
-            calc_faces(depsgraph,
-                       sd,
-                       brush,
-                       grab_delta,
-                       attribute_data,
-                       nodes[i],
-                       object,
-                       tls,
-                       position_data);
+            calc_faces(
+                depsgraph, sd, brush, grab_delta, attribute_data, nodes[i], object, position_data);
             bke::pbvh::update_node_bounds_mesh(position_data.eval, nodes[i]);
           },
           exec_mode::grain_size(1));
@@ -252,7 +250,7 @@ void geometry_preview_lines_update(Depsgraph &depsgraph,
     return;
   }
 
-  BKE_sculpt_update_object_for_edit(&depsgraph, &object, false);
+  BKE_sculptsession_update_for_edit(&depsgraph, &object, false);
 
   const Mesh &mesh = *id_cast<const Mesh *>(object.data);
   /* Always grab active shape key if the sculpt happens on shapekey. */

@@ -52,19 +52,6 @@ ExternalProject_Add(external_dpcpp_spirvheaders
   INSTALL_COMMAND echo .
 )
 
-ExternalProject_Add(external_unifiedruntime
-  URL file://${PACKAGE_DIR}/${UNIFIED_RUNTIME_FILE}
-  URL_HASH ${UNIFIED_RUNTIME_HASH_TYPE}=${UNIFIED_RUNTIME_HASH}
-  DOWNLOAD_DIR ${DOWNLOAD_DIR}
-  PREFIX ${BUILD_DIR}/unifiedruntime
-  PATCH_COMMAND ${PATCH_CMD} -p 1 -d
-    ${BUILD_DIR}/unifiedruntime/src/external_unifiedruntime <
-    ${PATCH_DIR}/unifiedruntime.diff
-  CONFIGURE_COMMAND echo .
-  BUILD_COMMAND echo .
-  INSTALL_COMMAND echo .
-)
-
 ExternalProject_Add(external_unifiedmemoryframework
   URL file://${PACKAGE_DIR}/${UNIFIED_MEMORY_FRAMEWORK_FILE}
   URL_HASH ${UNIFIED_MEMORY_FRAMEWORK_HASH_TYPE}=${UNIFIED_MEMORY_FRAMEWORK_HASH}
@@ -73,6 +60,19 @@ ExternalProject_Add(external_unifiedmemoryframework
   PATCH_COMMAND ${PATCH_CMD} -p 1 -d
     ${BUILD_DIR}/unifiedmemoryframework/src/external_unifiedmemoryframework <
     ${PATCH_DIR}/unifiedmemoryframework.diff
+  CONFIGURE_COMMAND echo .
+  BUILD_COMMAND echo .
+  INSTALL_COMMAND echo .
+)
+
+ExternalProject_Add(external_hwloc
+  URL file://${PACKAGE_DIR}/${HWLOC_FILE}
+  URL_HASH ${HWLOC_HASH_TYPE}=${HWLOC_HASH}
+  DOWNLOAD_DIR ${DOWNLOAD_DIR}
+  PREFIX ${BUILD_DIR}/hwloc
+  PATCH_COMMAND ${PATCH_CMD} -p 1 -d
+    ${BUILD_DIR}/hwloc/src/external_hwloc <
+    ${PATCH_DIR}/hwloc.diff
   CONFIGURE_COMMAND echo .
   BUILD_COMMAND echo .
   INSTALL_COMMAND echo .

@@ -17,18 +17,6 @@
 
 #include "gpu_shader_create_info.hh"
 
-GPU_SHADER_CREATE_INFO(gpu_shader_test)
-LOCAL_GROUP_SIZE(1)
-TYPEDEF_SOURCE("GPU_shader_shared.hh")
-STORAGE_BUF(0, write, TestOutput, out_test[])
-GPU_SHADER_CREATE_END()
-
-GPU_SHADER_CREATE_INFO(gpu_math_test)
-COMPUTE_SOURCE("gpu_math_test.glsl")
-ADDITIONAL_INFO(gpu_shader_test)
-DO_STATIC_COMPILATION()
-GPU_SHADER_CREATE_END()
-
 GPU_SHADER_CREATE_INFO(gpu_compute_1d_test)
 LOCAL_GROUP_SIZE(1)
 IMAGE(1, SFLOAT_32_32_32_32, write, image1D, img_output)
@@ -184,37 +172,6 @@ FRAGMENT_SOURCE("gpu_specialization_test.glsl")
 DO_STATIC_COMPILATION()
 GPU_SHADER_CREATE_END()
 
-/* EEVEE test. */
-
-GPU_SHADER_CREATE_INFO(eevee_shadow_test)
-COMPUTE_SOURCE("eevee_shadow_test.glsl")
-TYPEDEF_SOURCE("eevee_defines.hh")
-TYPEDEF_SOURCE("eevee_shadow_shared.hh")
-ADDITIONAL_INFO(gpu_shader_test)
-DO_STATIC_COMPILATION()
-GPU_SHADER_CREATE_END()
-
-GPU_SHADER_CREATE_INFO(eevee_occupancy_test)
-COMPUTE_SOURCE("eevee_occupancy_test.glsl")
-TYPEDEF_SOURCE("eevee_defines.hh")
-ADDITIONAL_INFO(gpu_shader_test)
-DO_STATIC_COMPILATION()
-GPU_SHADER_CREATE_END()
-
-GPU_SHADER_CREATE_INFO(eevee_gbuffer_normal_test)
-COMPUTE_SOURCE("eevee_gbuffer_normal_test.glsl")
-TYPEDEF_SOURCE("eevee_defines.hh")
-ADDITIONAL_INFO(gpu_shader_test)
-DO_STATIC_COMPILATION()
-GPU_SHADER_CREATE_END()
-
-GPU_SHADER_CREATE_INFO(eevee_gbuffer_closure_test)
-COMPUTE_SOURCE("eevee_gbuffer_closure_test.glsl")
-TYPEDEF_SOURCE("eevee_defines.hh")
-ADDITIONAL_INFO(gpu_shader_test)
-DO_STATIC_COMPILATION()
-GPU_SHADER_CREATE_END()
-
 /* Runtime create info. */
 GPU_SHADER_CREATE_INFO(gpu_framebuffer_subpass_input_test)
 FRAGMENT_OUT(0, int, out_value)
@@ -223,4 +180,41 @@ GPU_SHADER_CREATE_END()
 /* Runtime create info. */
 GPU_SHADER_CREATE_INFO(gpu_framebuffer_layer_viewport_test)
 FRAGMENT_OUT(0, int2, out_value)
+GPU_SHADER_CREATE_END()
+
+/* Ray tracing */
+GPU_SHADER_CREATE_INFO(gpu_ray_query_test)
+COMPUTE_SOURCE("gpu_ray_query_test.glsl")
+LOCAL_GROUP_SIZE(1, 1, 1)
+SPECIALIZATION_CONSTANT(uint, intersection_mask_in, 0u)
+STORAGE_BUF(0, read, float4, ray_pos_in[])
+STORAGE_BUF(1, read, float4, ray_dir_in[])
+STORAGE_BUF(2, write, uint, hit_out[])
+ACCELERATION_STRUCTURE(0, scene_as)
+BUILTINS(BuiltinBits::RAY_QUERY)
+DO_STATIC_COMPILATION()
+GPU_SHADER_CREATE_END()
+
+/* Ray query from a fragment shader (one ray per fragment). */
+GPU_SHADER_CREATE_INFO(gpu_ray_query_raster_test)
+VERTEX_SOURCE("gpu_ray_query_raster_test.glsl")
+FRAGMENT_SOURCE("gpu_ray_query_raster_test.glsl")
+FRAGMENT_OUT(0, int, hit_out)
+STORAGE_BUF(0, read, float4, ray_pos_in[])
+STORAGE_BUF(1, read, float4, ray_dir_in[])
+ACCELERATION_STRUCTURE(0, scene_as)
+BUILTINS(BuiltinBits::RAY_QUERY | BuiltinBits::VERTEX_ID)
+DO_STATIC_COMPILATION()
+GPU_SHADER_CREATE_END()
+
+/* Read the per-instance custom index (Metal userID) at the committed hit. */
+GPU_SHADER_CREATE_INFO(gpu_ray_query_custom_index_test)
+COMPUTE_SOURCE("gpu_ray_query_custom_index_test.glsl")
+LOCAL_GROUP_SIZE(1, 1, 1)
+STORAGE_BUF(0, read, float4, ray_pos_in[])
+STORAGE_BUF(1, read, float4, ray_dir_in[])
+STORAGE_BUF(2, write, uint, custom_index_out[])
+ACCELERATION_STRUCTURE(0, scene_as)
+BUILTINS(BuiltinBits::RAY_QUERY)
+DO_STATIC_COMPILATION()
 GPU_SHADER_CREATE_END()

@@ -21,8 +21,8 @@
 #include "RNA_types.hh"
 
 #include "BLI_array.hh"
-#include "BLI_listbase.h"
-#include "BLI_utildefines.h"
+#include "BLI_listbase.hh"
+#include "BLI_utildefines.hh"
 
 #include "bpy_capi_utils.hh"
 #include "bpy_props.hh"
@@ -50,7 +50,7 @@ namespace blender {
 // #define USE_ENUM_COPY_STRINGS
 
 /* -------------------------------------------------------------------- */
-/** \name Shared Enums & Doc-Strings
+/** \name Shared Enums & Docstrings
  * \{ */
 
 #define BPY_PROPDEF_OPTIONS_DOC \
@@ -270,6 +270,12 @@ static PyObject *bpy_prop_deferred_call(BPy_PropDeferred * /*self*/,
 
 /* Get/Set Items. */
 
+PyDoc_STRVAR(
+    /* Wrap. */
+    bpy_prop_deferred_function_doc,
+    "The property registration function (e.g. :func:`bpy.props.IntProperty`).\n"
+    "\n"
+    ":type: Callable\n");
 /**
  * Expose the function in case scripts need to introspect this information
  * (not currently used by Blender itself).
@@ -280,6 +286,13 @@ static PyObject *bpy_prop_deferred_function_get(BPy_PropDeferred *self, void * /
   Py_IncRef(ret);
   return ret;
 }
+
+PyDoc_STRVAR(
+    /* Wrap. */
+    bpy_prop_deferred_keywords_doc,
+    "The keyword arguments passed to the property registration function.\n"
+    "\n"
+    ":type: dict[str, Any]\n");
 
 /**
  * Expose keywords in case scripts need to introspect this information
@@ -300,12 +313,12 @@ static PyGetSetDef bpy_prop_deferred_getset[] = {
     {"function",
      reinterpret_cast<getter>(bpy_prop_deferred_function_get),
      static_cast<setter>(nullptr),
-     nullptr,
+     bpy_prop_deferred_function_doc,
      nullptr},
     {"keywords",
      reinterpret_cast<getter>(bpy_prop_deferred_keywords_get),
      static_cast<setter>(nullptr),
-     nullptr,
+     bpy_prop_deferred_keywords_doc,
      nullptr},
     {nullptr, nullptr, nullptr, nullptr, nullptr} /* Sentinel */
 };
@@ -410,7 +423,7 @@ static PyObject *pyrna_struct_as_instance(PointerRNA *ptr)
   PyObject *self = nullptr;
   /* first get self */
   /* operators can store their own instance for later use */
-  if (ptr->data) {
+  if (*ptr) {
     void **instance = RNA_struct_instance(ptr);
 
     if (instance) {
@@ -2072,7 +2085,7 @@ static bool bpy_prop_string_visit_fn_call(
   }
   else {
     text = PyUnicode_AsUTF8(item);
-    if (UNLIKELY(text == nullptr)) {
+    if (text == nullptr) [[unlikely]] {
       PyErr_Clear();
       PyErr_Format(PyExc_TypeError,
                    "expected sequence of strings or tuple pairs of strings, not %.200s",
@@ -2447,10 +2460,9 @@ static size_t strswapbufcpy(char *buf, const char **orig)
 static int icon_id_from_name(const char *name)
 {
   const EnumPropertyItem *item;
-  int id;
 
   if (name[0]) {
-    for (item = rna_enum_icon_items, id = 0; item->identifier; item++, id++) {
+    for (item = rna_enum_icon_items; item->identifier; item++) {
       if (STREQ(item->name, name)) {
         return item->value;
       }
@@ -3300,14 +3312,14 @@ static int bpy_prop_arg_parse_id(PyObject *o, void *p)
   const char *id;
 
   id = PyUnicode_AsUTF8AndSize(o, &id_len);
-  if (UNLIKELY(id_len >= MAX_IDPROP_NAME)) {
+  if (id_len >= MAX_IDPROP_NAME) [[unlikely]] {
     PyErr_Format(PyExc_TypeError, "'%.200s' too long, max length is %d", id, MAX_IDPROP_NAME - 1);
     return 0;
   }
 
   parse_data->prop_free_handle = nullptr;
-  if (UNLIKELY(RNA_def_property_free_identifier_deferred_prepare(
-                   srna, id, &parse_data->prop_free_handle) == -1))
+  if (RNA_def_property_free_identifier_deferred_prepare(srna, id, &parse_data->prop_free_handle) ==
+      -1) [[unlikely]]
   {
     PyErr_Format(PyExc_TypeError,
                  "'%s' is defined as a non-dynamic type for '%s'",
@@ -3347,7 +3359,7 @@ static int bpy_prop_arg_parse_tag_defines(PyObject *o, void *p)
 /** \} */
 
 /* -------------------------------------------------------------------- */
-/** \name Shared Method Doc-Strings
+/** \name Shared Method Docstrings
  * \{ */
 
 #define BPY_PROPDEF_NAME_DOC \
@@ -5718,17 +5730,23 @@ static PyObject *BPy_RemoveProperty(PyObject *self, PyObject *args, PyObject *kw
     Py_DECREF(args);
     return ret;
   }
+
+  const PyMethodDef *method_def =
+      (reinterpret_cast<const PyCFunctionObject *>(pymeth_RemoveProperty))->m_ml;
+  const char *error_prefix = method_def->ml_name;
+
   if (PyTuple_GET_SIZE(args) > 1) {
-    PyErr_SetString(PyExc_ValueError, "expected one positional arg, one keyword arg");
+    PyErr_Format(
+        PyExc_ValueError, "%s: expected one positional arg, one keyword arg", error_prefix);
     return nullptr;
   }
 
-  srna = srna_from_self(self, "RemoveProperty(...):");
+  srna = srna_from_self(self, error_prefix);
   if (srna == nullptr && PyErr_Occurred()) {
     return nullptr; /* self's type was compatible but error getting the srna */
   }
   if (srna == nullptr) {
-    PyErr_SetString(PyExc_TypeError, "RemoveProperty(): struct rna not available for this type");
+    PyErr_Format(PyExc_TypeError, "%s: struct rna not available for this type", error_prefix);
     return nullptr;
   }
 
@@ -5749,7 +5767,7 @@ static PyObject *BPy_RemoveProperty(PyObject *self, PyObject *args, PyObject *kw
   }
 
   if (RNA_def_property_free_identifier(srna, id) != 1) {
-    PyErr_Format(PyExc_TypeError, "RemoveProperty(): '%s' not a defined dynamic property", id);
+    PyErr_Format(PyExc_TypeError, "%s: '%s' not a defined dynamic property", error_prefix, id);
     return nullptr;
   }
 
@@ -5877,6 +5895,10 @@ PyObject *BPY_rna_props()
   PyObject *submodule;
   PyObject *submodule_dict;
 
+  if (PyType_Ready(&bpy_prop_deferred_Type) < 0) {
+    return nullptr;
+  }
+
   submodule = PyModule_Create(&props_module);
   PyDict_SetItemString(PyImport_GetModuleDict(), props_module.m_name, submodule);
 
@@ -5897,9 +5919,6 @@ PyObject *BPY_rna_props()
   ASSIGN_STATIC(CollectionProperty);
   ASSIGN_STATIC(RemoveProperty);
 
-  if (PyType_Ready(&bpy_prop_deferred_Type) < 0) {
-    return nullptr;
-  }
   PyModule_AddType(submodule, &bpy_prop_deferred_Type);
 
   /* Run this when properties are freed. */
@@ -5917,7 +5936,7 @@ void BPY_rna_props_clear_all()
   RNA_def_property_free_pointers_set_py_data_callback(nullptr);
 
   /* Include as it's correct, in practice this should never be used again. */
-  BLI_listbase_clear(&g_bpy_prop_store_list);
+  g_bpy_prop_store_list.clear_no_delete();
 }
 
 /** \} */

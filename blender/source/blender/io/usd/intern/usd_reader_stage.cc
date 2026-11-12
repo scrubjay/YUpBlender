@@ -12,6 +12,7 @@
 #include "usd_reader_material.hh"
 #include "usd_reader_mesh.hh"
 #include "usd_reader_nurbs.hh"
+#include "usd_reader_particlefield.hh"
 #include "usd_reader_pointinstancer.hh"
 #include "usd_reader_points.hh"
 #include "usd_reader_prim.hh"
@@ -45,22 +46,25 @@
 #include <pxr/usd/usdShade/material.h>
 
 #include "BLI_map.hh"
-#include "BLI_math_base.h"
+#include "BLI_math_base_c.hh"
 #include "BLI_math_euler_types.hh"
 #include "BLI_math_matrix.hh"
+#include "BLI_math_matrix_c.hh"
 #include "BLI_math_matrix_types.hh"
 #include "BLI_sort.hh"
-#include "BLI_string.h"
+#include "BLI_string.hh"
 
 #include "BKE_collection.hh"
 #include "BKE_lib_id.hh"
 #include "BKE_modifier.hh"
+#include "BKE_object.hh"
 #include "BKE_report.hh"
 
 #include "CLG_log.h"
 
 #include "DNA_collection_types.h"
 #include "DNA_material_types.h"
+#include "DNA_object_types.h"
 
 #include "WM_types.hh"
 
@@ -119,10 +123,32 @@ static void set_instance_collection(USDInstanceReader *instance_reader,
 }
 
 /* Update the given import settings with the global rotation matrix to orient
- * imported objects with Z-up, if necessary */
-static void convert_to_z_up(pxr::UsdStageRefPtr stage, ImportSettings &settings)
+ * imported objects with Z-up or Y-up, if necessary */
+static void convert_to_z_up(pxr::UsdStageRefPtr stage,
+                            const USDImportParams &params,
+                            ImportSettings &settings)
 {
-  if (!stage || pxr::UsdGeomGetStageUpAxis(stage) == pxr::UsdGeomTokens->z) {
+  if (!stage) {
+    return;
+  }
+
+  const pxr::TfToken up_axis = pxr::UsdGeomGetStageUpAxis(stage);
+
+  if (params.load_y_up) {
+    if (up_axis == pxr::UsdGeomTokens->z) {
+      /* Stage is Z-up in USD, convert to Y-up by rotating -90 on X and 180 on Y. */
+      settings.do_convert_mat = true;
+      settings.conversion_mat = math::from_rotation<float4x4>(
+          math::EulerXYZ(-M_PI_2, M_PI, 0.0f));
+    }
+    else {
+      /* Stage is already Y-up in USD. No conversion matrix needed. */
+      settings.do_convert_mat = false;
+    }
+    return;
+  }
+
+  if (up_axis == pxr::UsdGeomTokens->z) {
     return;
   }
 
@@ -185,7 +211,7 @@ static void determine_blender_compat(pxr::UsdStageRefPtr stage, ImportSettings &
   const std::string doc = stage->GetRootLayer()->GetDocumentation();
 
   /* Was the incoming Stage written by Blender? If so, set some broad compatibility flags. */
-  if (doc.find("Blender v", 0) == 0) {
+  if (doc.starts_with("Blender v")) {
     /* Set flag if the Blender Stage was from before version 4.4. */
     settings.blender_stage_version_prior_44 = doc < "Blender v4.4";
   }
@@ -197,7 +223,7 @@ USDStageReader::USDStageReader(pxr::UsdStageRefPtr stage,
     : stage_(stage), params_(params)
 {
   determine_blender_compat(stage_, settings_);
-  convert_to_z_up(stage_, settings_);
+  convert_to_z_up(stage_, params, settings_);
   find_prefix_to_skip(stage_, settings_);
   settings_.get_cache_file = get_cache_file_fn;
   settings_.stage_meters_per_unit = pxr::UsdGeomGetStageMetersPerUnit(stage);
@@ -267,6 +293,9 @@ USDPrimReader *USDStageReader::create_reader_if_allowed(const pxr::UsdPrim &prim
   if (params_.import_volumes && prim.IsA<pxr::UsdVolVolume>()) {
     return new USDVolumeReader(prim, params_, settings_);
   }
+  if (prim.IsA<pxr::UsdVolParticleField3DGaussianSplat>()) {
+    return new USDParticleFieldReader(prim, params_, settings_);
+  }
   if (params_.import_skeletons && prim.IsA<pxr::UsdSkelSkeleton>()) {
     return new USDSkeletonReader(prim, params_, settings_);
   }
@@ -309,6 +338,9 @@ USDPrimReader *USDStageReader::create_reader(const pxr::UsdPrim &prim)
   }
   if (prim.IsA<pxr::UsdVolVolume>()) {
     return new USDVolumeReader(prim, params_, settings_);
+  }
+  if (prim.IsA<pxr::UsdVolParticleField3DGaussianSplat>()) {
+    return new USDParticleFieldReader(prim, params_, settings_);
   }
   if (prim.IsA<pxr::UsdSkelSkeleton>()) {
     return new USDSkeletonReader(prim, params_, settings_);
@@ -606,8 +638,31 @@ void USDStageReader::process_armature_modifiers() const
                   "%s: Couldn't find armature object corresponding to USD skeleton %s",
                   __func__,
                   skel_path.GetAsString().c_str());
+      continue;
     }
     amd->object = object;
+
+    /* Per the UsdSkel spec, a skinned mesh's own and ancestor xformOps below the SkelRoot do not
+     * position the skinned result: the geometry is placed by the bound Skeleton's world transform,
+     * with `primvars:skel:geomBindTransform` aligning it (skinned mesh world =
+     * skeleton world * geomBindTransform). Blender's armature deform reproduces this when the mesh
+     * object is a child of the armature with its local transform equal to the geomBindTransform.
+     * USDMeshReader::get_local_usd_xform already set the mesh local transform to the
+     * geomBindTransform (or the identity when no usable geomBindTransform is authored), so
+     * re-parent the mesh to the armature (with an identity parent-inverse) here. Otherwise the
+     * mesh keeps the transform of its USD-hierarchy parent and ends up mis-scaled/rotated whenever
+     * that differs from the skeleton's transform. */
+    Object *mesh_object = reader->object();
+
+    /* Guard against a parent cycle in the unusual case where the bound Skeleton prim is a USD
+     * descendant of the skinned mesh, in which case the armature is already parented to the mesh.
+     */
+    if (mesh_object == object || BKE_object_parent_loop_check(object, mesh_object)) {
+      continue;
+    }
+
+    mesh_object->parent = object;
+    unit_m4(mesh_object->parentinv);
   }
 }
 

@@ -14,13 +14,7 @@
 
 #include <map>
 
-extern "C" {
-#include "SDL.h"
-}
-
-#if !SDL_VERSION_ATLEAST(2, 0, 0)
-#  error "SDL 2.0 or newer is needed to build with Ghost"
-#endif
+#include <SDL3/SDL.h>
 
 class GHOST_SystemSDL;
 
@@ -32,6 +26,7 @@ class GHOST_WindowSDL : public GHOST_Window {
 
   SDL_Window *sdl_win_;
   SDL_Cursor *sdl_custom_cursor_;
+  GHOST_GPUDevice preferred_device_;
 
  public:
   GHOST_WindowSDL(GHOST_SystemSDL *system,
@@ -43,6 +38,7 @@ class GHOST_WindowSDL : public GHOST_Window {
                   GHOST_TWindowState state,
                   GHOST_TDrawingContextType type,
                   const GHOST_ContextParams &context_params,
+                  const GHOST_GPUDevice &preferred_device,
                   const bool exclusive = false,
                   const GHOST_IWindow *parent_window = nullptr);
 

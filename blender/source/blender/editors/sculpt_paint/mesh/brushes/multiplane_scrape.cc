@@ -2,13 +2,17 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup edsculpt
+ */
+
 #include "editors/sculpt_paint/mesh/brushes/brushes.hh"
 
 #include "BLI_enumerable_thread_specific.hh"
-#include "BLI_math_geom.h"
-#include "BLI_math_matrix.h"
+#include "BLI_math_geom_c.hh"
 #include "BLI_math_matrix.hh"
-#include "BLI_math_rotation.h"
+#include "BLI_math_matrix_c.hh"
+#include "BLI_math_rotation_c.hh"
 #include "BLI_math_vector_types.hh"
 #include "BLI_span.hh"
 
@@ -76,6 +80,7 @@ BLI_NOINLINE static void filter_plane_side_factors(const Span<float3> positions,
                                                    const std::array<float4, 2> &scrape_planes,
                                                    const MutableSpan<float> factors)
 {
+  PRF_scope(ProfileCategory::Editor);
   BLI_assert(positions.size() == local_positions.size());
   BLI_assert(positions.size() == factors.size());
 
@@ -90,6 +95,7 @@ BLI_NOINLINE static void filter_plane_side_factors(const Span<float3> positions,
 BLI_NOINLINE static void calc_distances(const Span<float3> local_positions,
                                         const MutableSpan<float> distances)
 {
+  PRF_scope(ProfileCategory::Editor);
   BLI_assert(local_positions.size() == distances.size());
 
   for (const int i : local_positions.index_range()) {
@@ -106,6 +112,7 @@ BLI_NOINLINE static void calc_translations(const Span<float3> positions,
                                            const std::array<float4, 2> &scrape_planes,
                                            const MutableSpan<float3> translations)
 {
+  PRF_scope(ProfileCategory::Editor);
   for (const int i : positions.index_range()) {
     const bool plane_index = local_positions[i][0] <= 0.0f;
     float3 closest;
@@ -120,6 +127,7 @@ BLI_NOINLINE static void accumulate_samples(const Span<float3> positions,
                                             const Span<float> factors,
                                             ScrapeSampleData &sample)
 {
+  PRF_scope(ProfileCategory::Editor);
   for (const int i : positions.index_range()) {
     if (factors[i] <= 0.0f) {
       continue;
@@ -139,17 +147,17 @@ static void sample_node_surface_mesh(const Depsgraph &depsgraph,
                                      const Span<float3> vert_normals,
                                      const MeshAttributeData &attribute_data,
                                      const bke::pbvh::MeshNode &node,
-                                     ScrapeSampleData &sample,
-                                     LocalData &tls)
+                                     ScrapeSampleData &sample)
 {
+  PRF_scope(ProfileCategory::Editor);
   const SculptSession &ss = *object.runtime->sculpt_session;
   const StrokeCache &cache = *ss.cache;
 
   const Span<int> verts = node.verts();
-  const MutableSpan positions = gather_data_mesh(vert_positions, verts, tls.positions);
+  Array<float3, bke::pbvh::MESH_LEAF_LIMIT> positions(verts.size());
+  gather_data_mesh(vert_positions, verts, positions.as_mutable_span());
 
-  tls.factors.resize(verts.size());
-  const MutableSpan<float> factors = tls.factors;
+  Array<float, bke::pbvh::MESH_LEAF_LIMIT> factors(verts.size());
   fill_factor_from_hide_and_mask(attribute_data.hide_vert, attribute_data.mask, verts, factors);
   filter_region_clip_factors(ss, positions, factors);
   if (brush.flag & BRUSH_FRONTFACE) {
@@ -159,8 +167,7 @@ static void sample_node_surface_mesh(const Depsgraph &depsgraph,
 
   const float radius = cache.radius * brush.normal_radius_factor;
 
-  tls.distances.resize(verts.size());
-  const MutableSpan<float> distances = tls.distances;
+  Array<float, bke::pbvh::MESH_LEAF_LIMIT> distances(verts.size());
   calc_brush_distances(ss, positions, eBrushFalloffShape(brush.falloff_shape), distances);
   filter_distances_with_radius(radius, distances, factors);
   apply_hardness_to_distances(radius, cache.hardness, distances);
@@ -170,11 +177,11 @@ static void sample_node_surface_mesh(const Depsgraph &depsgraph,
                                radius,
                                factors);
 
-  tls.local_positions.resize(verts.size());
-  MutableSpan<float3> local_positions = tls.local_positions;
+  Array<float3, bke::pbvh::MESH_LEAF_LIMIT> local_positions(verts.size());
   math::transform_points(positions, mat, local_positions, false);
 
-  const MutableSpan normals = gather_data_mesh(vert_normals, verts, tls.normals);
+  Array<float3, bke::pbvh::MESH_LEAF_LIMIT> normals(verts.size());
+  gather_data_mesh(vert_normals, verts, normals.as_mutable_span());
 
   accumulate_samples(positions, local_positions, normals, factors, sample);
 }
@@ -288,6 +295,7 @@ static std::optional<ScrapeSampleData> sample_surface(const Depsgraph &depsgraph
                                                       const float4x4 &mat,
                                                       const IndexMask &node_mask)
 {
+  PRF_scope(ProfileCategory::Editor);
   const bke::pbvh::Tree &pbvh = *bke::object::pbvh_get(object);
   threading::EnumerableThreadSpecific<LocalData> all_tls;
   ScrapeSampleData result = {};
@@ -303,7 +311,6 @@ static std::optional<ScrapeSampleData> sample_surface(const Depsgraph &depsgraph
           1,
           ScrapeSampleData{},
           [&](const IndexRange range, ScrapeSampleData sample) {
-            LocalData &tls = all_tls.local();
             node_mask.slice(range).foreach_index([&](const int i) {
               sample_node_surface_mesh(depsgraph,
                                        object,
@@ -313,8 +320,7 @@ static std::optional<ScrapeSampleData> sample_surface(const Depsgraph &depsgraph
                                        vert_normals,
                                        attribute_data,
                                        nodes[i],
-                                       sample,
-                                       tls);
+                                       sample);
             });
             return sample;
           },
@@ -369,17 +375,16 @@ static void calc_faces(const Depsgraph &depsgraph,
                        const MeshAttributeData &attribute_data,
                        const bke::pbvh::MeshNode &node,
                        Object &object,
-                       LocalData &tls,
                        const PositionDeformData &position_data)
 {
   SculptSession &ss = *object.runtime->sculpt_session;
   const StrokeCache &cache = *ss.cache;
 
   const Span<int> verts = node.verts();
-  const MutableSpan positions = gather_data_mesh(position_data.eval, verts, tls.positions);
+  Array<float3, bke::pbvh::MESH_LEAF_LIMIT> positions(verts.size());
+  gather_data_mesh<float3>(position_data.eval, verts, positions);
 
-  tls.factors.resize(verts.size());
-  const MutableSpan<float> factors = tls.factors;
+  Array<float, bke::pbvh::MESH_LEAF_LIMIT> factors(verts.size());
   fill_factor_from_hide_and_mask(attribute_data.hide_vert, attribute_data.mask, verts, factors);
   filter_region_clip_factors(ss, positions, factors);
   if (brush.flag & BRUSH_FRONTFACE) {
@@ -387,14 +392,12 @@ static void calc_faces(const Depsgraph &depsgraph,
   }
   auto_mask::calc_vert_factors(depsgraph, object, cache.automasking.get(), node, verts, factors);
 
-  tls.distances.resize(verts.size());
-  const MutableSpan<float> distances = tls.distances;
+  Array<float, bke::pbvh::MESH_LEAF_LIMIT> distances(verts.size());
   /* NOTE: The distances are not used from this call, it's only used for filtering. */
   calc_brush_distances(ss, positions, eBrushFalloffShape(brush.falloff_shape), distances);
   filter_distances_with_radius(cache.radius, distances, factors);
 
-  tls.local_positions.resize(verts.size());
-  MutableSpan<float3> local_positions = tls.local_positions;
+  Array<float3, bke::pbvh::MESH_LEAF_LIMIT> local_positions(verts.size());
   math::transform_points(positions, mat, local_positions, false);
 
   if (angle >= 0.0f) {
@@ -409,8 +412,7 @@ static void calc_faces(const Depsgraph &depsgraph,
   apply_hardness_to_distances(cache, distances);
   calc_brush_strength_factors(cache, brush, distances, factors);
 
-  tls.translations.resize(verts.size());
-  MutableSpan<float3> translations = tls.translations;
+  Array<float3, bke::pbvh::MESH_LEAF_LIMIT> translations(verts.size());
   calc_translations(positions, local_positions, scrape_planes, translations);
 
   filter_plane_trim_limit_factors(brush, cache, translations, factors);
@@ -550,6 +552,7 @@ void do_multiplane_scrape_brush(const Depsgraph &depsgraph,
                                 Object &object,
                                 const IndexMask &node_mask)
 {
+  PRF_scope(ProfileCategory::Editor);
   SculptSession &ss = *object.runtime->sculpt_session;
   bke::pbvh::Tree &pbvh = *bke::object::pbvh_get(object);
   const Brush &brush = *BKE_paint_brush_for_read(&sd.paint);
@@ -686,7 +689,6 @@ void do_multiplane_scrape_brush(const Depsgraph &depsgraph,
       const Span<float3> vert_normals = bke::pbvh::vert_normals_eval(depsgraph, object);
       node_mask.foreach_index(
           [&](const int i) {
-            LocalData &tls = all_tls.local();
             calc_faces(depsgraph,
                        sd,
                        brush,
@@ -698,7 +700,6 @@ void do_multiplane_scrape_brush(const Depsgraph &depsgraph,
                        attribute_data,
                        nodes[i],
                        object,
-                       tls,
                        position_data);
             bke::pbvh::update_node_bounds_mesh(position_data.eval, nodes[i]);
           },

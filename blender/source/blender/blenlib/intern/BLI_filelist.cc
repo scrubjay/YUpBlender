@@ -20,7 +20,7 @@
 #include <sys/stat.h>
 
 #ifdef WIN32
-#  include "BLI_winstuff.h"
+#  include "BLI_winstuff.hh"
 #  include "utfconv.hh"
 #  include <direct.h>
 #  include <io.h>
@@ -35,11 +35,11 @@
 
 #include "DNA_listBase.h"
 
-#include "BLI_fileops.h"
-#include "BLI_fileops_types.h"
-#include "BLI_listbase.h"
+#include "BLI_fileops.hh"
+#include "BLI_fileops_types.hh"
+#include "BLI_listbase.hh"
 #include "BLI_path_utils.hh"
-#include "BLI_string.h"
+#include "BLI_string.hh"
 #include "BLI_string_utils.hh"
 
 namespace blender {
@@ -112,7 +112,7 @@ static void bli_builddir(BuildDirCtx *dir_ctx, const char *dirname)
 {
   BLI_assert(!BLI_path_is_rel(dirname));
   DIR *dir = opendir(dirname);
-  if (UNLIKELY(dir == nullptr)) {
+  if (dir == nullptr) [[unlikely]] {
     fprintf(stderr,
             "Failed to open dir (%s): %s\n",
             errno ? strerror(errno) : "unknown error",
@@ -190,12 +190,12 @@ static void bli_builddir(BuildDirCtx *dir_ctx, const char *dirname)
       dir_ctx->files = MEM_new_array_uninitialized<direntry>(size_t(newnum), __func__);
     }
 
-    if (UNLIKELY(dir_ctx->files == nullptr)) {
+    if (dir_ctx->files == nullptr) [[unlikely]] {
       fprintf(stderr, "Couldn't get memory for dir: %s\n", dirname);
       dir_ctx->files_num = 0;
     }
     else {
-      dirlink *dlink = static_cast<dirlink *>(dirbase.first);
+      dirlink *dlink = dirbase.first();
       direntry *file = &dir_ctx->files[dir_ctx->files_num];
 
       while (dlink) {
@@ -341,68 +341,6 @@ void BLI_filelist_entry_owner_to_string(const struct stat *st,
     BLI_snprintf(r_owner, sizeof(*r_owner) * FILELIST_DIRENTRY_OWNER_LEN, "%u", st->st_uid);
   }
 #endif
-}
-
-void BLI_filelist_entry_datetime_to_string(const struct stat *st,
-                                           const int64_t ts,
-                                           const bool compact,
-                                           char r_time[FILELIST_DIRENTRY_TIME_LEN],
-                                           char r_date[FILELIST_DIRENTRY_DATE_LEN],
-                                           bool *r_is_today,
-                                           bool *r_is_yesterday)
-{
-  int today_year = 0;
-  int today_yday = 0;
-  int yesterday_year = 0;
-  int yesterday_yday = 0;
-
-  if (r_is_today || r_is_yesterday) {
-    /* `localtime()` has only one buffer so need to get data out before called again. */
-    const time_t ts_now = time(nullptr);
-    tm *today = localtime(&ts_now);
-
-    today_year = today->tm_year;
-    today_yday = today->tm_yday;
-    /* Handle a yesterday that spans a year */
-    today->tm_mday--;
-    mktime(today);
-    yesterday_year = today->tm_year;
-    yesterday_yday = today->tm_yday;
-
-    if (r_is_today) {
-      *r_is_today = false;
-    }
-    if (r_is_yesterday) {
-      *r_is_yesterday = false;
-    }
-  }
-
-  const time_t ts_mtime = ts;
-  const tm *tm = localtime(st ? &st->st_mtime : &ts_mtime);
-  const time_t zero = 0;
-
-  /* Prevent impossible dates in windows. */
-  if (tm == nullptr) {
-    tm = localtime(&zero);
-  }
-
-  if (r_time) {
-    strftime(r_time, sizeof(*r_time) * FILELIST_DIRENTRY_TIME_LEN, "%H:%M", tm);
-  }
-
-  if (r_date) {
-    strftime(r_date,
-             sizeof(*r_date) * FILELIST_DIRENTRY_DATE_LEN,
-             compact ? "%d/%m/%y" : "%d %b %Y",
-             tm);
-  }
-
-  if (r_is_today && (tm->tm_year == today_year) && (tm->tm_yday == today_yday)) {
-    *r_is_today = true;
-  }
-  else if (r_is_yesterday && (tm->tm_year == yesterday_year) && (tm->tm_yday == yesterday_yday)) {
-    *r_is_yesterday = true;
-  }
 }
 
 void BLI_filelist_entry_duplicate(direntry *dst, const direntry *src)

@@ -19,10 +19,10 @@
 
 #include "MEM_guardedalloc.h"
 
-#include "BLI_fileops.h"
-#include "BLI_listbase.h"
-#include "BLI_math_rotation.h"
-#include "BLI_utildefines.h"
+#include "BLI_fileops.hh"
+#include "BLI_listbase.hh"
+#include "BLI_math_rotation_c.hh"
+#include "BLI_utildefines.hh"
 
 #include "DNA_anim_types.h"
 #include "DNA_scene_types.h"
@@ -34,7 +34,7 @@
 
 #include "BLT_translation.hh"
 
-#include "BKE_animsys.h"
+#include "BKE_animsys.hh"
 #include "BKE_context.hh"
 #include "BKE_fcurve.hh"
 #include "BKE_global.hh"
@@ -57,6 +57,9 @@
 #include "ED_markers.hh"
 #include "ED_screen.hh"
 #include "ED_transform.hh"
+
+#include "UI_interface_layout.hh"
+#include "UI_resources.hh"
 
 #include "WM_api.hh"
 #include "WM_types.hh"
@@ -182,7 +185,7 @@ static void insert_graph_keys(bAnimContext *ac, eGraphKeys_InsertKey_Types mode)
       }
 
       /* Insert keyframe directly into the F-Curve. */
-      insert_vert_fcurve(fcu, {x, y}, settings, eInsertKeyFlags(0));
+      insert_vert_fcurve(fcu, {x, y}, settings, eInsertKeyFlags{});
 
       ale.update |= ANIM_UPDATE_DEFAULT;
     }
@@ -212,7 +215,7 @@ static void insert_graph_keys(bAnimContext *ac, eGraphKeys_InsertKey_Types mode)
         CombinedKeyingResult result = insert_keyframes(ac->bmain,
                                                        &id_rna_pointer,
                                                        channel_group,
-                                                       {{fcu->rna_path, {}, fcu->array_index}},
+                                                       {{fcu->rna_path(), {}, fcu->array_index}},
                                                        std::nullopt,
                                                        anim_eval_context,
                                                        eBezTriple_KeyframeType(ts->keyframe_type),
@@ -232,7 +235,7 @@ static void insert_graph_keys(bAnimContext *ac, eGraphKeys_InsertKey_Types mode)
         }
 
         const float curval = evaluate_fcurve_only_curve(fcu, cfra);
-        insert_vert_fcurve(fcu, {cfra, curval}, settings, eInsertKeyFlags(0));
+        insert_vert_fcurve(fcu, {cfra, curval}, settings, eInsertKeyFlags{});
       }
 
       ale.update |= ANIM_UPDATE_DEFAULT;
@@ -353,11 +356,11 @@ static wmOperatorStatus graphkeys_click_insert_exec(bContext *C, wmOperator *op)
     settings.keyframe_type = eBezTriple_KeyframeType(ts->keyframe_type);
 
     /* Insert keyframe on the specified frame + value. */
-    insert_vert_fcurve(fcu, {frame, val}, settings, eInsertKeyFlags(0));
+    insert_vert_fcurve(fcu, {frame, val}, settings, eInsertKeyFlags{});
 
     ale->update |= ANIM_UPDATE_DEPS;
 
-    BLI_listbase_clear(&anim_data);
+    anim_data.clear_no_delete();
     BLI_addtail(&anim_data, ale);
 
     ANIM_animdata_update(&ac, &anim_data);
@@ -1403,9 +1406,6 @@ void GRAPH_OT_bake_keys(wmOperatorType *ot)
 
 /** \} */
 
-/* ************************************************************************** */
-/* EXTRAPOLATION MODE AND KEYFRAME HANDLE SETTINGS */
-
 /* -------------------------------------------------------------------- */
 /** \name Set Extrapolation-Type Operator
  * \{ */
@@ -1458,7 +1458,7 @@ static void setexpo_graph_keys(bAnimContext *ac, short mode)
 
     if (mode >= 0) {
       /* Just set mode setting. */
-      fcu->extend = mode;
+      fcu->extend = eFCurve_Extend(mode);
 
       ale.update |= ANIM_UPDATE_HANDLES;
     }
@@ -1478,7 +1478,7 @@ static void setexpo_graph_keys(bAnimContext *ac, short mode)
         /* Remove all the modifiers fitting this description. */
         FModifier *fcm, *fcn = nullptr;
 
-        for (fcm = static_cast<FModifier *>(fcu->modifiers.first); fcm; fcm = fcn) {
+        for (fcm = fcu->modifiers.first(); fcm; fcm = fcn) {
           fcn = fcm->next;
 
           if (fcm->type == FMODIFIER_TYPE_CYCLES) {
@@ -1779,9 +1779,6 @@ void GRAPH_OT_handle_type(wmOperatorType *ot)
 
 /** \} */
 
-/* ************************************************************************** */
-/* EULER FILTER */
-
 /* -------------------------------------------------------------------- */
 /** \name 'Euler Filter' Operator
  *
@@ -1826,7 +1823,7 @@ static ListBaseT<tEulerFilter> euler_filter_group_channels(
      * - Only rotation curves.
      * - For pose-channel curves, make sure we're only using the euler curves.
      */
-    if (strstr(fcu->rna_path, "rotation_euler") == nullptr) {
+    if (strstr(fcu->rna_path().c_str(), "rotation_euler") == nullptr) {
       continue;
     }
     if (ELEM(fcu->array_index, 0, 1, 2) == 0) {
@@ -1834,7 +1831,7 @@ static ListBaseT<tEulerFilter> euler_filter_group_channels(
                   RPT_WARNING,
                   "Euler Rotation F-Curve has invalid index (ID='%s', Path='%s', Index=%d)",
                   (ale.id) ? ale.id->name : RPT_("<No ID>"),
-                  fcu->rna_path,
+                  fcu->rna_path().c_str(),
                   fcu->array_index);
       continue;
     }
@@ -1847,7 +1844,7 @@ static ListBaseT<tEulerFilter> euler_filter_group_channels(
      * so if the paths or the ID's don't match up, then a curve needs to be added
      * to a new group.
      */
-    if ((euf) && (euf->id == ale.id) && STREQ(euf->rna_path, fcu->rna_path)) {
+    if ((euf) && (euf->id == ale.id) && STREQ(euf->rna_path, fcu->rna_path().c_str())) {
       /* This should be fine to add to the existing group then. */
       euf->fcurves[fcu->array_index] = fcu;
       continue;
@@ -1860,7 +1857,7 @@ static ListBaseT<tEulerFilter> euler_filter_group_channels(
 
     euf->id = ale.id;
     /* This should be safe, since we're only using it for a short time. */
-    euf->rna_path = fcu->rna_path;
+    euf->rna_path = fcu->rna_path().c_str();
     euf->fcurves[fcu->array_index] = fcu;
   }
 
@@ -2043,7 +2040,7 @@ static wmOperatorStatus graphkeys_euler_filter_exec(bContext *C, wmOperator *op)
 
   int groups = 0;
   ListBaseT<tEulerFilter> eulers = euler_filter_group_channels(&anim_data, op->reports, &groups);
-  BLI_assert(BLI_listbase_count(&eulers) == groups);
+  BLI_assert(eulers.count() == groups);
 
   if (groups == 0) {
     ANIM_animdata_freelist(&anim_data);
@@ -2058,7 +2055,7 @@ static wmOperatorStatus graphkeys_euler_filter_exec(bContext *C, wmOperator *op)
   int curves_seen;
   euler_filter_perform_filter(&eulers, op->reports, &curves_filtered, &curves_seen);
 
-  BLI_freelistN(&eulers);
+  eulers.free_no_destruct();
   ANIM_animdata_update(&ac, &anim_data);
   ANIM_animdata_freelist(&anim_data);
 
@@ -2119,9 +2116,6 @@ void GRAPH_OT_euler_filter(wmOperatorType *ot)
 }
 
 /** \} */
-
-/* ************************************************************************** */
-/* SNAPPING */
 
 /* -------------------------------------------------------------------- */
 /** \name Jump to Selected Frames Operator
@@ -2241,6 +2235,12 @@ void GRAPH_OT_frame_jump(wmOperatorType *ot)
   ot->flag = OPTYPE_REGISTER | OPTYPE_UNDO;
 }
 
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Keyframe Jump Operator (Deprecated)
+ * \{ */
+
 static wmOperatorStatus keyframe_jump_exec(bContext *C, wmOperator *op)
 {
   BKE_report(op->reports, RPT_WARNING, "Deprecated operator, use screen.keyframe_jump instead");
@@ -2264,6 +2264,12 @@ void GRAPH_OT_keyframe_jump(wmOperatorType *ot)
   /* properties */
   RNA_def_boolean(ot->srna, "next", true, "Next Keyframe", "");
 }
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Snap Cursor Value Operator
+ * \{ */
 
 /* snap 2D cursor value to the average value of selected keyframe */
 static wmOperatorStatus graphkeys_snap_cursor_value_exec(bContext *C, wmOperator * /*op*/)
@@ -2368,8 +2374,8 @@ static void snap_graph_keys(bAnimContext *ac, short mode)
   memset(&ked, 0, sizeof(KeyframeEditData));
   ked.scene = ac->scene;
   if (mode == GRAPHKEYS_SNAP_NEAREST_MARKER) {
-    ked.time_marker_list.first = (ac->markers) ? ac->markers->first : nullptr;
-    ked.time_marker_list.last = (ac->markers) ? ac->markers->last : nullptr;
+    ked.time_marker_list.first_ = (ac->markers) ? ac->markers->first_ : nullptr;
+    ked.time_marker_list.last_ = (ac->markers) ? ac->markers->last() : nullptr;
   }
   else if (mode == GRAPHKEYS_SNAP_VALUE) {
     cursor_value = (sipo) ? sipo->cursorVal : 0.0f;
@@ -2617,27 +2623,28 @@ static const EnumPropertyItem prop_graphkeys_mirror_types[] = {
      0,
      "By Times Over Current Frame",
      "Flip times of selected keyframes using the current frame as the mirror line"},
+    {GRAPHKEYS_MIRROR_MARKER,
+     "MARKER",
+     0,
+     "By Times Over First Selected Marker",
+     "Flip times of selected keyframes using the first selected marker as the reference point"},
+    {GRAPHKEYS_MIRROR_YAXIS,
+     "YAXIS",
+     0,
+     "By Times Over Zero Time",
+     "Flip times of selected keyframes, effectively reversing the order they appear in"},
+    RNA_ENUM_ITEM_SEPR,
     {GRAPHKEYS_MIRROR_VALUE,
      "VALUE",
      0,
      "By Values Over Cursor Value",
      "Flip values of selected keyframes using the cursor value (Y/Horizontal component) as the "
      "mirror line"},
-    {GRAPHKEYS_MIRROR_YAXIS,
-     "YAXIS",
-     0,
-     "By Times Over Zero Time",
-     "Flip times of selected keyframes, effectively reversing the order they appear in"},
     {GRAPHKEYS_MIRROR_XAXIS,
      "XAXIS",
      0,
      "By Values Over Zero Value",
      "Flip values of selected keyframes (i.e. negative values become positive, and vice versa)"},
-    {GRAPHKEYS_MIRROR_MARKER,
-     "MARKER",
-     0,
-     "By Times Over First Selected Marker",
-     "Flip times of selected keyframes using the first selected marker as the reference point"},
     {0, nullptr, 0, nullptr, nullptr},
 };
 
@@ -2826,9 +2833,6 @@ void GRAPH_OT_smooth(wmOperatorType *ot)
 
 /** \} */
 
-/* ************************************************************************** */
-/* F-CURVE MODIFIERS */
-
 /* -------------------------------------------------------------------- */
 /** \name Add F-Modifier Operator
  * \{ */
@@ -2948,6 +2952,150 @@ void GRAPH_OT_fmodifier_add(wmOperatorType *ot)
 
   RNA_def_boolean(
       ot->srna, "only_active", false, "Only Active", "Only add F-Modifier to active F-Curve");
+}
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Delete F-Modifiers Operator
+ * \{ */
+
+enum class RemovalMode { ALL = 0, FIRST = 1, TYPE = 2 };
+
+static wmOperatorStatus graph_fmodifier_delete_exec(bContext *C, wmOperator *op)
+{
+  bAnimContext ac;
+  ListBaseT<bAnimListElem> anim_data = {nullptr, nullptr};
+
+  const eFModifier_Types type = static_cast<eFModifier_Types>(RNA_enum_get(op->ptr, "type"));
+
+  /* Get editor data. */
+  if (ANIM_animdata_get_context(C, &ac) == 0) {
+    return OPERATOR_CANCELLED;
+  }
+
+  /* Filter data. */
+  eAnimFilter_Flags filter = (ANIMFILTER_DATA_VISIBLE | ANIMFILTER_FOREDIT | ANIMFILTER_NODUPLIS |
+                              ANIMFILTER_FCURVESONLY | ANIMFILTER_SEL | ANIMFILTER_CURVE_VISIBLE);
+
+  ANIM_animdata_filter(&ac, &anim_data, filter, ac.data, ac.datatype);
+
+  const RemovalMode mode = RemovalMode(RNA_enum_get(op->ptr, "mode"));
+  int num_fmods_deleted = 0;
+  int num_fcurves_affected = 0;
+
+  /* Collect the F-Mods to delete. */
+  for (bAnimListElem &ale : anim_data) {
+    FCurve *fcu = static_cast<FCurve *>(ale.data);
+
+    /* Keep track of the modifiers to delete, so that we don't delete
+     * them while looping over them. */
+    Vector<FModifier *> fmods_to_delete;
+
+    for (FModifier &fcm : fcu->modifiers) {
+      if (mode == RemovalMode::ALL || (mode == RemovalMode::TYPE && fcm.type == type)) {
+        fmods_to_delete.append(&fcm);
+      }
+    }
+
+    if (mode == RemovalMode::FIRST) {
+      if (FModifier *first = fcu->modifiers.first()) {
+        fmods_to_delete.append(first);
+      }
+    }
+
+    /* Delete the modifiers. */
+    for (FModifier *fmod : fmods_to_delete) {
+      remove_fmodifier(&fcu->modifiers, fmod);
+      num_fmods_deleted++;
+    }
+
+    if (!fmods_to_delete.is_empty()) {
+      num_fcurves_affected++;
+    }
+
+    ale.update |= ANIM_UPDATE_DEPS;
+  }
+
+  ANIM_animdata_update(&ac, &anim_data);
+  ANIM_animdata_freelist(&anim_data);
+
+  /* Set notifier that things have changed. */
+  WM_event_add_notifier(C, NC_ANIMATION | ND_KEYFRAME | NA_EDITED, nullptr);
+
+  if (num_fmods_deleted == 0) {
+    BKE_report(op->reports, RPT_INFO, "No F-Modifiers found to delete");
+  }
+  else {
+    BKE_reportf(op->reports,
+                RPT_INFO,
+                "Removed %d F-Modifier(s) from %d selected F-Curve(s)",
+                num_fmods_deleted,
+                num_fcurves_affected);
+  }
+
+  return OPERATOR_FINISHED;
+}
+
+static void fmodifier_delete_ui(bContext * /*C*/, wmOperator *op)
+{
+  ui::Layout &layout = *op->layout;
+  layout.use_property_split_set(true);
+
+  layout.prop(op->ptr, "mode", UI_ITEM_NONE, std::nullopt, ICON_NONE);
+  if (RNA_enum_get(op->ptr, "mode") == int(RemovalMode::TYPE)) {
+    layout.prop(op->ptr, "type", UI_ITEM_NONE, std::nullopt, ICON_NONE);
+  }
+}
+
+void GRAPH_OT_fmodifier_delete(wmOperatorType *ot)
+{
+  PropertyRNA *prop;
+
+  /* Identifiers */
+  ot->name = "Delete F-Curve Modifiers";
+  ot->idname = "GRAPH_OT_fmodifier_delete";
+  ot->description = "Remove Modifier(s) from the selected F-Curves";
+
+  /* API callbacks */
+  ot->exec = graph_fmodifier_delete_exec;
+  ot->ui = fmodifier_delete_ui;
+  ot->poll = graphop_selected_fcurve_poll;
+
+  /* Flags */
+  ot->flag = OPTYPE_REGISTER | OPTYPE_UNDO;
+
+  /* Id-props */
+  static const EnumPropertyItem mode_items[] = {
+      {int(RemovalMode::ALL),
+       "ALL",
+       0,
+       "Remove All",
+       "Remove all modifiers from the selected F-Curves"},
+      {int(RemovalMode::FIRST),
+       "FIRST",
+       0,
+       "Remove First",
+       "Only remove the first modifier from each F-Curve regardless of type"},
+      {int(RemovalMode::TYPE),
+       "TYPE",
+       0,
+       "Remove Type",
+       "Only remove the specified type of F-Curve modifier"},
+      {0, nullptr, 0, nullptr, nullptr}};
+
+  RNA_def_enum(ot->srna,
+               "mode",
+               mode_items,
+               int(RemovalMode::ALL),
+               "Mode",
+               "Decide what the operator will remove");
+
+  prop = RNA_def_enum(
+      ot->srna, "type", rna_enum_fmodifier_type_items, FMODIFIER_TYPE_GENERATOR, "Type", "");
+  RNA_def_property_translation_context(prop, BLT_I18NCONTEXT_ID_ACTION);
+  RNA_def_enum_funcs(prop, graph_fmodifier_itemf);
+  ot->prop = prop;
 }
 
 /** \} */
@@ -3110,9 +3258,6 @@ void GRAPH_OT_fmodifier_paste(wmOperatorType *ot)
 
 /** \} */
 
-/* ************************************************************************** */
-/* Drivers */
-
 /* -------------------------------------------------------------------- */
 /** \name Copy Driver Variables Operator
  * \{ */
@@ -3245,7 +3390,7 @@ static wmOperatorStatus graph_driver_delete_invalid_exec(bContext *C, wmOperator
       continue;
     }
 
-    ok |= ANIM_remove_driver(ale.id, fcu->rna_path, fcu->array_index);
+    ok |= ANIM_remove_driver(ale.id, fcu->rna_path().c_str(), fcu->array_index);
     if (!ok) {
       break;
     }

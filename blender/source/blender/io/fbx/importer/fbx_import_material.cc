@@ -15,8 +15,8 @@
 
 #include "BLI_math_vector.hh"
 #include "BLI_path_utils.hh"
-#include "BLI_string.h"
-#include "BLI_string_utf8.h"
+#include "BLI_string.hh"
+#include "BLI_string_utf8.hh"
 
 #include "DNA_material_types.h"
 
@@ -59,15 +59,15 @@ static void link_sockets(bNodeTree *ntree,
                          bNode *to_node,
                          const char *to_node_id)
 {
-  bNodeSocket *from_sock{bke::node_find_socket(*from_node, SOCK_OUT, from_node_id)};
-  bNodeSocket *to_sock{bke::node_find_socket(*to_node, SOCK_IN, to_node_id)};
+  bNodeSocket *from_sock{bke::node_find_socket(*from_node, SOCK_OUT, UString(from_node_id))};
+  bNodeSocket *to_sock{bke::node_find_socket(*to_node, SOCK_IN, UString(to_node_id))};
   BLI_assert(from_sock && to_sock);
   bke::node_add_link(*ntree, *from_node, *from_sock, *to_node, *to_sock);
 }
 
 static void set_socket_float(const char *socket_id, const float value, bNode *node)
 {
-  bNodeSocket *socket{bke::node_find_socket(*node, SOCK_IN, socket_id)};
+  bNodeSocket *socket{bke::node_find_socket(*node, SOCK_IN, UString(socket_id))};
   BLI_assert(socket && socket->type == SOCK_FLOAT);
   bNodeSocketValueFloat *dst = socket->default_value_typed<bNodeSocketValueFloat>();
   dst->value = value;
@@ -75,7 +75,7 @@ static void set_socket_float(const char *socket_id, const float value, bNode *no
 
 static void set_socket_rgb(const char *socket_id, float vr, float vg, float vb, bNode *node)
 {
-  bNodeSocket *socket{bke::node_find_socket(*node, SOCK_IN, socket_id)};
+  bNodeSocket *socket{bke::node_find_socket(*node, SOCK_IN, UString(socket_id))};
   BLI_assert(socket && socket->type == SOCK_RGBA);
   bNodeSocketValueRGBA *dst = socket->default_value_typed<bNodeSocketValueRGBA>();
   dst->value[0] = vr;
@@ -86,7 +86,7 @@ static void set_socket_rgb(const char *socket_id, float vr, float vg, float vb, 
 
 static void set_socket_vector(const char *socket_id, float vx, float vy, float vz, bNode *node)
 {
-  bNodeSocket *socket{bke::node_find_socket(*node, SOCK_IN, socket_id)};
+  bNodeSocket *socket{bke::node_find_socket(*node, SOCK_IN, UString(socket_id))};
   BLI_assert(socket && socket->type == SOCK_VECTOR);
   bNodeSocketValueVector *dst = socket->default_value_typed<bNodeSocketValueVector>();
   dst->value[0] = vx;
@@ -201,17 +201,8 @@ static void set_bsdf_socket_values(bNode *bsdf, Material *mat, const ufbx_materi
 
 static Image *create_placeholder_image(Main *bmain, const std::string &path)
 {
-  const float color[4] = {0, 0, 0, 1};
-  const char *name = BLI_path_basename(path.c_str());
-  Image *image = BKE_image_add_generated(
-      bmain, 1, 1, name, 24, false, IMA_GENTYPE_BLANK, color, false, false, false);
-  STRNCPY(image->filepath, path.c_str());
-
-  /* Ensure that we are not marked as a generated image and clear any buffers created so far. */
-  image->source = IMA_SRC_FILE;
-  image->type = IMA_TYPE_IMAGE;
-  BKE_image_free_buffers(image);
-  return image;
+  /* Create image without checking if it can be opened. */
+  return BKE_image_load_exists(bmain, path.c_str(), false);
 }
 
 static Image *load_texture_image(Main *bmain, const std::string &file_dir, const ufbx_texture &tex)
@@ -308,6 +299,7 @@ static const FbxStdTextureToSocket fbx_std_to_socket[] = {
     {UFBX_MATERIAL_FBX_TRANSPARENCY_FACTOR, "Alpha"},
     {UFBX_MATERIAL_FBX_TRANSPARENCY_COLOR, "Alpha"},
     {UFBX_MATERIAL_FBX_BUMP, "Normal"},
+    {UFBX_MATERIAL_FBX_REFLECTION_FACTOR, "Metallic"},
 };
 
 static void add_image_texture(Main *bmain,
@@ -327,8 +319,9 @@ static void add_image_texture(Main *bmain,
   if (!STR_ELEM(
           socket_name, "Base Color", "Specular Tint", "Sheen Tint", "Coat Tint", "Emission Color"))
   {
-    STRNCPY_UTF8(image->colorspace_settings.name,
-                 IMB_colormanagement_role_colorspace_name_get(COLOR_ROLE_DATA));
+    IMB_colormanagement_colorspace_settings_set(
+        &image->colorspace_settings,
+        IMB_colormanagement_role_colorspace_name_get(COLOR_ROLE_DATA));
   }
 
   /* Add texture node and any UV transformations if needed. */
@@ -386,7 +379,7 @@ static void add_image_texture(Main *bmain,
       /* Link base color alpha (if we have one) to output alpha. */
       void *lock;
       ImBuf *ibuf = BKE_image_acquire_ibuf(image, nullptr, &lock);
-      bool has_alpha = ibuf != nullptr && ibuf->planes == R_IMF_PLANES_RGBA;
+      bool has_alpha = ibuf != nullptr && ibuf->can_contain_alpha();
       BKE_image_release_ibuf(image, ibuf, lock);
 
       if (has_alpha) {

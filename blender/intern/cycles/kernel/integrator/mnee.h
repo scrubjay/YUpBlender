@@ -130,7 +130,8 @@ ccl_device_inline void mnee_setup_manifold_vertex(KernelGlobals kg,
                                                     isect->object;
 
   sd_vtx->type = isect->type;
-  sd_vtx->flag = 0;
+  sd_vtx->runtime_flag = 0;
+  sd_vtx->shader_flag = 0;
   sd_vtx->object_flag = kernel_data_fetch(object_flag, sd_vtx->object);
 
   /* Matrices and time. */
@@ -219,7 +220,7 @@ ccl_device_inline void mnee_setup_manifold_vertex(KernelGlobals kg,
   /* Manifold vertex position. */
   vtx->p = sd_vtx->P;
 
-  /* Initialize constraint and its derivates. */
+  /* Initialize constraint and its derivatives. */
   vtx->a = vtx->c = zero_float4();
   vtx->b = make_float4(1.f, 0.f, 0.f, 1.f);
   vtx->constraint = zero_float2();
@@ -245,12 +246,11 @@ __attribute__((noinline))
 #else
 ccl_device_inline
 #endif
-bool mnee_compute_constraint_derivatives(
-  const int vertex_count,
-    ccl_private ManifoldVertex *vertices,
-     const ccl_private  float3 &surface_sample_pos,
-    const bool light_fixed_direction,
-    const float3 light_sample)
+bool mnee_compute_constraint_derivatives(const int vertex_count,
+                                         ccl_private ManifoldVertex *vertices,
+                                         const ccl_private float3 &surface_sample_pos,
+                                         const bool light_fixed_direction,
+                                         const float3 light_sample)
 {
   for (int vi = 0; vi < vertex_count; vi++) {
     ccl_private ManifoldVertex &v = vertices[vi];
@@ -490,7 +490,7 @@ ccl_device_inline bool mnee_newton_solver(KernelGlobals kg,
       bool projection_success = false;
       for (int isect_count = 0; isect_count < MNEE_MAX_INTERSECTION_COUNT; isect_count++) {
         const bool hit = scene_intersect(
-            kg, &projection_ray, PATH_RAY_TRANSMIT, &projection_isect);
+            kg, &projection_ray, PATH_RAY_VISIBILITY_TRANSMIT, &projection_isect);
         if (!hit) {
           break;
         }
@@ -643,9 +643,7 @@ ccl_device_inline Spectrum mnee_eval_bsdf_contribution(KernelGlobals kg,
     G = bsdf_G<MicrofacetType::GGX>(alpha2, cosNI, cosNO);
   }
 
-  Spectrum reflectance;
-  Spectrum transmittance;
-  microfacet_fresnel(kg, bsdf, cosHI, nullptr, &reflectance, &transmittance);
+  const FresnelCoeff fresnel = microfacet_fresnel(kg, bsdf, cosHI, nullptr);
 
   /*
    * bsdf_do = (1 - F) * D_do * G * |h.wi| / (n.wi * n.wo)
@@ -656,7 +654,7 @@ ccl_device_inline Spectrum mnee_eval_bsdf_contribution(KernelGlobals kg,
    *              = (1 - F) * G * |h.wi / (n.wi * n.h^2)|
    */
   /* TODO: energy compensation for multi-GGX. */
-  return bsdf->weight * transmittance * G * fabsf(cosHI / (cosNI * sqr(cosThetaM)));
+  return bsdf->weight * fresnel.transmittance * G * fabsf(cosHI / (cosNI * sqr(cosThetaM)));
 }
 
 /* Compute transfer matrix determinant |T1| = |dx1/dxn| (and |dh/dx| in the process) */
@@ -796,13 +794,15 @@ ccl_device_inline ShaderEvalResult mnee_path_contribution(KernelGlobals kg,
                                                           const bool light_fixed_direction,
                                                           const int vertex_count,
                                                           ccl_private ManifoldVertex *vertices,
-                                                          ccl_private BsdfEval *throughput)
+                                                          ccl_private Spectrum *throughput,
+                                                          ccl_private float3 *r_receiver_wo)
 {
   float wo_len;
   float3 wo = normalize_len(vertices[0].p - sd->P, &wo_len);
 
-  /* Initialize throughput and evaluate receiver bsdf * |n.wo|. */
-  surface_shader_bsdf_eval(kg, state, sd, wo, throughput, ls->shader);
+  /* Initialize throughput. */
+  *r_receiver_wo = wo;
+  *throughput = one_spectrum();
 
   /* Update light sample with new position / direction and keep pdf in vertex area measure. */
   const uint32_t path_flag = INTEGRATOR_STATE(state, path, flag);
@@ -823,7 +823,7 @@ ccl_device_inline ShaderEvalResult mnee_path_contribution(KernelGlobals kg,
                                                              1;
   INTEGRATOR_STATE_WRITE(state, path, bounce) = bounce + vertex_count;
 
-  if (sd_mnee->flag & SD_CACHE_MISS) {
+  if (sd_mnee->runtime_flag & SR_CACHE_MISS) {
     /* Restore original state path bounce info. */
     INTEGRATOR_STATE_WRITE(state, path, transmission_bounce) = transmission_bounce;
     INTEGRATOR_STATE_WRITE(state, path, diffuse_bounce) = diffuse_bounce;
@@ -831,7 +831,7 @@ ccl_device_inline ShaderEvalResult mnee_path_contribution(KernelGlobals kg,
 
     return SHADER_EVAL_CACHE_MISS;
   }
-  bsdf_eval_mul(throughput, ls->eval_fac / ls->pdf);
+  *throughput *= ls->eval_fac / ls->pdf;
 
   /* Generalized geometry term. */
   float dh_dx;
@@ -842,12 +842,12 @@ ccl_device_inline ShaderEvalResult mnee_path_contribution(KernelGlobals kg,
     return SHADER_EVAL_EMPTY;
   }
 
-  /* Receiver bsdf eval above already contains |n.wo|. */
+  /* Receiver bsdf eval in shade_surface already contains |n.wo|. */
   const float dw0_dx1 = fabsf(dot(wo, vertices[0].n)) / sqr(wo_len);
 
   /* Clamp since it has a tendency to be unstable. */
   const float G = fminf(dw0_dx1 * dx1_dxlight, 2.f);
-  bsdf_eval_mul(throughput, G);
+  *throughput *= G;
 
   /* Specular reflectance. */
 
@@ -872,7 +872,7 @@ ccl_device_inline ShaderEvalResult mnee_path_contribution(KernelGlobals kg,
 
     /* Check visibility. */
     probe_ray.D = normalize_len(v.p - probe_ray.P, &probe_ray.tmax);
-    if (scene_intersect(kg, &probe_ray, PATH_RAY_TRANSMIT, &probe_isect)) {
+    if (scene_intersect(kg, &probe_ray, PATH_RAY_VISIBILITY_TRANSMIT, &probe_isect)) {
       const int hit_object = (probe_isect.object == OBJECT_NONE) ?
                                  kernel_data_fetch(prim_object, probe_isect.prim) :
                                  probe_isect.object;
@@ -912,8 +912,8 @@ ccl_device_inline ShaderEvalResult mnee_path_contribution(KernelGlobals kg,
 
     /* Evaluate shader nodes at solution vi. */
     surface_shader_eval<KERNEL_FEATURE_NODE_MASK_SURFACE_SHADOW>(
-        kg, state, sd_mnee, nullptr, PATH_RAY_DIFFUSE, true);
-    if (sd_mnee->flag & SD_CACHE_MISS) {
+        kg, state, sd_mnee, nullptr, PATH_RAY_VISIBILITY_DIFFUSE, PATH_RAY_FLAG_NONE, true);
+    if (sd_mnee->runtime_flag & SR_CACHE_MISS) {
       /* Restore original state path bounce info. */
       INTEGRATOR_STATE_WRITE(state, path, transmission_bounce) = transmission_bounce;
       INTEGRATOR_STATE_WRITE(state, path, diffuse_bounce) = diffuse_bounce;
@@ -930,7 +930,7 @@ ccl_device_inline ShaderEvalResult mnee_path_contribution(KernelGlobals kg,
      * divided by corresponding sampled pdf:
      * fr(vi)_do / pdf_dh(vi) x |do/dh| x |n.wo / n.h| */
     const Spectrum bsdf_contribution = mnee_eval_bsdf_contribution(kg, v.bsdf, wi, wo);
-    bsdf_eval_mul(throughput, bsdf_contribution);
+    *throughput *= bsdf_contribution;
   }
 
   /* Restore original state path bounce info. */
@@ -948,7 +948,8 @@ ccl_device_inline ShaderEvalResult kernel_path_mnee_sample(KernelGlobals kg,
                                                            ccl_private ShaderData *sd_mnee,
                                                            const ccl_private RNGState *rng_state,
                                                            ccl_private LightSample *ls,
-                                                           ccl_private BsdfEval *throughput,
+                                                           ccl_private Spectrum *throughput,
+                                                           ccl_private float3 *r_receiver_wo,
                                                            ccl_private int &r_vertex_count)
 {
   /*
@@ -984,8 +985,9 @@ ccl_device_inline ShaderEvalResult kernel_path_mnee_sample(KernelGlobals kg,
   ManifoldVertex vertices[MNEE_MAX_CAUSTIC_CASTERS];
 
   int vertex_count = 0;
+  bool has_dispersion = false;
   for (int isect_count = 0; isect_count < MNEE_MAX_INTERSECTION_COUNT; isect_count++) {
-    const bool hit = scene_intersect(kg, &probe_ray, PATH_RAY_TRANSMIT, &probe_isect);
+    const bool hit = scene_intersect(kg, &probe_ray, PATH_RAY_VISIBILITY_TRANSMIT, &probe_isect);
     if (!hit) {
       break;
     }
@@ -1008,6 +1010,10 @@ ccl_device_inline ShaderEvalResult kernel_path_mnee_sample(KernelGlobals kg,
       /* Setup shader data on caustic caster and evaluate context. */
       shader_setup_from_ray(kg, sd_mnee, &probe_ray, &probe_isect);
 
+#ifdef __SPECTRAL__
+      shader_setup_wavelength(kg, sd_mnee, state);
+#endif
+
       /* Reject caster if smooth normals are not available: Manifold exploration assumes local
        * differential geometry can be created at any point on the surface which is not possible if
        * normals are not smooth. */
@@ -1017,9 +1023,23 @@ ccl_device_inline ShaderEvalResult kernel_path_mnee_sample(KernelGlobals kg,
 
       /* Last bool argument is the MNEE flag (for TINY_MAX_CLOSURE cap in kernel_shader.h). */
       surface_shader_eval<KERNEL_FEATURE_NODE_MASK_SURFACE_SHADOW>(
-          kg, state, sd_mnee, nullptr, PATH_RAY_DIFFUSE, true);
-      if (sd_mnee->flag & SD_CACHE_MISS) {
+          kg, state, sd_mnee, nullptr, PATH_RAY_VISIBILITY_DIFFUSE, PATH_RAY_FLAG_NONE, true);
+      if (sd_mnee->runtime_flag & SR_CACHE_MISS) {
         return SHADER_EVAL_CACHE_MISS;
+      }
+
+#if defined(__KERNEL_ONEAPI__)
+      /* FIXME: Temporary workaround for a bug in the oneAPI + Embree backend that sometimes sets
+       * the SR_BSDF_HAS_DISPERSION flag when calling `surface_shader_eval` inside the MNEE code
+       * path. This happens even in scenes where no material uses dispersion. This workaround
+       * disables dispersion support + MNEE for all oneAPI backends. Proper fix should be on the
+       * oneAPI side. */
+      sd_mnee->runtime_flag &= ~SR_BSDF_HAS_DISPERSION;
+#endif
+
+      /* Query before #mnee_setup_manifold_vertex resets the runtime flag. */
+      if (sd_mnee->runtime_flag & SR_BSDF_HAS_DISPERSION) {
+        has_dispersion = true;
       }
 
       /* Get and sample refraction bsdf */
@@ -1033,8 +1053,8 @@ ccl_device_inline ShaderEvalResult kernel_path_mnee_sample(KernelGlobals kg,
           ccl_private MicrofacetBsdf *microfacet_bsdf = (ccl_private MicrofacetBsdf *)bsdf;
 
           /* Figure out appropriate index of refraction ratio. */
-          const float eta = (sd_mnee->flag & SD_BACKFACING) ? 1.0f / microfacet_bsdf->ior :
-                                                              microfacet_bsdf->ior;
+          const float eta = (sd_mnee->runtime_flag & SR_BACKFACING) ? 1.0f / microfacet_bsdf->ior :
+                                                                      microfacet_bsdf->ior;
 
           float2 h = zero_float2();
           if (microfacet_bsdf->alpha_x > 0.f && microfacet_bsdf->alpha_y > 0.f) {
@@ -1109,8 +1129,17 @@ ccl_device_inline ShaderEvalResult kernel_path_mnee_sample(KernelGlobals kg,
    * each interface. */
   if (mnee_newton_solver(kg, sd, sd_mnee, ls, light_fixed_direction, vertex_count, vertices)) {
     /* 3. If a solution exists, calculate contribution of the corresponding path */
-    ShaderEvalResult result = mnee_path_contribution(
-        kg, state, sd, sd_mnee, ls, light_fixed_direction, vertex_count, vertices, throughput);
+    ShaderEvalResult result = mnee_path_contribution(kg,
+                                                     state,
+                                                     sd,
+                                                     sd_mnee,
+                                                     ls,
+                                                     light_fixed_direction,
+                                                     vertex_count,
+                                                     vertices,
+                                                     throughput,
+                                                     r_receiver_wo);
+
     /* TODO: Cache misses are not handled correctly.
      * - PATH_MNEE_VALID flag is not handled properly
      * - AOVs and other passes have already been written at this point
@@ -1118,6 +1147,12 @@ ccl_device_inline ShaderEvalResult kernel_path_mnee_sample(KernelGlobals kg,
     if (result != SHADER_EVAL_OK) {
       return result;
     }
+
+#ifdef __SPECTRAL__
+    if (has_dispersion && !(INTEGRATOR_STATE(state, path, flag) & PATH_RAY_SPECTRAL)) {
+      *throughput *= dispersion_throughput_weight(kg, sd_mnee->rand_wavelength);
+    }
+#endif
 
     r_vertex_count = vertex_count;
     return SHADER_EVAL_OK;

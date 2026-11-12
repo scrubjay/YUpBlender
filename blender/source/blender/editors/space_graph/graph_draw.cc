@@ -12,9 +12,9 @@
 #include <cstdio>
 #include <cstring>
 
-#include "BLI_listbase.h"
+#include "BLI_listbase.hh"
 #include "BLI_math_vector_types.hh"
-#include "BLI_utildefines.h"
+#include "BLI_utildefines.hh"
 #include "BLI_vector.hh"
 
 #include "DNA_anim_types.h"
@@ -77,10 +77,8 @@ static IndexRange get_bounding_bezt_index_range(const FCurve *fcu,
 /** \} */
 
 /* -------------------------------------------------------------------- */
-/** \name FCurve Modifier Drawing
+/** \name F-Curve Modifier Drawing
  * \{ */
-
-/* Envelope -------------- */
 
 /* TODO: draw a shaded poly showing the region of influence too!!! */
 /**
@@ -157,10 +155,8 @@ static void draw_fcurve_modifier_controls_envelope(FModifier *fcm,
 /** \} */
 
 /* -------------------------------------------------------------------- */
-/** \name FCurve Modifier Drawing
+/** \name F-Curve Points
  * \{ */
-
-/* Points ---------------- */
 
 /* helper func - set color to draw F-Curve data with */
 static void set_fcurve_vertex_color(FCurve *fcu, bool sel)
@@ -312,7 +308,7 @@ static void draw_fcurve_selected_handle_vertices(
           (prevbezt && (prevbezt->ipo == BEZT_IPO_BEZ)))
       {
         if ((bezt->f1 & SELECT) == sel
-            /* && v2d->cur.xmin < bezt->vec[0][0] < v2d->cur.xmax) */)
+            /* && v2d->cur.xmin < bezt->vec[0][0] < v2d->cur.xmax */)
         {
           immVertex2fv(pos, bezt->vec[0]);
         }
@@ -320,7 +316,7 @@ static void draw_fcurve_selected_handle_vertices(
 
       if (bezt->ipo == BEZT_IPO_BEZ) {
         if ((bezt->f3 & SELECT) == sel
-            /* && v2d->cur.xmin < bezt->vec[2][0] < v2d->cur.xmax) */)
+            /* && v2d->cur.xmin < bezt->vec[2][0] < v2d->cur.xmax */)
         {
           immVertex2fv(pos, bezt->vec[2]);
         }
@@ -416,7 +412,11 @@ static void draw_fcurve_vertices(ARegion *region,
   GPU_blend(GPU_BLEND_NONE);
 }
 
-/* Handles ---------------- */
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name F-Curve Handles
+ * \{ */
 
 static bool draw_fcurve_handles_check(const SpaceGraph *sipo, const FCurve *fcu)
 {
@@ -535,7 +535,11 @@ static void draw_fcurve_handles(SpaceGraph *sipo, ARegion *region, const FCurve 
   }
 }
 
-/* Samples ---------------- */
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name F-Curve Samples
+ * \{ */
 
 /* helper func - draw keyframe vertices only for an F-Curve */
 static void draw_fcurve_samples(ARegion *region, const FCurve *fcu, const float unit_scale)
@@ -579,7 +583,11 @@ static void draw_fcurve_samples(ARegion *region, const FCurve *fcu, const float 
   }
 }
 
-/* Curve ---------------- */
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name F-Curve Drawing
+ * \{ */
 
 /* Helper func - just draw the F-Curve by sampling the visible region
  * (for drawing curves with modifiers). */
@@ -826,10 +834,10 @@ static int calculate_bezt_draw_resolution(BezTriple *bezt,
                                points_per_pixel);
   /* Include the handles in the resolution calculation to cover the case where keys have the same
    * y-value, but their handles are offset to create an arc. */
-  const float min_y = min_ffff(
-      bezt->vec[1][1], bezt->vec[2][1], prevbezt->vec[1][1], prevbezt->vec[0][1]);
-  const float max_y = max_ffff(
-      bezt->vec[1][1], bezt->vec[2][1], prevbezt->vec[1][1], prevbezt->vec[0][1]);
+  const float min_y = std::min(
+      {bezt->vec[1][1], bezt->vec[2][1], prevbezt->vec[1][1], prevbezt->vec[0][1]});
+  const float max_y = std::max(
+      {bezt->vec[1][1], bezt->vec[2][1], prevbezt->vec[1][1], prevbezt->vec[0][1]});
   const int resolution_y = int(((max_y - min_y) * pixels_per_unit[1]) * points_per_pixel);
 
   /* Using a simple sum instead of calculating the diagonal. This gives a slightly higher
@@ -993,10 +1001,10 @@ static void expand_key_bounds(const BezTriple *left_key, const BezTriple *right_
   bounds.xmax = right_key->vec[1][0];
   if (left_key->ipo == BEZT_IPO_BEZ) {
     /* Respect handles of bezier keys. */
-    bounds.ymin = min_ffff(
-        bounds.ymin, right_key->vec[1][1], right_key->vec[0][1], left_key->vec[2][1]);
-    bounds.ymax = max_ffff(
-        bounds.ymax, right_key->vec[1][1], right_key->vec[0][1], left_key->vec[2][1]);
+    bounds.ymin = std::min(
+        {bounds.ymin, right_key->vec[1][1], right_key->vec[0][1], left_key->vec[2][1]});
+    bounds.ymax = std::max(
+        {bounds.ymax, right_key->vec[1][1], right_key->vec[0][1], left_key->vec[2][1]});
   }
   else {
     bounds.ymax = max_ff(bounds.ymax, right_key->vec[1][1]);
@@ -1148,7 +1156,7 @@ static void draw_fcurve(bAnimContext *ac, SpaceGraph *sipo, ARegion *region, bAn
    */
 
   /* 1) draw curve line */
-  if (((fcu->modifiers.first) || (fcu->flag & FCURVE_INT_VALUES)) ||
+  if (((fcu->modifiers.first_) || (fcu->flag & FCURVE_INT_VALUES)) ||
       (((fcu->bezt) || (fcu->fpt)) && (fcu->totvert)))
   {
     /* set color/drawing style for curve itself */
@@ -1201,7 +1209,7 @@ static void draw_fcurve(bAnimContext *ac, SpaceGraph *sipo, ARegion *region, bAn
 
     const bool draw_extrapolation = (sipo->flag & SIPO_NO_DRAW_EXTRAPOLATION) == 0;
     /* draw F-Curve */
-    if ((fcu->modifiers.first) || (fcu->flag & FCURVE_INT_VALUES)) {
+    if ((fcu->modifiers.first_) || (fcu->flag & FCURVE_INT_VALUES)) {
       /* draw a curve affected by modifiers or only allowed to have integer values
        * by sampling it at various small-intervals over the visible region
        */
@@ -1255,6 +1263,8 @@ static void draw_fcurve(bAnimContext *ac, SpaceGraph *sipo, ARegion *region, bAn
           case FMODIFIER_TYPE_ENVELOPE: /* envelope */
             draw_fcurve_modifier_controls_envelope(fcm, &region->v2d, ale);
             break;
+          default:
+            break;
         }
       }
     }
@@ -1301,7 +1311,11 @@ static void draw_fcurve(bAnimContext *ac, SpaceGraph *sipo, ARegion *region, bAn
   ANIM_nla_mapping_apply_if_needed_fcurve(ale, static_cast<FCurve *>(ale->key_data), true, false);
 }
 
-/* Debugging -------------------------------- */
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Driver Debugging
+ * \{ */
 
 /* Draw indicators which show the value calculated from the driver,
  * and how this is mapped to the value that comes out of it. This
@@ -1329,7 +1343,7 @@ static void graph_draw_driver_debug(bAnimContext *ac, ID *id, FCurve *fcu)
   /* No curve to modify/visualize the result?
    * => We still want to show the 1-1 default...
    */
-  if ((fcu->totvert == 0) && BLI_listbase_is_empty(&fcu->modifiers)) {
+  if ((fcu->totvert == 0) && fcu->modifiers.is_empty()) {
     float t;
 
     /* draw with thin dotted lines in style of what curve would have been */
@@ -1357,7 +1371,7 @@ static void graph_draw_driver_debug(bAnimContext *ac, ID *id, FCurve *fcu)
   if ((driver->flag & DRIVER_FLAG_INVALID) == 0) {
     /* grab "coordinates" for driver outputs */
     float x = driver->curval;
-    float y = fcu->curval * unitfac;
+    float y = fcu->runtime->curval * unitfac;
 
     /* Only draw indicators if the point is in range. */
     if (x >= v2d->cur.xmin) {
@@ -1420,7 +1434,11 @@ static void graph_draw_driver_debug(bAnimContext *ac, ID *id, FCurve *fcu)
   immUnbindProgram();
 }
 
-/* Public Curve-Drawing API  ---------------- */
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Public Curve-Drawing API
+ * \{ */
 
 void graph_draw_ghost_curves(bAnimContext *ac, SpaceGraph *sipo, ARegion *region)
 {
@@ -1527,9 +1545,7 @@ void graph_draw_channel_names(bContext *C,
     size_t channel_index = 0;
     float ymax = ANIM_UI_get_first_channel_top(v2d);
 
-    for (ale = static_cast<bAnimListElem *>(anim_data.first); ale;
-         ale = ale->next, ymax -= channel_step, channel_index++)
-    {
+    for (ale = anim_data.first(); ale; ale = ale->next, ymax -= channel_step, channel_index++) {
       const float ymin = ymax - ANIM_UI_get_channel_height();
 
       /* check if visible */
@@ -1549,9 +1565,7 @@ void graph_draw_channel_names(bContext *C,
     /* set blending again, as may not be set in previous step */
     GPU_blend(GPU_BLEND_ALPHA);
 
-    for (ale = static_cast<bAnimListElem *>(anim_data.first); ale;
-         ale = ale->next, ymax -= channel_step, channel_index++)
-    {
+    for (ale = anim_data.first(); ale; ale = ale->next, ymax -= channel_step, channel_index++) {
       const float ymin = ymax - ANIM_UI_get_channel_height();
 
       /* check if visible */

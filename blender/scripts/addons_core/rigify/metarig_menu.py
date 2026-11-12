@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 
+import math
 import os
 import traceback
 
@@ -103,6 +104,13 @@ def make_metarig_add_execute(module):
         module.create(obj)
 
         bpy.ops.object.mode_set(mode='OBJECT')
+
+        # Orient for Y-Up: rotate -90 on X axis, then zero it (apply rotation)
+        context.view_layer.objects.active = obj
+        obj.select_set(True)
+        obj.rotation_euler[0] = -math.pi / 2
+        bpy.ops.object.transform_apply(location=False, rotation=True, scale=False)
+
         return {'FINISHED'}
     return execute
 

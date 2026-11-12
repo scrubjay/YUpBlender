@@ -10,8 +10,9 @@
 #include "DNA_scene_types.h"
 #include "DNA_space_types.h"
 
-#include "BLI_listbase.h"
+#include "BLI_listbase.hh"
 
+#include "BKE_compositor.hh"
 #include "BKE_context.hh"
 #include "BKE_global.hh"
 #include "BKE_image.hh"
@@ -77,10 +78,14 @@ static void composite_get_from_context(const bContext *C,
   }
 
   Scene *scene = CTX_data_scene(C);
+  SceneCompositorEffect *effect = bke::compositor::get_active_effect(*scene);
+  if (!effect || !effect->node_group || ID_MISSING(effect->node_group)) {
+    return;
+  }
 
-  *r_from = nullptr;
+  *r_from = &scene->id;
   *r_id = &scene->id;
-  *r_ntree = scene->compositing_node_group;
+  *r_ntree = effect->node_group;
 }
 
 static void foreach_nodeclass(void *calldata, bke::bNodeClassCallback func)
@@ -117,9 +122,11 @@ static bool composite_node_tree_socket_type_valid(bke::bNodeTreeType * /*ntreety
                                                                SOCK_RGBA,
                                                                SOCK_MATRIX,
                                                                SOCK_MENU,
+                                                               SOCK_ROTATION,
                                                                SOCK_STRING,
                                                                SOCK_OBJECT,
-                                                               SOCK_FONT);
+                                                               SOCK_FONT,
+                                                               SOCK_BUNDLE);
 }
 
 /**
@@ -141,6 +148,21 @@ static bool composite_validate_link(eNodeSocketDatatype from_type, eNodeSocketDa
     return true;
   }
 
+  if (ELEM(from_type, SOCK_FLOAT, SOCK_VECTOR) && to_type == SOCK_ROTATION) {
+    return true;
+  }
+
+  if (from_type == SOCK_MATRIX && to_type == SOCK_ROTATION) {
+    return true;
+  }
+  if (from_type == SOCK_ROTATION && to_type == SOCK_MATRIX) {
+    return true;
+  }
+
+  if (from_type == SOCK_ROTATION && to_type == SOCK_VECTOR) {
+    return true;
+  }
+
   return from_type == to_type;
 }
 
@@ -156,6 +178,7 @@ void register_node_tree_type_cmp()
   tt->ui_name = N_("Compositor");
   tt->ui_icon = ICON_NODE_COMPOSITING;
   tt->ui_description = N_("Create effects and post-process renders, images, and the 3D Viewport");
+  tt->asset_catalog_path_prefix = "Compositing";
 
   tt->foreach_nodeclass = foreach_nodeclass;
   tt->update = update;
@@ -177,13 +200,15 @@ void ntreeCompositTagRender(Scene *scene)
    * This is still rather weak though,
    * ideally render struct would store its own main AND original G_MAIN. */
 
-  for (Scene *sce_iter = static_cast<Scene *>(G_MAIN->scenes.first); sce_iter;
+  for (Scene *sce_iter = G_MAIN->scenes.first(); sce_iter;
        sce_iter = static_cast<Scene *>(sce_iter->id.next))
   {
-    if (sce_iter->compositing_node_group) {
-      for (bNode *node : sce_iter->compositing_node_group->all_nodes()) {
-        if (node->id == (ID *)scene) {
-          BKE_ntree_update_tag_node_property(sce_iter->compositing_node_group, node);
+    for (const SceneCompositorEffect &effect : sce_iter->compositor_effects) {
+      if (effect.node_group && !ID_MISSING(effect.node_group)) {
+        for (bNode *node : effect.node_group->all_nodes()) {
+          if (node->id == (ID *)scene) {
+            BKE_ntree_update_tag_node_property(effect.node_group, node);
+          }
         }
       }
     }

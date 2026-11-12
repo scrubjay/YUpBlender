@@ -8,7 +8,7 @@
 
 #include <functional>
 
-#include "BLI_listbase.h"
+#include "BLI_listbase.hh"
 
 #include "DNA_space_types.h"
 
@@ -42,7 +42,7 @@ bool outliner_has_element_warnings(const SpaceOutliner &space_outliner)
     return false;
   };
 
-  return recursive_fn(space_outliner.tree);
+  return recursive_fn(space_outliner.runtime->tree);
 }
 
 }  // namespace blender::ed::outliner

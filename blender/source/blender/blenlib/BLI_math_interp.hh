@@ -22,8 +22,8 @@
  * #interpolate_nearest_wrapmode_fl).
  */
 
-#include "BLI_math_base.h"
 #include "BLI_math_base.hh"
+#include "BLI_math_base_c.hh"
 #include "BLI_math_vector_types.hh"
 #include "BLI_simd.hh"
 
@@ -35,7 +35,8 @@ namespace math {
  * Texture coordinate wrapping mode.
  */
 enum class InterpWrapMode {
-  /** Image edges are extended outside the image, i.e. sample coordinates are clamped to the edge.
+  /**
+   * Image edges are extended outside the image, i.e. sample coordinates are clamped to the edge.
    */
   Extend,
   /** Image repeats, i.e. sample coordinates are wrapped around. */
@@ -221,7 +222,7 @@ inline void interpolate_nearest_fl(
 }
 
 /**
- * Equal to int(mod_periodic(u, float(size)) for |u| <= MAXINT.
+ * Equal to int(mod_periodic(u, float(size))) for |u| <= MAXINT.
  * However other values of u, including inf and NaN, produce in-range values,
  * this is also at least 5% faster.
  */
@@ -508,6 +509,7 @@ void BLI_ewa_filter(int width,
                     const float dv[2],
                     ewa_filter_read_pixel_cb read_pixel_cb,
                     void *userdata,
-                    float result[4]);
+                    float result[4],
+                    bool clip = true);
 
 }  // namespace blender

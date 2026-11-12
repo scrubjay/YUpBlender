@@ -170,7 +170,8 @@ static void deform_drawing(const ModifierData &md,
       curves, mmd.influence);
 
   const int falloff_type = mmd.falloff_type;
-  const float falloff = (mmd.falloff_type == eHook_Falloff_None) ? 0.0f : mmd.falloff;
+  const float falloff = (mmd.falloff_type == MOD_GREASE_PENCIL_HOOK_Falloff_None) ? 0.0f :
+                                                                                    mmd.falloff;
   const float falloff_sq = square_f(falloff);
   const float fac_orig = mmd.force;
   const bool use_falloff = falloff_sq != 0.0f;
@@ -271,9 +272,7 @@ static void panel_draw(const bContext *C, Panel *panel)
 
   ui::Layout &col = layout.column(false);
   col.prop(ptr, "object", UI_ITEM_NONE, std::nullopt, ICON_NONE);
-  if (!RNA_pointer_is_null(&hook_object_ptr) &&
-      RNA_enum_get(&hook_object_ptr, "type") == OB_ARMATURE)
-  {
+  if (hook_object_ptr && RNA_enum_get(&hook_object_ptr, "type") == OB_ARMATURE) {
     PointerRNA hook_object_data_ptr = RNA_pointer_get(&hook_object_ptr, "data");
     col.prop_search(ptr, "subtarget", &hook_object_data_ptr, "bones", IFACE_("Bone"), ICON_NONE);
   }

@@ -79,13 +79,13 @@ class RENDER_PT_color_management(RenderButtonsPanel, Panel):
         col.prop(view, "look")
 
         if view.is_hdr and not context.window.support_hdr_color:
-            row = col.split(factor=0.4)
+            row = col.split(factor=col.property_split_factor)
             row.label()
 
             if gpu.platform.backend_type_get() == 'OPENGL':
-                row.label(text="HDR not supported with OpenGL backend", icon='INFO')
+                row.label(text="HDR not supported with OpenGL backend", icon='STATUS_INFO')
             else:
-                row.label(text="HDR display not supported", icon='INFO')
+                row.label(text="HDR display not supported", icon='STATUS_INFO')
 
         col = flow.column()
         col.prop(view, "exposure")
@@ -114,7 +114,7 @@ class RENDER_PT_color_management_working_space(RenderButtonsPanel, Panel):
 
         col = flow.column()
 
-        split = col.split(factor=0.4)
+        split = col.split(factor=col.property_split_factor)
         row = split.row()
         row.label(text="File")
         row.alignment = 'RIGHT'
@@ -122,7 +122,7 @@ class RENDER_PT_color_management_working_space(RenderButtonsPanel, Panel):
             "wm.set_working_color_space",
             "working_space",
             text=blend_colorspace.working_space,
-            text_ctxt=i18n_contexts.default,
+            text_ctxt=i18n_contexts.color_management,
         )
 
         col.prop_with_menu(
@@ -152,6 +152,19 @@ class RENDER_PT_color_management_advanced(RenderButtonsPanel, Panel):
         col = layout.column()
         col.active = scene.view_settings.support_emulation
         col.prop(scene.display_settings, "emulation")
+
+        colorspace = context.blend_data.colorspace
+        source = colorspace.bl_rna.properties["ocio_config_source"].enum_items[colorspace.ocio_config_source]
+
+        split = layout.split(factor=layout.property_split_factor)
+        row = split.row()
+        row.alignment = 'RIGHT'
+        row.label(text="OpenColorIO Config")
+        col = split.column()
+        col.active = False
+        col.label(text=source.name)
+        if colorspace.ocio_config_source != 'BLENDER' and colorspace.ocio_config_path:
+            col.label(text=colorspace.ocio_config_path, translate=False)
 
 
 class RENDER_PT_color_management_curves(RenderButtonsPanel, Panel):
@@ -425,8 +438,7 @@ class RENDER_PT_eevee_screen_trace(RenderButtonsPanel, Panel):
 
     @classmethod
     def poll(cls, context):
-        use_screen_trace = (context.scene.eevee.ray_tracing_method == 'SCREEN')
-        return (context.engine in cls.COMPAT_ENGINES) and use_screen_trace
+        return (context.engine in cls.COMPAT_ENGINES)
 
     def draw(self, context):
         scene = context.scene
@@ -439,9 +451,22 @@ class RENDER_PT_eevee_screen_trace(RenderButtonsPanel, Panel):
 
         props = context.scene.eevee.ray_tracing_options
 
+        use_screen_trace = (context.scene.eevee.ray_tracing_method == 'SCREEN')
+
         col = layout.column()
-        col.prop(props, "screen_trace_quality", text="Precision")
-        col.prop(props, "screen_trace_thickness", text="Thickness")
+        sub = col.column(align=False)
+        sub.active = use_screen_trace
+        sub.prop(props, "screen_trace_quality", text="Precision")
+        sub.prop(props, "screen_trace_thickness", text="Thickness")
+
+        col = col.column(align=False, heading="Backface")
+        row = col.row(align=True)
+        sub = row.row(align=True)
+        sub.active = use_screen_trace or context.scene.eevee.use_fast_gi
+        sub.prop(props, "use_backface_hit", text="")
+        sub = sub.row(align=True)
+        sub.active = props.use_backface_hit
+        sub.prop(props, "backface_radiance_scale", text="")
 
 
 class RENDER_PT_eevee_gi_approximation(RenderButtonsPanel, Panel):
@@ -486,8 +511,7 @@ class RENDER_PT_eevee_gi_approximation(RenderButtonsPanel, Panel):
 
         sub = col.column(align=True)
         sub.prop(props, "fast_gi_distance")
-        sub.prop(props, "fast_gi_thickness_near", text="Thickness Near")
-        sub.prop(props, "fast_gi_thickness_far", text="Far")
+        sub.prop(props, "fast_gi_thickness_near")
 
         col.prop(props, "fast_gi_bias", text="Bias")
 
@@ -517,17 +541,19 @@ class RENDER_PT_eevee_denoise(RenderButtonsPanel, Panel):
         layout.use_property_decorate = False
         props = context.scene.eevee.ray_tracing_options
 
-        col = layout.column()
-        col.active = props.use_denoise
-        col.prop(props, "denoise_spatial")
+        col = layout.column(align=True)
 
-        col = layout.column()
-        col.active = props.use_denoise and props.denoise_spatial
-        col.prop(props, "denoise_temporal")
+        row = col.row()
+        row.active = props.use_denoise
+        row.prop(props, "denoise_spatial")
 
-        col = layout.column()
-        col.active = props.use_denoise and props.denoise_spatial and props.denoise_temporal
-        col.prop(props, "denoise_bilateral")
+        row = col.row()
+        row.active = props.use_denoise and props.denoise_spatial
+        row.prop(props, "denoise_temporal")
+
+        row = col.row()
+        row.active = props.use_denoise and props.denoise_spatial and props.denoise_temporal
+        row.prop(props, "denoise_bilateral")
 
 
 class RENDER_PT_eevee_light_paths(RenderButtonsPanel, Panel):
@@ -715,6 +741,7 @@ class RENDER_PT_eevee_sampling_render(RenderButtonsPanel, Panel):
 
         col = layout.column(align=True)
         col.prop(props, "taa_render_samples", text="Samples")
+        col.prop(props, "time_limit")
 
         # Add SSS sample count here.
 

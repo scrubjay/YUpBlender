@@ -7,14 +7,13 @@
 #include "usd.hh"
 #include "usd_api_hook.hh"
 #include "usd_asset_utils.hh"
-#include "usd_hash_types.hh"
 #include "usd_hierarchy_iterator.hh"
 #include "usd_reader_prim.hh"
 #include "usd_reader_stage.hh"
 #include "usd_writer_material.hh"
 
 #include "BLI_map.hh"
-#include "BLI_utildefines.h"
+#include "BLI_utildefines.hh"
 #include "BLI_vector.hh"
 
 #include "BKE_lib_id.hh"
@@ -120,9 +119,10 @@ class USDSceneExportContext {
     return stage_;
   }
 
-  const PointerRNA &get_depsgraph() const
+  PyObject *get_depsgraph() const
   {
-    return depsgraph_ptr_;
+    PointerRNA ptr = depsgraph_ptr_;
+    return pyrna_struct_CreatePyObject(&ptr);
   }
 
   python::dict get_prim_map() const
@@ -135,7 +135,10 @@ class USDSceneExportContext {
       for (ID *id : ids) {
         if (id) {
           PointerRNA ptr_rna = RNA_id_pointer_create(id);
-          id_list.append(ptr_rna);
+          PyObject *py_id = pyrna_struct_CreatePyObject(&ptr_rna);
+          if (py_id) {
+            id_list.append(python::handle<>(python::borrowed(py_id)));
+          }
         }
       }
       result[path] = id_list;
@@ -178,8 +181,11 @@ class USDSceneImportContext {
         }
 
         python::list list = python::extract<python::list>((*prim_map_dict_)[path]);
-        for (const auto &ptr_rna : ids) {
-          list.append(ptr_rna);
+        for (PointerRNA ptr_rna : ids) {
+          PyObject *py_id = pyrna_struct_CreatePyObject(&ptr_rna);
+          if (py_id) {
+            list.append(python::handle<>(python::borrowed(py_id)));
+          }
         }
       });
     }
@@ -318,15 +324,13 @@ void register_hook_converters()
   python::import("pxr.Usd");
   python::import("pxr.UsdShade");
 
-  /* Register converter from PoinerRNA to a PyObject*. */
+  /* Register converter from PointerRNA to a PyObject*. */
   python::to_python_converter<PointerRNA, PointerRNAToPython>();
 
   /* Register context class converters. */
   python::class_<USDSceneExportContext>("USDSceneExportContext", python::no_init)
       .def("get_stage", &USDSceneExportContext::get_stage)
-      .def("get_depsgraph",
-           &USDSceneExportContext::get_depsgraph,
-           python::return_value_policy<python::return_by_value>())
+      .def("get_depsgraph", &USDSceneExportContext::get_depsgraph)
       .def("get_prim_map", &USDSceneExportContext::get_prim_map);
 
   python::class_<USDMaterialExportContext>("USDMaterialExportContext", python::no_init)
@@ -380,6 +384,7 @@ class USDHookInvoker {
     }
 
     PyGILState_STATE gilstate = PyGILState_Ensure();
+    register_hook_converters();
     init_in_gil();
 
     /* Iterate over the hooks and invoke the hook function, if it's defined. */
@@ -463,7 +468,7 @@ class OnMaterialExportInvoker final : public USDHookInvoker {
 
  public:
   OnMaterialExportInvoker(pxr::UsdStageRefPtr stage,
-                          Material *material,
+                          const Material *material,
                           const pxr::UsdShadeMaterial &usd_material,
                           const USDExportParams &export_params,
                           ReportList *reports)
@@ -471,7 +476,8 @@ class OnMaterialExportInvoker final : public USDHookInvoker {
         hook_context_(stage, export_params, reports),
         usd_material_(usd_material)
   {
-    material_ptr_ = RNA_pointer_create_discrete(nullptr, RNA_Material, material);
+    material_ptr_ = RNA_pointer_create_discrete(
+        nullptr, RNA_Material, const_cast<Material *>(material));
   }
 
  private:
@@ -482,8 +488,13 @@ class OnMaterialExportInvoker final : public USDHookInvoker {
 
   void call_hook(PyObject *hook_obj) override
   {
+    PyObject *py_mat = pyrna_struct_CreatePyObject(&material_ptr_);
     python::call_method<bool>(
-        hook_obj, function_name(), python::ref(hook_context_), material_ptr_, usd_material_);
+        hook_obj,
+        function_name(),
+        python::ref(hook_context_),
+        python::handle<>(python::borrowed(py_mat ? py_mat : Py_None)),
+        usd_material_);
   }
 };
 
@@ -586,8 +597,13 @@ class OnMaterialImportInvoker final : public USDHookInvoker {
 
   void call_hook(PyObject *hook_obj) override
   {
+    PyObject *py_mat = pyrna_struct_CreatePyObject(&material_ptr_);
     result_ |= python::call_method<bool>(
-        hook_obj, function_name(), python::ref(hook_context_), material_ptr_, usd_material_);
+        hook_obj,
+        function_name(),
+        python::ref(hook_context_),
+        python::handle<>(python::borrowed(py_mat ? py_mat : Py_None)),
+        usd_material_);
   }
 };
 
@@ -597,12 +613,14 @@ void call_export_hooks(Depsgraph *depsgraph, const USDHierarchyIterator *iter, R
     return;
   }
 
+  register_hook_converters();
+
   OnExportInvoker on_export(iter, depsgraph, reports);
   on_export.call();
 }
 
 void call_material_export_hooks(pxr::UsdStageRefPtr stage,
-                                Material *material,
+                                const Material *material,
                                 const pxr::UsdShadeMaterial &usd_material,
                                 const USDExportParams &export_params,
                                 ReportList *reports)
@@ -610,6 +628,8 @@ void call_material_export_hooks(pxr::UsdStageRefPtr stage,
   if (hook_list().empty()) {
     return;
   }
+
+  register_hook_converters();
 
   OnMaterialExportInvoker on_material_export(
       stage, material, usd_material, export_params, reports);

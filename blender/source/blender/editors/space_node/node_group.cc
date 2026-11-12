@@ -12,16 +12,16 @@
 
 #include "DNA_node_types.h"
 
-#include "BLI_math_vector.h"
+#include "BLI_math_vector_c.hh"
 #include "BLI_math_vector_types.hh"
-#include "BLI_string.h"
-#include "BLI_string_utf8.h"
+#include "BLI_string.hh"
+#include "BLI_string_utf8.hh"
 #include "BLI_vector.hh"
 
 #include "BLT_translation.hh"
 
 #include "BKE_action.hh"
-#include "BKE_animsys.h"
+#include "BKE_animsys.hh"
 #include "BKE_context.hh"
 #include "BKE_lib_id.hh"
 #include "BKE_library.hh"
@@ -301,7 +301,7 @@ static void node_group_ungroup(bContext &C, bNodeTree &ntree, bNode &group_node)
   /* Delete the original group instance. */
   bke::node_remove_node(&bmain, ntree, group_node, true);
 
-  /* Select ungrouped nodes*/
+  /* Select ungrouped nodes. */
   for (bNode *node : copied_nodes.node_map().values()) {
     bke::node_set_selected(*node, true);
   }
@@ -320,7 +320,7 @@ static wmOperatorStatus node_group_ungroup_exec(bContext *C, wmOperator * /*op*/
 
   Vector<bNode *> nodes_to_ungroup;
   for (bNode *node : snode->edittree->all_nodes()) {
-    if (node->flag & NODE_SELECT) {
+    if (node->is_selected()) {
       if (node->idname == node_idname) {
         if (node->id != nullptr) {
           nodes_to_ungroup.append(node);
@@ -336,6 +336,7 @@ static wmOperatorStatus node_group_ungroup_exec(bContext *C, wmOperator * /*op*/
   for (bNode *node : nodes_to_ungroup) {
     node_group_ungroup(*C, *snode->edittree, *node);
   }
+  WM_event_handling_break(*C);
   BKE_main_ensure_invariants(*CTX_data_main(C));
   return OPERATOR_FINISHED;
 }
@@ -663,7 +664,9 @@ static bNode *node_group_make_from_node_declaration(bContext &C,
   bNodeTree *wrapper_group = bke::node_tree_add_tree(
       &bmain, bke::node_label(ntree, src_node), ntree.idname);
   wrapper_group->color_tag = int(bke::node_color_tag(src_node));
-  wrapper_group->default_group_node_width = src_node.width;
+  if (!src_node.is_reroute()) {
+    wrapper_group->default_group_node_width = src_node.width;
+  }
 
   NodeSetInterfaceParams params;
   /* Hidden sockets are exposed but hidden on the group node instance. */
@@ -689,7 +692,10 @@ static bNode *node_group_make_from_node_declaration(bContext &C,
 
   /* Position node exactly where the old node was. */
   gnode->parent = src_node.parent;
-  gnode->width = std::max<float>(src_node.width, GROUP_NODE_MIN_WIDTH);
+
+  if (!src_node.is_reroute()) {
+    gnode->width = std::max<float>(src_node.width, bke::NodeWidth::GroupMin);
+  }
   copy_v2_v2(gnode->location, src_node.location);
 
   BKE_main_ensure_invariants(bmain);
@@ -748,7 +754,7 @@ static wmOperatorStatus node_group_make_exec(bContext *C, wmOperator *op)
   }
 
   WM_event_add_notifier(C, NC_NODE | NA_ADDED, nullptr);
-
+  WM_event_handling_break(*C);
   /* We broke relations in node tree, need to rebuild them in the graphs. */
   DEG_relations_tag_update(bmain);
 
@@ -864,7 +870,7 @@ static wmOperatorStatus node_default_group_width_set_exec(bContext *C, wmOperato
   SpaceNode *snode = CTX_wm_space_node(C);
   bNodeTree *ntree = snode->edittree;
 
-  bNodeTreePath *last_path_item = static_cast<bNodeTreePath *>(snode->treepath.last);
+  bNodeTreePath *last_path_item = snode->treepath.last();
   bNodeTreePath *parent_path_item = last_path_item->prev;
   if (!parent_path_item) {
     return OPERATOR_CANCELLED;

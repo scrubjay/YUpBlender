@@ -26,6 +26,7 @@ set(SRC
   ./intern/memory_usage.cc
 
   MEM_guardedalloc.h
+  MEM_safe_multiply.h
   ./intern/mallocn_inline.hh
   ./intern/mallocn_intern.hh
   ./intern/mallocn_intern_function_pointers.hh
@@ -40,6 +41,7 @@ set(SRC
 
 set(LIB
   PRIVATE bf::intern::atomic
+  PRIVATE bf::intern::profile
   PRIVATE bf::dependencies::pthreads
 )
 
@@ -50,6 +52,7 @@ if(WITH_GTESTS)
   set(TEST_SRC
     tests/guardedalloc_alignment_test.cc
     tests/guardedalloc_overflow_test.cc
+    tests/guardedalloc_safe_multiply_test.cc
     tests/guardedalloc_test_base.h
   )
   set(TEST_INC

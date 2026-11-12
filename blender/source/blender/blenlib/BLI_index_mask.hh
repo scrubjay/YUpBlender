@@ -23,7 +23,6 @@
 #include "BLI_task.hh"
 #include "BLI_unique_sorted_indices.hh"
 #include "BLI_vector.hh"
-#include "BLI_vector_set.hh"
 #include "BLI_virtual_array_fwd.hh"
 
 namespace blender {
@@ -324,14 +323,15 @@ class IndexMask : private IndexMaskData {
                           Fn &&get_group_index,
                           MutableSpan<IndexMask> r_masks);
 
-  /** Creates an index mask for every unique group id. */
+  /**
+   * Creates an index mask for every unique group ID in the universe, in the order that the IDs
+   * first appear. The ID of each group is the ID of the first index in its mask.
+   */
   static Vector<IndexMask, 4> from_group_ids(const VArray<int> &group_ids,
-                                             LinearAllocator<> &memory,
-                                             VectorSet<int> &r_index_by_group_id);
+                                             LinearAllocator<> &memory);
   static Vector<IndexMask, 4> from_group_ids(const IndexMask &universe,
                                              const VArray<int> &group_ids,
-                                             LinearAllocator<> &memory,
-                                             VectorSet<int> &r_index_by_group_id);
+                                             LinearAllocator<> &memory);
 
   int64_t size() const;
   bool is_empty() const;
@@ -640,6 +640,8 @@ int64_t consolidate_index_mask_segments(MutableSpan<IndexMaskSegment> segments,
 template<int64_t N>
 void index_range_to_mask_segments(const IndexRange range, Vector<IndexMaskSegment, N> &r_segments);
 
+/** \} */
+
 /* -------------------------------------------------------------------- */
 /** \name #RawMaskIterator Inline Methods
  * \{ */
@@ -653,6 +655,8 @@ inline bool operator==(const RawMaskIterator &a, const RawMaskIterator &b)
 {
   return !(a != b);
 }
+
+/** \} */
 
 /* -------------------------------------------------------------------- */
 /** \name #IndexMaskSegment Inline Methods
@@ -679,6 +683,8 @@ inline IndexMaskSegment IndexMaskSegment::shift(const int64_t shift) const
   BLI_assert(this->is_empty() || (*this)[0] + shift >= 0);
   return IndexMaskSegment(this->offset() + shift, this->base_span());
 }
+
+/** \} */
 
 /* -------------------------------------------------------------------- */
 /** \name #IndexMask Inline Methods
@@ -1078,7 +1084,8 @@ inline IndexMask IndexMask::from_predicate(const IndexMask &universe,
         const int16_t *in_end = indices.base_span().end();
         const int64_t offset = indices.offset();
         for (const int16_t *in_current = indices.base_span().data(); in_current < in_end;
-             in_current++) {
+             in_current++)
+        {
           const int16_t local_index = *in_current;
           const int64_t global_index = int64_t(local_index) + offset;
           const bool condition = predicate(global_index);
@@ -1200,7 +1207,7 @@ inline void fill_segment(T *__restrict data, const T &value, const SegmentT segm
 {
   if constexpr (std::is_same_v<SegmentT, IndexRange>) {
     if constexpr (std::is_trivially_copy_assignable_v<T>) {
-      if (memory_is_zero(&value, sizeof(T))) {
+      if (value_is_zero_memory(value)) {
         const IndexRange range = segment;
 /* GCC warns about memset on types without trivial copy-assignment even when guarded by
  * `if constexpr (std::is_trivially_copy_assignable_v<T>)`. Quiet the compiler bug. */
@@ -1295,6 +1302,8 @@ IndexMask random_mask(const int64_t universe_size,
                       const uint32_t random_seed,
                       const float probability,
                       LinearAllocator<> &memory);
+
+/** \} */
 
 }  // namespace index_mask
 

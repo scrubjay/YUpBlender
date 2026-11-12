@@ -2,6 +2,11 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup nodes
+ */
+
+#include "BLI_generic_array.hh"
 #include "BLI_memory_counter.hh"
 
 #include "NOD_geometry_nodes_bundle.hh"
@@ -9,136 +14,75 @@
 
 namespace blender::nodes {
 
-class ArrayImplicitSharingData : public ImplicitSharingInfo {
- public:
-  const CPPType &type;
-  void *data;
-  int64_t size;
-
-  ArrayImplicitSharingData(void *data, const int64_t size, const CPPType &type)
-      : ImplicitSharingInfo(), type(type), data(data), size(size)
-  {
-  }
-
- private:
-  void delete_self_with_data() override
-  {
-    type.destruct_n(this->data, this->size);
-    MEM_delete_void(this->data);
-    MEM_delete(this);
-  }
-};
-
-static ImplicitSharingPtr<> sharing_ptr_for_array(void *data,
-                                                  const int64_t size,
-                                                  const CPPType &type)
+/** Create array data that owns the array's buffer. */
+static GList::ArrayData array_data_from_garray(GArray<> array)
 {
-  if (type.is_trivially_destructible) {
-    /* Avoid storing size and type in sharing info if unnecessary. */
-    return ImplicitSharingPtr<>(implicit_sharing::info_for_mem_free(data));
-  }
-  return ImplicitSharingPtr<>(MEM_new<ArrayImplicitSharingData>(__func__, data, size, type));
-}
-
-List::ArrayData List::ArrayData::ForValue(const GPointer &value, const int64_t size)
-{
-  List::ArrayData data{};
-  const CPPType &type = *value.type();
-  const void *value_ptr = type.default_value();
-
-  void *new_data;
-  /* Prefer `calloc` to zeroing after allocation since it is faster. */
-  if (memory_is_zero(value_ptr, type.size)) {
-    new_data = MEM_new_array_zeroed_aligned(size, type.size, type.alignment, __func__);
-  }
-  else {
-    new_data = MEM_new_array_uninitialized_aligned(size, type.size, type.alignment, __func__);
-    type.fill_construct_n(value_ptr, new_data, size);
-  }
-
-  data.data = new_data;
-  data.sharing_info = sharing_ptr_for_array(new_data, size, type);
+  auto *sharing_info = new ImplicitSharedValue<GArray<>>(std::move(array));
+  GList::ArrayData data;
+  data.data = sharing_info->data.data();
+  data.sharing_info = ImplicitSharingPtr<>(sharing_info);
   return data;
 }
 
-List::ArrayData List::ArrayData::ForDefaultValue(const CPPType &type, const int64_t size)
+GList::ArrayData GList::ArrayData::ForValue(const GPointer &value, const int64_t size)
+{
+  const CPPType &type = *value.type();
+  const void *value_ptr = value.get();
+
+  /* Prefer `calloc` to zeroing after allocation since it is faster. */
+  if (memory_is_zero(value_ptr, type.size)) {
+    void *buffer = MEM_new_array_zeroed_aligned(size, type.size, type.alignment, __func__);
+    return array_data_from_garray(GArray<>(type, buffer, size));
+  }
+  GArray<> array(type, size, NoInitialization());
+  type.fill_construct_n(value_ptr, array.data(), size);
+  return array_data_from_garray(std::move(array));
+}
+
+GList::ArrayData GList::ArrayData::ForDefaultValue(const CPPType &type, const int64_t size)
 {
   return ForValue(GPointer(type, type.default_value()), size);
 }
 
-List::ArrayData List::ArrayData::ForConstructed(const CPPType &type, const int64_t size)
+GList::ArrayData GList::ArrayData::ForConstructed(const CPPType &type, const int64_t size)
 {
-  List::ArrayData data{};
-  void *new_data = MEM_new_array_uninitialized_aligned(size, type.size, type.alignment, __func__);
-  type.default_construct_n(new_data, size);
-  data.data = new_data;
-  data.sharing_info = sharing_ptr_for_array(new_data, size, type);
-  return data;
+  return array_data_from_garray(GArray<>(type, size));
 }
 
-List::ArrayData List::ArrayData::ForUninitialized(const CPPType &type, const int64_t size)
+GList::ArrayData GList::ArrayData::ForUninitialized(const CPPType &type, const int64_t size)
 {
-  List::ArrayData data{};
-  void *new_data = MEM_new_array_uninitialized_aligned(size, type.size, type.alignment, __func__);
-  data.data = new_data;
-  data.sharing_info = sharing_ptr_for_array(new_data, size, type);
-  return data;
+  return array_data_from_garray(GArray<>(type, size, NoInitialization()));
 }
 
-class SingleImplicitSharingData : public ImplicitSharingInfo {
- public:
-  const CPPType &type;
-  void *data;
-
-  SingleImplicitSharingData(void *data, const CPPType &type)
-      : ImplicitSharingInfo(), type(type), data(data)
-  {
-  }
-
- private:
-  void delete_self_with_data() override
-  {
-    type.destruct(this->data);
-    MEM_delete(this);
-  }
-};
-
-static ImplicitSharingPtr<> sharing_ptr_for_value(void *data, const CPPType &type)
+GList::SingleData GList::SingleData::ForValue(const GPointer &value)
 {
-  if (type.is_trivially_destructible) {
-    /* Avoid storing size and type in sharing info if unnecessary. */
-    return ImplicitSharingPtr<>(implicit_sharing::info_for_mem_free(data));
-  }
-  return ImplicitSharingPtr<>(MEM_new<SingleImplicitSharingData>(__func__, data, type));
-}
-
-List::SingleData List::SingleData::ForValue(const GPointer &value)
-{
-  List::SingleData data{};
   const CPPType &type = *value.type();
-  void *new_value = MEM_new_uninitialized_aligned(type.size, type.alignment, __func__);
-  type.copy_construct(value.get(), new_value);
-  data.value = new_value;
-  data.sharing_info = sharing_ptr_for_value(new_value, type);
+  /* Use an array with a single element to store the value. */
+  GArray<> array(type, 1, NoInitialization());
+  type.copy_construct(value.get(), array.data());
+  auto *sharing_info = new ImplicitSharedValue<GArray<>>(std::move(array));
+  GList::SingleData data;
+  data.value = sharing_info->data.data();
+  data.sharing_info = ImplicitSharingPtr<>(sharing_info);
   return data;
 }
 
-List::SingleData List::SingleData::ForDefaultValue(const CPPType &type)
+GList::SingleData GList::SingleData::ForDefaultValue(const CPPType &type)
 {
   return ForValue(GPointer(type, type.default_value()));
 }
 
-void List::delete_self()
+void GList::delete_self()
 {
   MEM_delete(this);
 }
 
-ListPtr List::copy() const
+GListPtr GList::copy() const
 {
-  return List::create(cpp_type_, data_, size_);
+  return GList::create(cpp_type_, data_, size_);
 }
 
-GVArray List::varray() const
+GVArray GList::varray() const
 {
   if (const auto *array_data = std::get_if<ArrayData>(&data_)) {
     return GVArray::from_span(GSpan(cpp_type_, array_data->data, size_));
@@ -150,7 +94,7 @@ GVArray List::varray() const
   return {};
 }
 
-void List::count_memory(MemoryCounter &memory) const
+void GList::count_memory(MemoryCounter &memory) const
 {
   if (const auto *array_data = std::get_if<ArrayData>(&data_)) {
     array_data->count_memory(memory, cpp_type_, size_);
@@ -162,47 +106,53 @@ void List::count_memory(MemoryCounter &memory) const
   }
 }
 
-void List::ensure_owns_direct_data()
+void GList::ensure_owns_direct_data()
 {
   if (cpp_type_.is<BundlePtr>()) {
-    this->foreach_for_write<BundlePtr>([](BundlePtr &bundle_ptr) {
+    this->typed<BundlePtr>().foreach_for_write([](BundlePtr &bundle_ptr) {
+      if (!bundle_ptr) {
+        return;
+      }
       bundle_ptr.ensure_mutable_inplace();
       const_cast<Bundle &>(*bundle_ptr).ensure_owns_direct_data();
     });
   }
   else if (cpp_type_.is<bke::SocketValueVariant>()) {
-    this->foreach_for_write<bke::SocketValueVariant>(
+    this->typed<bke::SocketValueVariant>().foreach_for_write(
         [](bke::SocketValueVariant &value) { value.ensure_owns_direct_data(); });
   }
   else if (cpp_type_.is<bke::GeometrySet>()) {
-    this->foreach_for_write<bke::GeometrySet>(
+    this->typed<bke::GeometrySet>().foreach_for_write(
         [](bke::GeometrySet &geometry) { geometry.ensure_owns_direct_data(); });
   }
 }
 
-bool List::owns_direct_data() const
+bool GList::owns_direct_data() const
 {
   const std::variant<GSpan, GPointer> &values = this->values();
   if (cpp_type_.is<BundlePtr>()) {
+    /* Null bundles don't reference any data, so they are trivially owned. */
     return std::visit(
         []<typename T>(const T &value) {
           if constexpr (std::is_same_v<T, GSpan>) {
             const Span span = value.template typed<BundlePtr>();
             return std::all_of(span.begin(), span.end(), [](const BundlePtr &bundle_ptr) {
               if (!bundle_ptr) {
-                return false;
+                return true;
               }
               return bundle_ptr->owns_direct_data();
             });
           }
           else if constexpr (std::is_same_v<T, GPointer>) {
             const BundlePtr *value_ptr = value.template get<BundlePtr>();
-            if (!value_ptr) {
-              return false;
+            if (!value_ptr || !*value_ptr) {
+              return true;
             }
             return (*value_ptr)->owns_direct_data();
           }
-          return true;
+          else {
+            BLI_assert_unreachable_static_t(T);
+          }
         },
         values);
   }
@@ -218,7 +168,9 @@ bool List::owns_direct_data() const
           else if constexpr (std::is_same_v<T, GPointer>) {
             return value.template get<bke::SocketValueVariant>()->owns_direct_data();
           }
-          return true;
+          else {
+            BLI_assert_unreachable_static_t(T);
+          }
         },
         values);
   }
@@ -234,33 +186,33 @@ bool List::owns_direct_data() const
           else if constexpr (std::is_same_v<T, GPointer>) {
             return value.template get<bke::GeometrySet>()->owns_direct_data();
           }
-          return true;
+          else {
+            BLI_assert_unreachable_static_t(T);
+          }
         },
         values);
   }
   return true;
 }
 
-void List::ArrayData::count_memory(MemoryCounter &memory,
-                                   const CPPType &type,
-                                   const int64_t size) const
+void GList::ArrayData::count_memory(MemoryCounter &memory,
+                                    const CPPType &type,
+                                    const int64_t size) const
 {
   memory.add_shared(this->sharing_info.get(), type.size * size);
 }
 
-void List::SingleData::count_memory(MemoryCounter &memory, const CPPType &type) const
+void GList::SingleData::count_memory(MemoryCounter &memory, const CPPType &type) const
 {
   memory.add(type.size);
 }
 
-GMutableSpan List::ArrayData::span_for_write(const CPPType &type, int64_t size)
+GMutableSpan GList::ArrayData::span_for_write(const CPPType &type, int64_t size)
 {
   if (this->sharing_info && !this->sharing_info->is_mutable()) {
-    void *new_data = MEM_new_array_uninitialized_aligned(
-        size, type.size, type.alignment, __func__);
-    type.copy_construct_n(this->data, new_data, size);
-    this->data = new_data;
-    this->sharing_info = sharing_ptr_for_array(new_data, size, type);
+    GArray<> new_array(type, size, NoInitialization());
+    type.copy_construct_n(this->data, new_array.data(), size);
+    *this = array_data_from_garray(std::move(new_array));
   }
   if (this->sharing_info) {
     this->sharing_info->tag_ensured_mutable();
@@ -268,13 +220,10 @@ GMutableSpan List::ArrayData::span_for_write(const CPPType &type, int64_t size)
   return {type, const_cast<void *>(this->data), size};
 }
 
-GMutablePointer List::SingleData::value_for_write(const CPPType &type)
+GMutablePointer GList::SingleData::value_for_write(const CPPType &type)
 {
   if (this->sharing_info && !this->sharing_info->is_mutable()) {
-    void *new_data = MEM_new_uninitialized_aligned(type.size, type.alignment, __func__);
-    type.copy_construct(this->value, new_data);
-    this->value = new_data;
-    this->sharing_info = sharing_ptr_for_value(new_data, type);
+    *this = SingleData::ForValue(GPointer(type, this->value));
   }
   if (this->sharing_info) {
     this->sharing_info->tag_ensured_mutable();
@@ -282,7 +231,7 @@ GMutablePointer List::SingleData::value_for_write(const CPPType &type)
   return GMutablePointer{type, const_cast<void *>(this->value)};
 }
 
-std::variant<GSpan, GPointer> List::values() const
+std::variant<GSpan, GPointer> GList::values() const
 {
   if (const auto *array_data = std::get_if<ArrayData>(&data_)) {
     return GSpan(cpp_type_, array_data->data, size_);
@@ -294,7 +243,7 @@ std::variant<GSpan, GPointer> List::values() const
   return {};
 }
 
-std::variant<GMutableSpan, GMutablePointer> List::values_for_write()
+std::variant<GMutableSpan, GMutablePointer> GList::values_for_write()
 {
   if (auto *array_data = std::get_if<ArrayData>(&data_)) {
     return array_data->span_for_write(cpp_type_, size_);
@@ -306,24 +255,27 @@ std::variant<GMutableSpan, GMutablePointer> List::values_for_write()
   return {};
 }
 
-List::List(const CPPType &type, DataVariant data, const int64_t size)
+GList::GList(const CPPType &type, DataVariant data, const int64_t size)
     : cpp_type_(type), data_(std::move(data)), size_(size)
 {
 }
 
-ListPtr List::create(const CPPType &type, DataVariant data, const int64_t size)
+GListPtr GList::create(const CPPType &type, DataVariant data, const int64_t size)
 {
-  return ListPtr(MEM_new<List>(__func__, type, std::move(data), size));
+  return GListPtr(MEM_new<GList>(__func__, type, std::move(data), size));
 }
 
-ListPtr List::from_garray(GArray<> array)
+GListPtr GList::from_garray(GArray<> array)
 {
-  auto *sharable_data = new ImplicitSharedValue<GArray<>>(std::move(array));
-  ArrayData array_data;
-  array_data.data = sharable_data->data.data();
-  array_data.sharing_info = ImplicitSharingPtr<>(sharable_data);
-  return List::create(
-      sharable_data->data.type(), std::move(array_data), sharable_data->data.size());
+  const CPPType &type = array.type();
+  const int64_t size = array.size();
+  return GList::create(type, array_data_from_garray(std::move(array)), size);
+}
+
+GListPtr GList::from_single(const GPointer value, const int64_t size)
+{
+  const CPPType &type = *value.type();
+  return GListPtr{MEM_new<GList>(__func__, type, SingleData::ForValue(value), size)};
 }
 
 }  // namespace blender::nodes

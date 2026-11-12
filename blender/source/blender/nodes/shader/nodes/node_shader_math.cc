@@ -31,7 +31,7 @@ static void sh_node_math_declare(NodeDeclarationBuilder &b)
       .default_value(0.5f)
       .min(-10000.0f)
       .max(10000.0f)
-      .label_fn([](bNode node) {
+      .label_fn([](const bNode &node) {
         switch (node.custom1) {
           case NODE_MATH_POWER:
             return IFACE_("Base");
@@ -47,7 +47,7 @@ static void sh_node_math_declare(NodeDeclarationBuilder &b)
       .default_value(0.5f)
       .min(-10000.0f)
       .max(10000.0f)
-      .label_fn([](bNode node) {
+      .label_fn([](const bNode &node) {
         switch (node.custom1) {
           case NODE_MATH_WRAP:
             return IFACE_("Max");
@@ -72,7 +72,7 @@ static void sh_node_math_declare(NodeDeclarationBuilder &b)
       .default_value(0.5f)
       .min(-10000.0f)
       .max(10000.0f)
-      .label_fn([](bNode node) {
+      .label_fn([](const bNode &node) {
         switch (node.custom1) {
           case NODE_MATH_WRAP:
             return IFACE_("Min");
@@ -92,11 +92,11 @@ static void sh_node_math_declare(NodeDeclarationBuilder &b)
 
 static void math_input_defaults(bNode &node, const NodeMathOperation mode)
 {
-  bNodeSocket *socket_2 = bke::node_find_socket(node, SOCK_IN, "Value_001");
+  bNodeSocket *socket_2 = bke::node_find_socket(node, SOCK_IN, "Value_001"_ustr);
   BLI_assert(socket_2 != nullptr);
   float &value_2 = socket_2->default_value_typed<bNodeSocketValueFloat>()->value;
 
-  bNodeSocket *socket_3 = bke::node_find_socket(node, SOCK_IN, "Value_002");
+  bNodeSocket *socket_3 = bke::node_find_socket(node, SOCK_IN, "Value_002"_ustr);
   BLI_assert(socket_3 != nullptr);
   float &value_3 = socket_3->default_value_typed<bNodeSocketValueFloat>()->value;
 
@@ -139,27 +139,27 @@ class SocketSearchOp {
 
 static void sh_node_math_gather_link_searches(GatherLinkSearchOpParams &params)
 {
-  if (!params.node_tree().typeinfo->validate_link(eNodeSocketDatatype(params.other_socket().type),
-                                                  SOCK_FLOAT))
-  {
+  if (!params.node_tree().typeinfo->validate_link(params.other_socket().type, SOCK_FLOAT)) {
     return;
   }
 
-  const bool is_geometry_node_tree = params.node_tree().type == NTREE_GEOMETRY;
+  const bool is_compare_node_supported = ELEM(
+      params.node_tree().type, NTREE_GEOMETRY, NTREE_COMPOSIT);
   const int weight = ELEM(params.other_socket().type, SOCK_FLOAT, SOCK_INT, SOCK_BOOLEAN) ? 0 : -1;
 
   for (const EnumPropertyItem *item = rna_enum_node_math_items; item->identifier != nullptr;
        item++)
   {
     if (item->name != nullptr && item->identifier[0] != '\0') {
-      const int gn_weight =
-          (is_geometry_node_tree &&
-           ELEM(item->value, NODE_MATH_COMPARE, NODE_MATH_GREATER_THAN, NODE_MATH_LESS_THAN)) ?
-              -1 :
-              weight;
+      if (is_compare_node_supported &&
+          ELEM(item->value, NODE_MATH_COMPARE, NODE_MATH_GREATER_THAN, NODE_MATH_LESS_THAN))
+      {
+        /* Hide compare operations from the Math node if the Compare node is supported. */
+        continue;
+      }
       params.add_item(CTX_IFACE_(BLT_I18NCONTEXT_ID_NODETREE, item->name),
                       SocketSearchOp{"Value"_ustr, NodeMathOperation(item->value)},
-                      gn_weight);
+                      weight);
     }
   }
 }

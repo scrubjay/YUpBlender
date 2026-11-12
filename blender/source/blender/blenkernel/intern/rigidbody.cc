@@ -17,10 +17,10 @@
 
 #include "MEM_guardedalloc.h"
 
-#include "BLI_listbase.h"
-#include "BLI_math_matrix.h"
-#include "BLI_math_rotation.h"
-#include "BLI_math_vector.h"
+#include "BLI_listbase.hh"
+#include "BLI_math_matrix_c.hh"
+#include "BLI_math_rotation_c.hh"
+#include "BLI_math_vector_c.hh"
 #include "BLI_mutex.hh"
 
 #ifdef WITH_BULLET
@@ -186,7 +186,7 @@ void BKE_rigidbody_free_object(Object *ob, RigidBodyWorld *rbw)
       else {
         /* We have no access to 'owner' RBW when deleting the object ID itself... No choice bu to
          * loop over all scenes then. */
-        for (Scene *scene = static_cast<Scene *>(G_MAIN->scenes.first); scene != nullptr;
+        for (Scene *scene = G_MAIN->scenes.first(); scene != nullptr;
              scene = static_cast<Scene *>(scene->id.next))
         {
           RigidBodyWorld *scene_rbw = scene->rigidbody_world;
@@ -566,11 +566,13 @@ void BKE_rigidbody_calc_volume(Object *ob, float *r_vol)
   }
   else if (rbo->shape == RB_SHAPE_SPHERE) {
     /* take radius to the largest dimension to try and encompass everything */
-    radius = max_fff(size[0], size[1], size[2]) * 0.5f;
+    radius = std::max({size[0], size[1], size[2]}) * 0.5f;
   }
 
   /* Calculate volume as appropriate. */
   switch (rbo->shape) {
+    case RB_SHAPE_COMPOUND:
+      break;
     case RB_SHAPE_BOX:
       volume = size[0] * size[1] * size[2];
       break;
@@ -648,6 +650,7 @@ void BKE_rigidbody_calc_center_of_mass(Object *ob, float r_center[3])
 
   /* Calculate volume as appropriate. */
   switch (rbo->shape) {
+    case RB_SHAPE_COMPOUND:
     case RB_SHAPE_BOX:
     case RB_SHAPE_SPHERE:
     case RB_SHAPE_CAPSULE:
@@ -1184,7 +1187,7 @@ RigidBodyWorld *BKE_rigidbody_world_copy(RigidBodyWorld *rbw, const int flag)
     /* This is a regular copy, and not an evaluated copy for depsgraph evaluation. */
     rbw_copy->shared = MEM_new<RigidBodyWorld_Shared>("RigidBodyWorld_Shared");
     BKE_ptcache_copy_list(&rbw_copy->shared->ptcaches, &rbw->shared->ptcaches, LIB_ID_COPY_CACHES);
-    rbw_copy->shared->pointcache = static_cast<PointCache *>(rbw_copy->shared->ptcaches.first);
+    rbw_copy->shared->pointcache = rbw_copy->shared->ptcaches.first();
     BKE_rigidbody_world_init_runtime(rbw_copy);
   }
 
@@ -1202,7 +1205,7 @@ void BKE_rigidbody_world_groups_relink(RigidBodyWorld *rbw)
   ID_NEW_REMAP(rbw->effector_weights->group);
 }
 
-RigidBodyOb *BKE_rigidbody_create_object(Scene *scene, Object *ob, short type)
+RigidBodyOb *BKE_rigidbody_create_object(Scene *scene, Object *ob, eRigidBodyOb_Type type)
 {
   RigidBodyOb *rbo;
   RigidBodyWorld *rbw = scene->rigidbody_world;
@@ -1264,7 +1267,7 @@ RigidBodyOb *BKE_rigidbody_create_object(Scene *scene, Object *ob, short type)
   return rbo;
 }
 
-RigidBodyCon *BKE_rigidbody_create_constraint(Scene *scene, Object *ob, short type)
+RigidBodyCon *BKE_rigidbody_create_constraint(Scene *scene, Object *ob, eRigidBodyCon_Type type)
 {
   RigidBodyCon *rbc;
   RigidBodyWorld *rbw = scene->rigidbody_world;
@@ -1365,9 +1368,7 @@ void BKE_rigidbody_constraints_collection_validate(Scene *scene, RigidBodyWorld 
 
 void BKE_rigidbody_main_collection_object_add(Main *bmain, Collection *collection, Object *object)
 {
-  for (Scene *scene = static_cast<Scene *>(bmain->scenes.first); scene;
-       scene = static_cast<Scene *>(scene->id.next))
-  {
+  for (Scene *scene = bmain->scenes.first(); scene; scene = static_cast<Scene *>(scene->id.next)) {
     RigidBodyWorld *rbw = scene->rigidbody_world;
 
     if (rbw == nullptr) {
@@ -1460,8 +1461,7 @@ void BKE_rigidbody_ensure_local_object(Main *bmain, Object *ob)
 {
   if (ob->rigidbody_object != nullptr) {
     /* Add newly local object to scene. */
-    for (Scene *scene = static_cast<Scene *>(bmain->scenes.first); scene;
-         scene = static_cast<Scene *>(scene->id.next))
+    for (Scene *scene = bmain->scenes.first(); scene; scene = static_cast<Scene *>(scene->id.next))
     {
       if (BKE_scene_object_find(*bmain, scene, ob)) {
         rigidbody_add_object_to_scene(bmain, scene, ob);
@@ -1470,8 +1470,7 @@ void BKE_rigidbody_ensure_local_object(Main *bmain, Object *ob)
   }
   if (ob->rigidbody_constraint != nullptr) {
     /* Add newly local object to scene. */
-    for (Scene *scene = static_cast<Scene *>(bmain->scenes.first); scene;
-         scene = static_cast<Scene *>(scene->id.next))
+    for (Scene *scene = bmain->scenes.first(); scene; scene = static_cast<Scene *>(scene->id.next))
     {
       if (BKE_scene_object_find(*bmain, scene, ob)) {
         rigidbody_add_constraint_to_scene(bmain, scene, ob);
@@ -1480,7 +1479,8 @@ void BKE_rigidbody_ensure_local_object(Main *bmain, Object *ob)
   }
 }
 
-bool BKE_rigidbody_add_object(Main *bmain, Scene *scene, Object *ob, int type, ReportList *reports)
+bool BKE_rigidbody_add_object(
+    Main *bmain, Scene *scene, Object *ob, eRigidBodyOb_Type type, ReportList *reports)
 {
   if (ob->type != OB_MESH) {
     BKE_report(reports, RPT_ERROR, "Cannot add Rigid Body to non mesh object");
@@ -2024,7 +2024,7 @@ static void rigidbody_free_substep_data(ListBaseT<LinkData> *substep_targets)
     MEM_delete(data);
   }
 
-  BLI_freelistN(substep_targets);
+  substep_targets->free_no_destruct();
 }
 static void rigidbody_update_simulation_post_step(Depsgraph *depsgraph, RigidBodyWorld *rbw)
 {
@@ -2323,11 +2323,11 @@ RigidBodyWorld *BKE_rigidbody_world_copy(RigidBodyWorld *rbw, const int flag)
   return nullptr;
 }
 void BKE_rigidbody_world_groups_relink(RigidBodyWorld *rbw) {}
-RigidBodyOb *BKE_rigidbody_create_object(Scene *scene, Object *ob, short type)
+RigidBodyOb *BKE_rigidbody_create_object(Scene *scene, Object *ob, eRigidBodyOb_Type type)
 {
   return nullptr;
 }
-RigidBodyCon *BKE_rigidbody_create_constraint(Scene *scene, Object *ob, short type)
+RigidBodyCon *BKE_rigidbody_create_constraint(Scene *scene, Object *ob, eRigidBodyCon_Type type)
 {
   return nullptr;
 }
@@ -2338,7 +2338,8 @@ RigidBodyWorld *BKE_rigidbody_get_world(Scene *scene)
 
 void BKE_rigidbody_ensure_local_object(Main *bmain, Object *ob) {}
 
-bool BKE_rigidbody_add_object(Main *bmain, Scene *scene, Object *ob, int type, ReportList *reports)
+bool BKE_rigidbody_add_object(
+    Main *bmain, Scene *scene, Object *ob, eRigidBodyOb_Type type, ReportList *reports)
 {
   BKE_report(reports, RPT_ERROR, "Compiled without Bullet physics engine");
   return false;

@@ -2,7 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
-#include "BLI_string.h"
+#include "BLI_string.hh"
 
 #include "FN_multi_function_registry.hh"
 
@@ -17,6 +17,7 @@
 #include "NOD_value_elem_eval.hh"
 
 #include "node_function_util.hh"
+#include "node_shader_util.hh"
 
 namespace blender::nodes::node_fn_integer_math_cc {
 
@@ -24,7 +25,7 @@ static void node_declare(NodeDeclarationBuilder &b)
 {
   b.is_function_node();
 
-  b.add_input<decl::Int>("Value"_ustr).label_fn([](bNode node) {
+  b.add_input<decl::Int>("Value"_ustr).label_fn([](const bNode &node) {
     switch (node.custom1) {
       case NODE_INTEGER_MATH_POWER:
         return IFACE_("Base");
@@ -33,7 +34,7 @@ static void node_declare(NodeDeclarationBuilder &b)
     }
   });
 
-  b.add_input<decl::Int>("Value"_ustr, "Value_001"_ustr).label_fn([](bNode node) {
+  b.add_input<decl::Int>("Value"_ustr, "Value_001"_ustr).label_fn([](const bNode &node) {
     switch (node.custom1) {
       case NODE_INTEGER_MATH_MULTIPLY_ADD:
         return IFACE_("Multiplier");
@@ -43,7 +44,7 @@ static void node_declare(NodeDeclarationBuilder &b)
         return IFACE_("Value");
     }
   });
-  b.add_input<decl::Int>("Value"_ustr, "Value_002"_ustr).label_fn([](bNode node) {
+  b.add_input<decl::Int>("Value"_ustr, "Value_002"_ustr).label_fn([](const bNode &node) {
     switch (node.custom1) {
       case NODE_INTEGER_MATH_MULTIPLY_ADD:
         return IFACE_("Addend");
@@ -65,7 +66,7 @@ static void node_update(bNodeTree *ntree, bNode *node)
       node->custom1, NODE_INTEGER_MATH_ABSOLUTE, NODE_INTEGER_MATH_SIGN, NODE_INTEGER_MATH_NEGATE);
   const bool three_input_ops = ELEM(node->custom1, NODE_INTEGER_MATH_MULTIPLY_ADD);
 
-  bNodeSocket *sockA = static_cast<bNodeSocket *>(node->inputs.first);
+  bNodeSocket *sockA = node->inputs.first();
   bNodeSocket *sockB = sockA->next;
   bNodeSocket *sockC = sockB->next;
 
@@ -75,7 +76,7 @@ static void node_update(bNodeTree *ntree, bNode *node)
 
 static void int_math_input_defaults(bNode &node, const NodeIntegerMathOperation operation)
 {
-  bNodeSocket *socket_2 = bke::node_find_socket(node, SOCK_IN, "Value_001");
+  bNodeSocket *socket_2 = bke::node_find_socket(node, SOCK_IN, "Value_001"_ustr);
   BLI_assert(socket_2 != nullptr);
   int &value_2 = socket_2->default_value_typed<bNodeSocketValueInt>()->value;
 
@@ -112,9 +113,7 @@ class SocketSearchOp {
 
 static void node_gather_link_searches(GatherLinkSearchOpParams &params)
 {
-  if (!params.node_tree().typeinfo->validate_link(eNodeSocketDatatype(params.other_socket().type),
-                                                  SOCK_INT))
-  {
+  if (!params.node_tree().typeinfo->validate_link(params.other_socket().type, SOCK_INT)) {
     return;
   }
 
@@ -195,6 +194,66 @@ static void node_build_multi_function(NodeMultiFunctionBuilder &builder)
 {
   const mf::MultiFunction *fn = get_multi_function(builder.node());
   builder.set_matching_fn(fn);
+}
+
+static const char *gpu_shader_get_name(const NodeIntegerMathOperation operation)
+{
+  switch (operation) {
+    case NODE_INTEGER_MATH_ADD:
+      return "integer_math_add";
+    case NODE_INTEGER_MATH_SUBTRACT:
+      return "integer_math_subtract";
+    case NODE_INTEGER_MATH_MULTIPLY:
+      return "integer_math_multiply";
+    case NODE_INTEGER_MATH_DIVIDE:
+      return "integer_math_divide";
+    case NODE_INTEGER_MATH_MULTIPLY_ADD:
+      return "integer_math_multiply_add";
+    case NODE_INTEGER_MATH_POWER:
+      return "integer_math_power";
+    case NODE_INTEGER_MATH_FLOORED_MODULO:
+      return "integer_math_floored_modulo";
+    case NODE_INTEGER_MATH_ABSOLUTE:
+      return "integer_math_absolute";
+    case NODE_INTEGER_MATH_MINIMUM:
+      return "integer_math_minimum";
+    case NODE_INTEGER_MATH_MAXIMUM:
+      return "integer_math_maximum";
+    case NODE_INTEGER_MATH_GCD:
+      return "integer_math_gcd";
+    case NODE_INTEGER_MATH_LCM:
+      return "integer_math_lcm";
+    case NODE_INTEGER_MATH_NEGATE:
+      return "integer_math_negate";
+    case NODE_INTEGER_MATH_SIGN:
+      return "integer_math_sign";
+    case NODE_INTEGER_MATH_DIVIDE_FLOOR:
+      return "integer_math_divide_floor";
+    case NODE_INTEGER_MATH_DIVIDE_CEIL:
+      return "integer_math_divide_ceil";
+    case NODE_INTEGER_MATH_DIVIDE_ROUND:
+      return "integer_math_divide_round";
+    case NODE_INTEGER_MATH_MODULO:
+      return "integer_math_modulo";
+  }
+
+  BLI_assert_unreachable();
+  return nullptr;
+}
+
+static int node_gpu_material(GPUMaterial *mat,
+                             bNode *node,
+                             bNodeExecData * /*execdata*/,
+                             GPUNodeStack *in,
+                             GPUNodeStack *out)
+{
+  const char *name = gpu_shader_get_name(NodeIntegerMathOperation(node->custom1));
+
+  if (name == nullptr) {
+    return 0;
+  }
+
+  return GPU_stack_link(mat, node, name, in, out);
 }
 
 static void node_eval_elem(value_elem::ElemEvalParams &params)
@@ -286,7 +345,7 @@ static void node_register()
 {
   static bke::bNodeType ntype;
 
-  fn_node_type_base(&ntype, "FunctionNodeIntegerMath"_ustr, FN_NODE_INTEGER_MATH);
+  common_node_type_base(&ntype, "FunctionNodeIntegerMath"_ustr, FN_NODE_INTEGER_MATH);
   ntype.ui_name = "Integer Math";
   ntype.ui_description = "Perform various math operations on the given integer inputs";
   ntype.enum_name_legacy = "INTEGER_MATH";
@@ -295,6 +354,7 @@ static void node_register()
   ntype.labelfunc = node_label;
   ntype.updatefunc = node_update;
   ntype.build_multi_function = node_build_multi_function;
+  ntype.gpu_fn = node_gpu_material;
   ntype.draw_buttons = node_layout;
   ntype.gather_link_search_ops = node_gather_link_searches;
   ntype.eval_elem = node_eval_elem;

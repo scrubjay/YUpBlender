@@ -13,8 +13,8 @@
 
 #include "MEM_guardedalloc.h"
 
-#include "BLI_alloca.h"
-#include "BLI_utildefines.h"
+#include "BLI_alloca.hh"
+#include "BLI_utildefines.hh"
 
 #include "WM_types.hh"
 
@@ -348,7 +348,7 @@ static PyObject *bpy_gizmo_target_set_handler(PyObject * /*self*/, PyObject *arg
   static _PyArg_Parser _parser = {
       "O&" /* `self` */
       "O&" /* `target` */
-      "|$" /* Optional keyword only arguments. */
+      "|$" /* Optional, keyword only arguments. */
       "O"  /* `get` */
       "O"  /* `set` */
       "O"  /* `range` */
@@ -595,6 +595,7 @@ PyDoc_STRVAR(
     "   Get the range for this target property.\n"
     "\n"
     "   :param target: Target property name.\n"
+    "   :type target: str\n"
     "   :return: The range of this property (min, max).\n"
     "   :rtype: tuple[float, float]\n");
 static PyObject *bpy_gizmo_target_get_range(PyObject * /*self*/, PyObject *args, PyObject *kw)

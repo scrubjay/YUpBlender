@@ -14,16 +14,15 @@
 #  include <fftw3.h>
 #endif
 
-#include "BLI_array.hh"
 #include "BLI_fftw.hh"
 #include "BLI_index_range.hh"
 #include "BLI_math_angle_types.hh"
 #include "BLI_math_base.hh"
-#include "BLI_math_color.h"
+#include "BLI_math_color_c.hh"
 #include "BLI_math_vector.hh"
 #include "BLI_math_vector_types.hh"
 #include "BLI_noise.hh"
-#include "BLI_string.h"
+#include "BLI_string.hh"
 #include "BLI_task.hh"
 
 #include "BKE_node_runtime.hh"
@@ -279,7 +278,7 @@ class SocketSearchOp {
   void operator()(LinkSearchOpParams &params)
   {
     bNode &node = params.add_node("CompositorNodeGlare"_ustr);
-    bNodeSocket &type_socket = *bke::node_find_socket(node, SOCK_IN, "Type");
+    bNodeSocket &type_socket = *bke::node_find_socket(node, SOCK_IN, "Type"_ustr);
     type_socket.default_value_typed<bNodeSocketValueMenu>()->value = this->type;
     params.update_and_connect_available_socket(node, "Image"_ustr);
   }
@@ -287,7 +286,7 @@ class SocketSearchOp {
 
 static void gather_link_searches(GatherLinkSearchOpParams &params)
 {
-  const eNodeSocketDatatype from_socket_type = eNodeSocketDatatype(params.other_socket().type);
+  const eNodeSocketDatatype from_socket_type = params.other_socket().type;
   if (!params.node_tree().typeinfo->validate_link(from_socket_type, SOCK_RGBA)) {
     return;
   }
@@ -372,12 +371,12 @@ class GlareOperation : public NodeOperation {
     GPU_texture_filter_mode(input_image, true);
     input_image.bind_as_texture(shader, "input_tx");
 
-    const int2 highlights_size = this->get_glare_image_size();
+    const Domain highlights_domain = this->get_glare_image_domain();
     Result highlights_result = context().create_result(ResultType::Color);
-    highlights_result.allocate_texture(highlights_size);
+    highlights_result.allocate_texture(highlights_domain);
     highlights_result.bind_as_image(shader, "output_img");
 
-    compute_dispatch_threads_at_least(shader, highlights_size);
+    compute_dispatch_threads_at_least(shader, highlights_domain.data_size);
 
     GPU_shader_unbind();
     input_image.unbind_as_texture();
@@ -394,14 +393,14 @@ class GlareOperation : public NodeOperation {
 
     const Result &input = get_input("Image");
 
-    const int2 highlights_size = this->get_glare_image_size();
+    const Domain highlights_size = this->get_glare_image_domain();
     Result output = context().create_result(ResultType::Color);
     output.allocate_texture(highlights_size);
 
     const CMPNodeGlareQuality quality = this->get_quality();
     const int2 input_size = input.domain().data_size;
 
-    parallel_for(highlights_size, [&](const int2 texel) {
+    parallel_for(highlights_size.data_size, [&](const int2 texel) {
       float4 color = float4(0.0f);
 
       switch (quality) {
@@ -1790,7 +1789,7 @@ class GlareOperation : public NodeOperation {
       return bloom_result;
     }
 
-    Array<Result> downsample_chain = compute_bloom_downsample_chain(highlights, chain_length);
+    Vector<Result> downsample_chain = compute_bloom_downsample_chain(highlights, chain_length);
 
     /* Notice that for a chain length of n, we need (n - 1) up-sampling passes. */
     const IndexRange upsample_passes_range(chain_length - 1);
@@ -1807,7 +1806,10 @@ class GlareOperation : public NodeOperation {
       input.release();
     }
 
-    return downsample_chain[0];
+    Result bloom_output = this->context().create_result(ResultType::Color);
+    bloom_output.share_data(downsample_chain[0]);
+    downsample_chain[0].release();
+    return bloom_output;
   }
 
   void compute_bloom_upsample_gpu(const Result &input, Result &output)
@@ -1881,10 +1883,13 @@ class GlareOperation : public NodeOperation {
    * expected not to exceed the binary logarithm of the smaller dimension of the given result,
    * because that would result in down-sampling passes that produce useless textures with just
    * one pixel. */
-  Array<Result> compute_bloom_downsample_chain(const Result &highlights, int chain_length)
+  Vector<Result> compute_bloom_downsample_chain(const Result &highlights, int chain_length)
   {
-    const Result downsampled_result = context().create_result(ResultType::Color);
-    Array<Result> downsample_chain(chain_length, downsampled_result);
+    Vector<Result> downsample_chain;
+    downsample_chain.reserve(chain_length);
+    for (int i = 0; i < chain_length; i++) {
+      downsample_chain.append(this->context().create_result(ResultType::Color));
+    }
 
     /* We copy the original highlights result to the first result of the chain to make the code
      * easier. */
@@ -2079,7 +2084,7 @@ class GlareOperation : public NodeOperation {
    * supplied by the user. Also make sure that log2 does not get zero. */
   int compute_bloom_chain_length()
   {
-    const int2 image_size = this->get_glare_image_size();
+    const int2 image_size = this->get_glare_image_domain().data_size;
     const int smaller_dimension = math::reduce_min(image_size);
     const float scaled_dimension = smaller_dimension * this->get_size();
     return int(std::log2(math::max(1.0f, scaled_dimension)));
@@ -2778,10 +2783,15 @@ class GlareOperation : public NodeOperation {
 
   /* As a performance optimization, the operation can compute the glare on a fraction of the input
    * image size, so the input is downsampled then upsampled at the end, and this method returns the
-   * size after downsampling. */
-  int2 get_glare_image_size()
+   * domain after downsampling. */
+  Domain get_glare_image_domain()
   {
-    return math::divide_ceil(this->compute_domain().data_size, int2(this->get_quality_factor()));
+    Domain domain = this->compute_domain();
+    const int2 quality_factor = int2(this->get_quality_factor());
+    domain.data_size = math::divide_ceil(domain.data_size, quality_factor);
+    domain.display_size = math::divide_ceil(domain.display_size, quality_factor);
+    domain.data_offset = domain.data_offset / quality_factor;
+    return domain;
   }
 
   /* The glare node can compute the glare on a fraction of the input image size to improve

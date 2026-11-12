@@ -7,13 +7,15 @@
  */
 
 #include "AS_asset_representation.hh"
+#include "AS_essentials_library.hh"
 
-#include "BLI_fnmatch.h"
-#include "BLI_listbase.h"
+#include "BLI_fnmatch.hh"
+#include "BLI_listbase.hh"
 #include "BLI_path_utils.hh"
-#include "BLI_string.h"
+#include "BLI_string.hh"
 #include "BLI_string_search.hh"
-#include "BLI_string_utf8.h"
+#include "BLI_string_utf8.hh"
+#include "BLI_uuid.hh"
 #include "BLI_vector.hh"
 
 #include "BKE_idtype.hh"
@@ -187,7 +189,14 @@ bool is_filtered_asset(FileListInternEntry *file, FileListFilter *filter)
     return false;
   }
 
-  if (((filter->flags & FLF_ASSETS_HIDE_ONLINE) != 0) && asset->is_online()) {
+  const bool is_online = asset->is_online_only();
+  if (((filter->flags & FLF_ASSETS_HIDE_ONLINE) != 0) && is_online) {
+    return false;
+  }
+  if (((filter->flags & FLF_ASSETS_HIDE_OFFLINE) != 0) && !is_online) {
+    return false;
+  }
+  if (asset_system::skip_experimental_asset_catalog(asset_data.catalog_id)) {
     return false;
   }
 
@@ -315,6 +324,10 @@ void filelist_filter(FileList *filelist)
     return;
   }
 
+  if (filelist->flags & FL_NEED_RESET_GLOB) {
+    filelist_reset_glob(filelist);
+  }
+
   filelist->filter_data.flags &= ~FLF_HIDE_LIB_DIR;
   if (filelist->max_recursion) {
     /* Never show lib ID 'categories' directories when we are in 'flat' mode, unless
@@ -369,7 +382,7 @@ void filelist_setfilter_options(FileList *filelist,
                                 const uint64_t filter_id,
                                 const bool filter_assets_only,
                                 const bool filter_assets_hide_online,
-                                const char *filter_glob,
+                                const bool filter_assets_hide_offline,
                                 const char *filter_search)
 {
   bool update = false;
@@ -396,6 +409,12 @@ void filelist_setfilter_options(FileList *filelist,
     filelist->filter_data.flags ^= FLF_ASSETS_HIDE_ONLINE;
     update = true;
   }
+  if (((filelist->filter_data.flags & FLF_ASSETS_HIDE_OFFLINE) != 0) !=
+      (filter_assets_hide_offline != 0))
+  {
+    filelist->filter_data.flags ^= FLF_ASSETS_HIDE_OFFLINE;
+    update = true;
+  }
   if (filelist->filter_data.filter != filter) {
     filelist->filter_data.filter = filter;
     update = true;
@@ -403,10 +422,6 @@ void filelist_setfilter_options(FileList *filelist,
   const uint64_t new_filter_id = (filter & FILE_TYPE_BLENDERLIB) ? filter_id : FILTER_ID_ALL;
   if (filelist->filter_data.filter_id != new_filter_id) {
     filelist->filter_data.filter_id = new_filter_id;
-    update = true;
-  }
-  if (!STREQ(filelist->filter_data.filter_glob, filter_glob)) {
-    STRNCPY_UTF8(filelist->filter_data.filter_glob, filter_glob);
     update = true;
   }
   if (BLI_strcmp_ignore_pad(filelist->filter_data.filter_search, filter_search, '*') != 0) {

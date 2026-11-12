@@ -7,10 +7,10 @@
  */
 
 #include "BLI_lasso_2d.hh"
-#include "BLI_listbase.h"
-#include "BLI_math_base.h"
+#include "BLI_listbase.hh"
+#include "BLI_math_base_c.hh"
 #include "BLI_math_vector_types.hh"
-#include "BLI_rect.h"
+#include "BLI_rect.hh"
 
 #include "BKE_context.hh"
 #include "BKE_mask.hh"
@@ -79,10 +79,10 @@ bool ED_mask_select_check(const Mask *mask)
 void ED_mask_spline_select_set(MaskSpline *spline, const bool do_select)
 {
   if (do_select) {
-    spline->flag |= SELECT;
+    spline->flag |= MASK_SPLINE_SELECT;
   }
   else {
-    spline->flag &= ~SELECT;
+    spline->flag &= ~MASK_SPLINE_SELECT;
   }
 
   for (int i = 0; i < spline->tot_point; i++) {
@@ -146,7 +146,7 @@ void ED_mask_select_flush_all(Mask *mask)
 {
   for (MaskLayer &mask_layer : mask->masklayers) {
     for (MaskSpline &spline : mask_layer.splines) {
-      spline.flag &= ~SELECT;
+      spline.flag &= ~MASK_SPLINE_SELECT;
 
       /* Intentionally *don't* do this in the mask layer loop
        * so we clear flags on all splines. */
@@ -158,14 +158,14 @@ void ED_mask_select_flush_all(Mask *mask)
         MaskSplinePoint *cur_point = &spline.points[i];
 
         if (BKE_mask_point_selected(cur_point)) {
-          spline.flag |= SELECT;
+          spline.flag |= MASK_SPLINE_SELECT;
         }
         else {
           int j;
 
           for (j = 0; j < cur_point->tot_uw; j++) {
             if (cur_point->uw[j].flag & SELECT) {
-              spline.flag |= SELECT;
+              spline.flag |= MASK_SPLINE_SELECT;
               break;
             }
           }
@@ -451,16 +451,16 @@ static wmOperatorStatus box_select_exec(bContext *C, wmOperator *op)
   ED_mask_point_pos(area, region, rect.xmax, rect.ymax, &rectf.xmax, &rectf.ymax);
 
   /* do actual selection */
-  for (MaskLayer *mask_layer_orig = static_cast<MaskLayer *>(mask_orig->masklayers.first),
-                 *mask_layer_eval = static_cast<MaskLayer *>(mask_eval->masklayers.first);
+  for (MaskLayer *mask_layer_orig = mask_orig->masklayers.first(),
+                 *mask_layer_eval = mask_eval->masklayers.first();
        mask_layer_orig != nullptr;
        mask_layer_orig = mask_layer_orig->next, mask_layer_eval = mask_layer_eval->next)
   {
     if (mask_layer_orig->visibility_flag & (MASK_HIDE_VIEW | MASK_HIDE_SELECT)) {
       continue;
     }
-    for (MaskSpline *spline_orig = static_cast<MaskSpline *>(mask_layer_orig->splines.first),
-                    *spline_eval = static_cast<MaskSpline *>(mask_layer_eval->splines.first);
+    for (MaskSpline *spline_orig = mask_layer_orig->splines.first(),
+                    *spline_eval = mask_layer_eval->splines.first();
          spline_orig != nullptr;
          spline_orig = spline_orig->next, spline_eval = spline_eval->next)
     {
@@ -543,16 +543,16 @@ static bool do_lasso_select_mask(bContext *C, const Span<int2> mcoords, const eS
   BLI_lasso_boundbox(&rect, mcoords);
 
   /* do actual selection */
-  for (MaskLayer *mask_layer_orig = static_cast<MaskLayer *>(mask_orig->masklayers.first),
-                 *mask_layer_eval = static_cast<MaskLayer *>(mask_eval->masklayers.first);
+  for (MaskLayer *mask_layer_orig = mask_orig->masklayers.first(),
+                 *mask_layer_eval = mask_eval->masklayers.first();
        mask_layer_orig != nullptr;
        mask_layer_orig = mask_layer_orig->next, mask_layer_eval = mask_layer_eval->next)
   {
     if (mask_layer_orig->visibility_flag & (MASK_HIDE_VIEW | MASK_HIDE_SELECT)) {
       continue;
     }
-    for (MaskSpline *spline_orig = static_cast<MaskSpline *>(mask_layer_orig->splines.first),
-                    *spline_eval = static_cast<MaskSpline *>(mask_layer_eval->splines.first);
+    for (MaskSpline *spline_orig = mask_layer_orig->splines.first(),
+                    *spline_eval = mask_layer_eval->splines.first();
          spline_orig != nullptr;
          spline_orig = spline_orig->next, spline_eval = spline_eval->next)
     {
@@ -693,16 +693,16 @@ static wmOperatorStatus circle_select_exec(bContext *C, wmOperator *op)
   }
 
   /* do actual selection */
-  for (MaskLayer *mask_layer_orig = static_cast<MaskLayer *>(mask_orig->masklayers.first),
-                 *mask_layer_eval = static_cast<MaskLayer *>(mask_eval->masklayers.first);
+  for (MaskLayer *mask_layer_orig = mask_orig->masklayers.first(),
+                 *mask_layer_eval = mask_eval->masklayers.first();
        mask_layer_orig != nullptr;
        mask_layer_orig = mask_layer_orig->next, mask_layer_eval = mask_layer_eval->next)
   {
     if (mask_layer_orig->visibility_flag & (MASK_HIDE_VIEW | MASK_HIDE_SELECT)) {
       continue;
     }
-    for (MaskSpline *spline_orig = static_cast<MaskSpline *>(mask_layer_orig->splines.first),
-                    *spline_eval = static_cast<MaskSpline *>(mask_layer_eval->splines.first);
+    for (MaskSpline *spline_orig = mask_layer_orig->splines.first(),
+                    *spline_eval = mask_layer_eval->splines.first();
          spline_orig != nullptr;
          spline_orig = spline_orig->next, spline_eval = spline_eval->next)
     {

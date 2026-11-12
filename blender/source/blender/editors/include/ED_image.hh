@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include <array>
+
 #include "DNA_listBase.h"
 #include "DNA_space_types.h"
 
@@ -171,6 +173,7 @@ bool ED_space_image_maskedit_mask_poll(bContext *C);
 bool ED_space_image_maskedit_mask_visible_splines_poll(bContext *C);
 
 bool ED_space_image_cursor_poll(bContext *C);
+bool ED_space_image_region_cursor_poll(bContext *C);
 
 /**
  * Used by node view too.
@@ -194,6 +197,7 @@ bool ED_space_image_show_cache_and_mval_over(const SpaceImage *sima,
 bool ED_image_should_save_modified(const Main *bmain);
 int ED_image_save_all_modified_info(const Main *bmain, ReportList *reports);
 bool ED_image_save_all_modified(const bContext *C, ReportList *reports);
+void ED_image_internal_autosave_flush(const Main *bmain);
 
 /* `image_sequence.cc` */
 
@@ -241,6 +245,7 @@ ListBaseT<ImageFrameRange> ED_image_filesel_detect_sequences(StringRefNull blend
                                                              bool detect_udim);
 
 bool ED_image_tools_paint_poll(bContext *C);
-void ED_paint_cursor_start(Paint *paint, bool (*poll)(bContext *C));
+
+std::array<const char *, 4> ED_image_buttons_contexts(const bContext *C);
 
 }  // namespace blender

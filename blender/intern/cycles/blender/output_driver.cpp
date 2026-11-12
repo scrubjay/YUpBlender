@@ -4,7 +4,7 @@
 
 #include "blender/output_driver.h"
 
-#include "BLI_listbase.h"
+#include "BLI_listbase.hh"
 #include "IMB_imbuf_types.hh"
 #include "RE_engine.h"
 
@@ -31,11 +31,11 @@ bool BlenderOutputDriver::read_render_tile(const Tile &tile)
   }
 
   /* layer will be missing if it was disabled in the UI */
-  if (BLI_listbase_is_empty(&b_rr->layers)) {
+  if (b_rr->layers.is_empty()) {
     return false;
   }
 
-  blender::RenderLayer *b_rlay = static_cast<blender::RenderLayer *>(b_rr->layers.first);
+  blender::RenderLayer *b_rlay = b_rr->layers.first();
 
   /* Copy each pass.
    * TODO:copy only the required ones for better performance? */
@@ -93,11 +93,11 @@ void BlenderOutputDriver::write_render_tile(const Tile &tile)
   }
 
   /* Layer will be missing if it was disabled in the UI. */
-  if (BLI_listbase_is_empty(&b_rr->layers)) {
+  if (b_rr->layers.is_empty()) {
     return;
   }
 
-  blender::RenderLayer *b_rlay = static_cast<blender::RenderLayer *>(b_rr->layers.first);
+  blender::RenderLayer *b_rlay = b_rr->layers.first();
 
   vector<float> pixels(static_cast<size_t>(tile.size.x) * tile.size.y * 4);
 

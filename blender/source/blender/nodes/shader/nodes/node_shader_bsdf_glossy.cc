@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup shdnodes
+ */
+
 #include "node_shader_util.hh"
 
 #include "UI_interface_layout.hh"
@@ -51,7 +55,7 @@ static int node_shader_gpu_bsdf_glossy(GPUMaterial *mat,
                                        GPUNodeStack *out)
 {
   if (!in[4].link) {
-    GPU_link(mat, "world_normals_get", &in[4].link);
+    GPU_link(mat, "world_normals_get", GPU_shading_data(), &in[4].link);
   }
 
   GPU_material_flag_set(mat, GPU_MATFLAG_GLOSSY);
@@ -62,7 +66,14 @@ static int node_shader_gpu_bsdf_glossy(GPUMaterial *mat,
 
   float use_multi_scatter = (node->custom1 == SHD_GLOSSY_MULTI_GGX) ? 1.0f : 0.0f;
 
-  return GPU_stack_link(mat, node, "node_bsdf_glossy", in, out, GPU_constant(&use_multi_scatter));
+  return GPU_stack_link(mat,
+                        node,
+                        "node_bsdf_glossy",
+                        in,
+                        out,
+                        GPU_constant(&use_multi_scatter),
+                        GPU_kernel_globals(),
+                        GPU_shading_data());
 }
 
 NODE_SHADER_MATERIALX_BEGIN
@@ -114,7 +125,7 @@ void register_node_type_sh_bsdf_glossy()
   ntype.gather_link_search_ops = search_link_ops_for_shader_bsdf_node;
   ntype.add_ui_poll = object_shader_nodes_poll;
   ntype.draw_buttons = file_ns::node_shader_buts_glossy;
-  bke::node_type_size_preset(ntype, bke::eNodeSizePreset::Middle);
+  ntype.default_width = bke::NodeWidth::_160;
   ntype.initfunc = file_ns::node_shader_init_glossy;
   ntype.gpu_fn = file_ns::node_shader_gpu_bsdf_glossy;
   ntype.materialx_fn = file_ns::node_shader_materialx;

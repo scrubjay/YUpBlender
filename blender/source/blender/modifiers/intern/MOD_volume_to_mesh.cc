@@ -29,7 +29,7 @@
 
 #include "BLI_math_matrix_types.hh"
 #include "BLI_span.hh"
-#include "BLI_string.h"
+#include "BLI_string.hh"
 
 #include "DEG_depsgraph_query.hh"
 
@@ -50,7 +50,7 @@ static void init_data(ModifierData *md)
   vmmd->resolution_mode = VOLUME_TO_MESH_RESOLUTION_MODE_GRID;
   vmmd->voxel_amount = 32;
   vmmd->voxel_size = 0.1f;
-  vmmd->flag = 0;
+  vmmd->flag = VolumeToMeshFlag{};
 }
 
 static void update_depsgraph(ModifierData *md, const ModifierUpdateDepsgraphContext *ctx)

@@ -51,6 +51,14 @@ class VKShader : public Shader {
    * using `context.debug_pipeline_creation == true`.
    */
   bool has_precompiled_pipelines_ = false;
+  bool use_ray_query_ = false;
+
+  /**
+   * Maximum input attachment index used by this shader's subpass inputs.
+   * Used when VK_EXT_dynamic_rendering_local_read is enabled to correctly set
+   * colorAttachmentCount on the shaders library pipeline.
+   */
+  uint32_t max_input_attachment_index_ = 0;
 
  public:
   VKShaderModule vertex_module;
@@ -123,6 +131,11 @@ class VKShader : public Shader {
   VkDescriptorSetLayout vk_descriptor_set_layout_get() const
   {
     return vk_descriptor_set_layout_;
+  }
+
+  bool use_ray_query_get() const
+  {
+    return use_ray_query_;
   }
 
  private:

@@ -14,15 +14,16 @@
 
 #include <cstdlib>
 
-#include "BLI_fileops.h"
-#include "BLI_mmap.h"
+#include "DNA_color_types.h"
+
+#include "BLI_fileops.hh"
+#include "BLI_mmap.hh"
 #include "BLI_path_utils.hh" /* For assertions. */
-#include "BLI_string.h"
-#include "BLI_string_utf8.h"
+#include "BLI_string.hh"
+#include "BLI_string_utf8.hh"
 
 #include "CLG_log.h"
 
-#include "IMB_allocimbuf.hh"
 #include "IMB_filetype.hh"
 #include "IMB_imbuf.hh"
 #include "IMB_imbuf_types.hh"
@@ -38,17 +39,17 @@ namespace blender {
 static CLG_LogRef LOG = {"image.read"};
 
 static void imb_handle_colorspace_and_alpha(ImBuf *ibuf,
-                                            const int flags,
+                                            const ImBufFlags flags,
                                             const char *filepath,
                                             const ImFileColorSpace &file_colorspace,
-                                            char r_colorspace[IM_MAX_SPACE])
+                                            ColorManagedColorspaceSettings *colorspace_settings)
 {
   /* Determine file colorspace. */
   char new_colorspace[IM_MAX_SPACE];
 
-  if (r_colorspace && r_colorspace[0]) {
+  if (colorspace_settings && colorspace_settings->name[0]) {
     /* Existing configured colorspace has priority. */
-    STRNCPY_UTF8(new_colorspace, r_colorspace);
+    STRNCPY_UTF8(new_colorspace, colorspace_settings->name);
   }
   else if (file_colorspace.metadata_colorspace[0] &&
            colormanage_colorspace_get_named(file_colorspace.metadata_colorspace))
@@ -73,11 +74,12 @@ static void imb_handle_colorspace_and_alpha(ImBuf *ibuf,
     }
   }
 
-  if (r_colorspace) {
-    BLI_strncpy_utf8(r_colorspace, new_colorspace, IM_MAX_SPACE);
-  }
+  if (colorspace_settings) {
+    /* Only set when empty, to keep the interop ID of an existing color space. */
+    if (colorspace_settings->name[0] == '\0') {
+      IMB_colormanagement_colorspace_settings_set(colorspace_settings, new_colorspace);
+    }
 
-  if (r_colorspace) {
     if (ibuf->byte_data() != nullptr && ibuf->float_data() == nullptr) {
       /* byte buffer is never internally converted to some standard space,
        * store pointer to its color space descriptor instead
@@ -86,20 +88,20 @@ static void imb_handle_colorspace_and_alpha(ImBuf *ibuf,
     }
   }
 
-  bool is_data = (r_colorspace && IMB_colormanagement_space_name_is_data(new_colorspace));
-  int alpha_flags = (flags & IB_alphamode_detect) ? ibuf->flags : flags;
+  bool is_data = (colorspace_settings && IMB_colormanagement_space_name_is_data(new_colorspace));
+  ImBufFlags alpha_flags = flag_is_set(flags, ImBufFlags::AlphaDetect) ? ibuf->flags : flags;
 
-  if (is_data || (flags & IB_alphamode_channel_packed)) {
+  if (is_data || flag_is_set(flags, ImBufFlags::AlphaChannelPacked)) {
     /* Don't touch alpha. */
-    ibuf->flags |= IB_alphamode_channel_packed;
+    ibuf->flags |= ImBufFlags::AlphaChannelPacked;
   }
-  else if (flags & IB_alphamode_ignore) {
+  else if (flag_is_set(flags, ImBufFlags::AlphaIgnore)) {
     /* Make opaque. */
     IMB_rectfill_alpha(ibuf, 1.0f);
-    ibuf->flags |= IB_alphamode_ignore;
+    ibuf->flags |= ImBufFlags::AlphaIgnore;
   }
   else {
-    if (alpha_flags & IB_alphamode_premul) {
+    if (flag_is_set(alpha_flags, ImBufFlags::AlphaPremul)) {
       if (ibuf->byte_data()) {
         IMB_unpremultiply_alpha(ibuf);
       }
@@ -117,7 +119,7 @@ static void imb_handle_colorspace_and_alpha(ImBuf *ibuf,
     }
   }
 
-  if (flags & IB_no_colorspace_convert) {
+  if (flag_is_set(flags, ImBufFlags::NoColorspaceConvert)) {
     if (ibuf->float_data() != nullptr) {
       ibuf->float_buffer.colorspace = colormanage_colorspace_get_named(new_colorspace);
     }
@@ -129,10 +131,10 @@ static void imb_handle_colorspace_and_alpha(ImBuf *ibuf,
 
 ImBuf *IMB_load_image_from_memory(const uchar *mem,
                                   const size_t size,
-                                  const int flags,
+                                  const ImBufFlags flags,
                                   const char *descr,
                                   const char *filepath,
-                                  char r_colorspace[IM_MAX_SPACE])
+                                  ColorManagedColorspaceSettings *colorspace_settings)
 {
   ImBuf *ibuf;
   const ImFileType *type;
@@ -148,13 +150,14 @@ ImBuf *IMB_load_image_from_memory(const uchar *mem,
     if (type->load) {
       ibuf = type->load(mem, size, flags, file_colorspace);
       if (ibuf) {
-        imb_handle_colorspace_and_alpha(ibuf, flags, filepath, file_colorspace, r_colorspace);
+        imb_handle_colorspace_and_alpha(
+            ibuf, flags, filepath, file_colorspace, colorspace_settings);
         return ibuf;
       }
     }
   }
 
-  if ((flags & IB_test) == 0) {
+  if (!flag_is_set(flags, ImBufFlags::Test)) {
     CLOG_ERROR(&LOG, "%s: unknown file-format (%s)", __func__, descr);
   }
 
@@ -162,9 +165,9 @@ ImBuf *IMB_load_image_from_memory(const uchar *mem,
 }
 
 ImBuf *IMB_load_image_from_file_descriptor(const int file,
-                                           const int flags,
+                                           const ImBufFlags flags,
                                            const char *filepath,
-                                           char r_colorspace[IM_MAX_SPACE])
+                                           ColorManagedColorspaceSettings *colorspace_settings)
 {
   ImBuf *ibuf = nullptr;
 
@@ -181,7 +184,7 @@ ImBuf *IMB_load_image_from_file_descriptor(const int file,
   const uchar *mem = static_cast<const uchar *>(BLI_mmap_get_pointer(mmap_file));
   const size_t size = BLI_mmap_get_length(mmap_file);
 
-  ibuf = IMB_load_image_from_memory(mem, size, flags, filepath, filepath, r_colorspace);
+  ibuf = IMB_load_image_from_memory(mem, size, flags, filepath, filepath, colorspace_settings);
 
   /* If we got an image but mmap encountered an error,
    * free the image and return nullptr as it could be corrupted. */
@@ -196,8 +199,8 @@ ImBuf *IMB_load_image_from_file_descriptor(const int file,
 }
 
 ImBuf *IMB_load_image_from_filepath(const char *filepath,
-                                    const int flags,
-                                    char r_colorspace[IM_MAX_SPACE])
+                                    const ImBufFlags flags,
+                                    ColorManagedColorspaceSettings *colorspace_settings)
 {
   ImBuf *ibuf;
   int file;
@@ -209,7 +212,7 @@ ImBuf *IMB_load_image_from_filepath(const char *filepath,
     return nullptr;
   }
 
-  ibuf = IMB_load_image_from_file_descriptor(file, flags, filepath, r_colorspace);
+  ibuf = IMB_load_image_from_file_descriptor(file, flags, filepath, colorspace_settings);
 
   if (ibuf) {
     ibuf->filepath = filepath;
@@ -222,7 +225,7 @@ ImBuf *IMB_load_image_from_filepath(const char *filepath,
 
 ImBuf *IMB_thumb_load_image(const char *filepath,
                             const size_t max_thumb_size,
-                            char r_colorspace[IM_MAX_SPACE],
+                            ColorManagedColorspaceSettings *colorspace_settings,
                             const IMBThumbLoadFlags load_flags)
 {
   const ImFileType *type = IMB_file_type_from_ftype(IMB_test_image_type(filepath));
@@ -231,7 +234,7 @@ ImBuf *IMB_thumb_load_image(const char *filepath,
   }
 
   ImBuf *ibuf = nullptr;
-  int flags = IB_byte_data | IB_metadata;
+  ImBufFlags flags = ImBufFlags::ByteData | ImBufFlags::Metadata;
   /* Size of the original image. */
   size_t width = 0;
   size_t height = 0;
@@ -241,7 +244,7 @@ ImBuf *IMB_thumb_load_image(const char *filepath,
     ibuf = type->load_filepath_thumbnail(
         filepath, flags, max_thumb_size, file_colorspace, &width, &height);
     if (ibuf) {
-      imb_handle_colorspace_and_alpha(ibuf, flags, filepath, file_colorspace, r_colorspace);
+      imb_handle_colorspace_and_alpha(ibuf, flags, filepath, file_colorspace, colorspace_settings);
     }
   }
   else {
@@ -252,7 +255,7 @@ ImBuf *IMB_thumb_load_image(const char *filepath,
         return nullptr;
       }
     }
-    ibuf = IMB_load_image_from_filepath(filepath, flags, r_colorspace);
+    ibuf = IMB_load_image_from_filepath(filepath, flags, colorspace_settings);
     if (ibuf) {
       width = ibuf->x;
       height = ibuf->y;
@@ -266,9 +269,9 @@ ImBuf *IMB_thumb_load_image(const char *filepath,
       char cheight[40];
       SNPRINTF_UTF8(cwidth, "%zu", width);
       SNPRINTF_UTF8(cheight, "%zu", height);
-      IMB_metadata_ensure(&ibuf->metadata);
-      IMB_metadata_set_field(ibuf->metadata, "Thumb::Image::Width", cwidth);
-      IMB_metadata_set_field(ibuf->metadata, "Thumb::Image::Height", cheight);
+      IDProperty *metadata = ibuf->metadata_for_write();
+      IMB_metadata_set_field(metadata, "Thumb::Image::Width", cwidth);
+      IMB_metadata_set_field(metadata, "Thumb::Image::Height", cheight);
     }
   }
 

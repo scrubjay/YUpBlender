@@ -19,7 +19,7 @@
 #include "BLI_index_range.hh"
 #include "BLI_resource_scope.hh"
 #include "BLI_span.hh"
-#include "BLI_utildefines.h"
+#include "BLI_utildefines.hh"
 #include "BLI_vector.hh"
 
 #include "BKE_anim_data.hh"
@@ -32,6 +32,7 @@
 #include "BKE_idtype.hh"
 #include "BKE_lib_id.hh"
 #include "BKE_lib_query.hh"
+#include "BKE_material.hh"
 #include "BKE_modifier.hh"
 #include "BKE_object.hh"
 #include "BKE_object_types.hh"
@@ -81,7 +82,8 @@ static void pointcloud_copy_data(Main * /*bmain*/,
         *pointcloud_src->runtime->bake_materials);
   }
 
-  pointcloud_dst->batch_cache = nullptr;
+  pointcloud_dst->pointcloud_batch_cache = nullptr;
+  pointcloud_dst->gsplat_batch_cache = nullptr;
 }
 
 static void pointcloud_free_data(ID *id)
@@ -118,7 +120,7 @@ static void pointcloud_blend_write(BlendWriter *writer, ID *id, const void *id_a
   bke::AttributeStorage::BlendWriteData attribute_data{writer, scope};
   attribute_storage_blend_write_prepare(
       pointcloud->attribute_storage.wrap(),
-      !BLO_write_is_undo(writer),
+      !writer->is_undo(),
       [&](const AttrDomain /*domain*/) { return pointcloud->totpoint; },
       attribute_data);
 
@@ -130,12 +132,15 @@ static void pointcloud_blend_write(BlendWriter *writer, ID *id, const void *id_a
     pointcloud->attribute_storage.dna_attributes = attribute_data.attributes.data();
     pointcloud->attribute_storage.dna_attributes_num = attribute_data.attributes.size();
   }
-  BLO_write_generated_pointer_tag(writer, pointcloud->attribute_storage.dna_attributes);
+  writer->generated_pointer_tag(pointcloud->attribute_storage.dna_attributes);
 
   CustomData_reset(&pointcloud->pdata_legacy);
 
   /* Write LibData */
-  writer->write_id_struct(id_address, pointcloud);
+  writer->write_id_struct(
+      id_address, pointcloud, [](BlendStructWriter<PointCloud> &struct_writer) {
+        struct_writer.generated_ptr(offsetof(PointCloud, attribute_storage.dna_attributes));
+      });
   BKE_id_blend_write(writer, &pointcloud->id);
 
   /* Direct data */
@@ -153,7 +158,7 @@ static void pointcloud_blend_read_data(BlendDataReader *reader, ID *id)
   pointcloud->attribute_storage.wrap().blend_read(*reader);
 
   /* Materials */
-  BLO_read_pointer_array(reader, pointcloud->totcol, reinterpret_cast<void **>(&pointcloud->mat));
+  BLO_read_pointer_array_and_validate_size(reader, &pointcloud->mat, &pointcloud->totcol);
 
   pointcloud->runtime = new bke::PointCloudRuntime();
 }
@@ -178,6 +183,7 @@ IDTypeInfo IDType_ID_PT = {
     .foreach_cache = nullptr,
     .foreach_path = nullptr,
     .foreach_working_space_color = pointcloud_foreach_working_space_color,
+    .foreach_asset_weak_reference = nullptr,
     .owner_pointer_get = nullptr,
 
     .blend_write = pointcloud_blend_write,
@@ -219,13 +225,14 @@ PointCloud *BKE_pointcloud_add(Main *bmain, const char *name)
   return pointcloud;
 }
 
-PointCloud *BKE_pointcloud_new_nomain(const int totpoint)
+PointCloud *BKE_pointcloud_new_nomain(const PointCloudType type, const int totpoint)
 {
   PointCloud *pointcloud = static_cast<PointCloud *>(BKE_libblock_alloc(
       nullptr, ID_PT, BKE_idtype_idcode_to_name(ID_PT), LIB_ID_CREATE_LOCALIZE));
 
   BKE_libblock_init_empty(&pointcloud->id);
 
+  pointcloud->type = type;
   pointcloud->totpoint = totpoint;
 
   pointcloud->attributes_for_write().add<float3>(
@@ -238,12 +245,16 @@ void BKE_pointcloud_nomain_to_pointcloud(PointCloud *pointcloud_src, PointCloud 
 {
   BLI_assert(pointcloud_src->id.tag & ID_TAG_NO_MAIN);
 
+  pointcloud_dst->type = pointcloud_src->type;
+
   pointcloud_dst->totpoint = pointcloud_src->totpoint;
   pointcloud_dst->attribute_storage.wrap() = std::move(pointcloud_src->attribute_storage.wrap());
+
   pointcloud_dst->runtime->bounds_cache = pointcloud_src->runtime->bounds_cache;
   pointcloud_dst->runtime->bounds_with_radius_cache =
       pointcloud_src->runtime->bounds_with_radius_cache;
   pointcloud_dst->runtime->bvh_cache = pointcloud_src->runtime->bvh_cache;
+
   BKE_id_free(nullptr, pointcloud_src);
 }
 
@@ -308,8 +319,14 @@ bool BKE_pointcloud_attribute_required(const PointCloud * /*pointcloud*/, const 
   return name == ATTR_POSITION;
 }
 
+void BKE_pointcloud_material_remap(PointCloud *pointcloud, const uint *remap, const int remap_num)
+{
+  BKE_material_attr_indices_remap(pointcloud->attributes_for_write(), remap, remap_num);
+}
+
 void pointcloud_copy_parameters(const PointCloud &src, PointCloud &dst)
 {
+  dst.type = src.type;
   dst.flag = src.flag;
   MEM_SAFE_DELETE(dst.mat);
   dst.mat = MEM_new_array_uninitialized<Material *>(src.totcol, __func__);
@@ -340,7 +357,7 @@ void pointcloud_resize(PointCloud &pointcloud, const int size)
   if (size > old_totpoint) {
     /* Initialize new points. */
     fill_attribute_range_default(
-        attributes, bke::AttrDomain::Point, {}, IndexRange(old_totpoint, size));
+        attributes, bke::AttrDomain::Point, {}, IndexRange::from_begin_end(old_totpoint, size));
   }
 }
 
@@ -372,7 +389,7 @@ static void pointcloud_evaluate_modifiers(Depsgraph *depsgraph,
 
   /* Evaluate modifiers. */
   for (; md; md = md->next) {
-    const ModifierTypeInfo *mti = BKE_modifier_get_info(ModifierType(md->type));
+    const ModifierTypeInfo *mti = BKE_modifier_get_info(md->type);
 
     if (!BKE_modifier_is_enabled(scene, md, required_mode)) {
       continue;
@@ -420,7 +437,7 @@ void BKE_pointcloud_data_update(Depsgraph *depsgraph, Scene *scene, Object *obje
 
   /* If the geometry set did not contain a point cloud, we still create an empty one. */
   if (pointcloud_eval == nullptr) {
-    pointcloud_eval = BKE_pointcloud_new_nomain(0);
+    pointcloud_eval = BKE_pointcloud_new_nomain(pointcloud->type, 0);
   }
 
   /* Assign evaluated object. */
@@ -445,26 +462,35 @@ void PointCloud::tag_radii_changed()
 
 void (*BKE_pointcloud_batch_cache_dirty_tag_cb)(PointCloud *pointcloud, int mode) = nullptr;
 void (*BKE_pointcloud_batch_cache_free_cb)(PointCloud *pointcloud) = nullptr;
+void (*BKE_gsplat_batch_cache_dirty_tag_cb)(PointCloud *pointcloud, int mode) = nullptr;
+void (*BKE_gsplat_batch_cache_free_cb)(PointCloud *pointcloud) = nullptr;
 
 void BKE_pointcloud_batch_cache_dirty_tag(PointCloud *pointcloud, int mode)
 {
-  if (pointcloud->batch_cache) {
+  if (pointcloud->pointcloud_batch_cache) {
     BKE_pointcloud_batch_cache_dirty_tag_cb(pointcloud, mode);
+  }
+  if (pointcloud->gsplat_batch_cache) {
+    BKE_gsplat_batch_cache_dirty_tag_cb(pointcloud, mode);
   }
 }
 
 void BKE_pointcloud_batch_cache_free(PointCloud *pointcloud)
 {
-  if (pointcloud->batch_cache) {
+  if (pointcloud->pointcloud_batch_cache) {
     BKE_pointcloud_batch_cache_free_cb(pointcloud);
+  }
+  if (pointcloud->gsplat_batch_cache) {
+    BKE_gsplat_batch_cache_free_cb(pointcloud);
   }
 }
 
 namespace bke {
 
-PointCloud *pointcloud_new_no_attributes(int totpoint)
+PointCloud *pointcloud_new_no_attributes(const PointCloudType type, const int totpoint)
 {
   PointCloud *pointcloud = BKE_id_new_nomain<PointCloud>(nullptr);
+  pointcloud->type = type;
   pointcloud->totpoint = totpoint;
   return pointcloud;
 }

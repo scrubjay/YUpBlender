@@ -15,9 +15,30 @@
 
 namespace blender {
 
+struct ARegionType;
+struct bContext;
 struct wmOperatorType;
+struct Panel;
 
 /* internal exports only */
+
+void userpref_panels_register(ARegionType &region_type);
+
+void userpref_asset_libraries_panel_draw(const bContext *C, Panel *panel);
+
+/* `userpref_asset_libraries_list.cc` */
+
+/* -------------------------------------------------------------------- */
+/** \name Asset UI List
+ *
+ * The list in the UI includes the "All" & "Essentials" libraries and the extension repositories,
+ * so its size differs from #U.asset_libraries.
+ *
+ * \{ */
+
+int userpref_ui_asset_libraries_count();
+
+/** \} */
 
 /* `userpref_ops.cc` */
 

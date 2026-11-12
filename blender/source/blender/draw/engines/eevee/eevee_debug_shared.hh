@@ -2,7 +2,9 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
-/**
+/** \file
+ * \ingroup eevee
+ *
  * Shared code between host and client code-bases.
  */
 
@@ -53,6 +55,10 @@ enum [[host_shared]] eDebugMode : uint32_t {
    * Show random color for each tile. Verify distribution and LOD transitions.
    */
   DEBUG_SHADOW_TILEMAP_RANDOM_COLOR = 13u,
+  /**
+   * Show random color for each tile. Verify distribution and LOD transitions.
+   */
+  DEBUG_SHADOW_ATOMIC_COST = 17u,
   /**
    * Show storage cost of each pixel in the gbuffer.
    */

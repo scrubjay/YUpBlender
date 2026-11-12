@@ -14,10 +14,10 @@
 
 #include "DNA_movieclip_types.h"
 
-#include "BLI_listbase.h"
-#include "BLI_math_matrix.h"
-#include "BLI_math_vector.h"
-#include "BLI_string_utf8.h"
+#include "BLI_listbase.hh"
+#include "BLI_math_matrix_c.hh"
+#include "BLI_math_vector_c.hh"
+#include "BLI_string_utf8.hh"
 
 #include "BLT_translation.hh"
 
@@ -73,7 +73,7 @@ static libmv_Tracks *libmv_tracks_new(MovieClip *clip,
   MovieTrackingTrack *track;
   libmv_Tracks *tracks = libmv_tracksNew();
 
-  track = static_cast<MovieTrackingTrack *>(tracksbase->first);
+  track = tracksbase->first();
   while (track) {
     const FCurve *weight_fcurve = id_data_find_fcurve(
         &clip->id, track, RNA_MovieTrackingTrack, "weight", 0, nullptr);
@@ -296,7 +296,7 @@ static int reconstruct_count_tracks_on_both_keyframes(MovieTrackingObject *track
 bool BKE_tracking_reconstruction_check(MovieTracking *tracking,
                                        MovieTrackingObject *tracking_object,
                                        char *error_msg,
-                                       int error_size)
+                                       int error_msg_maxncpy)
 {
   if (tracking->settings.motion_flag & TRACKING_MOTION_MODAL) {
     /* TODO: check for number of tracks? */
@@ -308,7 +308,7 @@ bool BKE_tracking_reconstruction_check(MovieTracking *tracking,
       BLI_strncpy_utf8(
           error_msg,
           N_("At least 8 common tracks on both keyframes are needed for reconstruction"),
-          error_size);
+          error_msg_maxncpy);
 
       return false;
     }
@@ -316,7 +316,7 @@ bool BKE_tracking_reconstruction_check(MovieTracking *tracking,
 
 #ifndef WITH_LIBMV
   BLI_strncpy_utf8(
-      error_msg, N_("Blender is compiled without motion tracking library"), error_size);
+      error_msg, N_("Blender is compiled without motion tracking library"), error_msg_maxncpy);
   return false;
 #endif
 
@@ -335,7 +335,7 @@ MovieReconstructContext *BKE_tracking_reconstruction_context_new(
   MovieReconstructContext *context = MEM_new_zeroed<MovieReconstructContext>(
       "MovieReconstructContext data");
   const float aspy = 1.0f / tracking->camera.pixel_aspect;
-  const int num_tracks = BLI_listbase_count(&tracking_object->tracks);
+  const int num_tracks = tracking_object->tracks.count();
   int sfra = INT_MAX, efra = INT_MIN;
 
   STRNCPY_UTF8(context->object_name, tracking_object->name);

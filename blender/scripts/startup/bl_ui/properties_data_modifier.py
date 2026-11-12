@@ -69,6 +69,7 @@ class DATA_PT_modifiers(ModifierButtonsPanel, Panel):
 class OBJECT_MT_modifier_add(ModifierAddMenu, Menu):
     bl_label = "Add Modifier"
     bl_options = {'SEARCH_ON_KEY_PRESS'}
+    bl_description = "Add a procedural operation/effect to the active object"
 
     def draw(self, context):
         layout = self.layout
@@ -77,8 +78,8 @@ class OBJECT_MT_modifier_add(ModifierAddMenu, Menu):
             return
         ob_type = ob.type
         geometry_nodes_supported = ob_type in {
-            'MESH', 'CURVE', 'CURVES',
-            'FONT', 'VOLUME', 'POINTCLOUD', 'GREASEPENCIL',
+            'EMPTY', 'MESH', 'CURVE', 'CURVES',
+            'FONT', 'VOLUME', 'POINTCLOUD', 'GREASEPENCIL'
         }
 
         if layout.operator_context == 'EXEC_REGION_WIN':

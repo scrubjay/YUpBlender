@@ -12,14 +12,15 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "DNA_anim_enums.h"
 #include "DNA_anim_types.h"
 #include "DNA_screen_types.h"
 #include "DNA_space_types.h"
 
 #include "BLI_bounds_types.hh"
-#include "BLI_listbase.h"
-#include "BLI_string_utf8.h"
-#include "BLI_utildefines.h"
+#include "BLI_listbase.hh"
+#include "BLI_string_utf8.hh"
+#include "BLI_utildefines.hh"
 
 #include "BLT_translation.hh"
 
@@ -117,7 +118,7 @@ static void nla_action_draw_keyframes(
 
   /* Count keys before drawing. */
   const ListBaseT<ActKeyColumn> *keys = ED_keylist_listbase(keylist);
-  uint key_len = BLI_listbase_count(keys);
+  uint key_len = keys->count();
 
   if (key_len > 0) {
     format = immVertexFormat();
@@ -169,7 +170,7 @@ static void nla_actionclip_draw_markers(
 {
   const bAction *act = strip->act;
 
-  if (ELEM(nullptr, act, act->markers.first)) {
+  if (ELEM(nullptr, act, act->markers.first_)) {
     return;
   }
 
@@ -192,7 +193,7 @@ static void nla_actionclip_draw_markers(
   }
   immUniformThemeColorShade(TH_STRIP_SELECT, shade);
 
-  immBeginAtMost(GPU_PRIM_LINES, BLI_listbase_count(&act->markers) * 2);
+  immBeginAtMost(GPU_PRIM_LINES, act->markers.count() * 2);
   for (TimeMarker &marker : act->markers) {
     if ((marker.frame > strip->actstart) && (marker.frame < strip->actend)) {
       float frame = nlastrip_get_frame(strip, marker.frame, NLATIME_CONVERT_MAP);
@@ -474,6 +475,8 @@ static void nla_draw_strip(SpaceNla *snla,
           immRectf(shdr_pos, strip->end, yminc, x2, ymaxc);
         }
         break;
+      case NLASTRIP_EXTEND_NOTHING:
+        break;
     }
 
     GPU_blend(GPU_BLEND_NONE);
@@ -579,11 +582,12 @@ static void nla_draw_strip(SpaceNla *snla,
   }
   /* or if meta-strip, draw lines delimiting extents of sub-strips
    * (in same color as outline, if more than 1 exists) */
-  else if ((strip->type == NLASTRIP_TYPE_META) && (strip->strips.first != strip->strips.last)) {
+  else if ((strip->type == NLASTRIP_TYPE_META) && (strip->strips.first() != strip->strips.last()))
+  {
     const float y = (ymaxc - yminc) * 0.5f + yminc;
 
     /* up to 2 lines per strip */
-    immBeginAtMost(GPU_PRIM_LINES, 4 * BLI_listbase_count(&strip->strips));
+    immBeginAtMost(GPU_PRIM_LINES, 4 * strip->strips.count());
 
     /* only draw first-level of child-strips, but don't draw any lines on the endpoints */
     for (NlaStrip &cs : strip->strips) {
@@ -701,7 +705,7 @@ static void nla_draw_strip_frames_text(
  */
 static ListBaseT<NlaStrip> get_visible_nla_strips(NlaTrack *nlt, View2D *v2d)
 {
-  if (BLI_listbase_is_empty(&nlt->strips)) {
+  if (nlt->strips.is_empty()) {
     ListBaseT<NlaStrip> empty = {nullptr, nullptr};
     return empty;
   }
@@ -742,8 +746,8 @@ static ListBaseT<NlaStrip> get_visible_nla_strips(NlaTrack *nlt, View2D *v2d)
      * if the view is adjacent to a strip that should have its extendmode
      * rendered.
      */
-    NlaStrip *first_strip = static_cast<NlaStrip *>(nlt->strips.first);
-    NlaStrip *last_strip = static_cast<NlaStrip *>(nlt->strips.last);
+    NlaStrip *first_strip = nlt->strips.first();
+    NlaStrip *last_strip = nlt->strips.last();
     if (first_strip && v2d->cur.xmax < first_strip->start &&
         first_strip->extendmode == NLASTRIP_EXTEND_HOLD)
     {
@@ -804,9 +808,7 @@ void draw_nla_main_data(bAnimContext *ac, SpaceNla *snla, ARegion *region)
   /* Loop through tracks, and set up drawing depending on their type. */
   float ymax = NLATRACK_FIRST_TOP(ac);
 
-  for (bAnimListElem *ale = static_cast<bAnimListElem *>(anim_data.first); ale;
-       ale = ale->next, ymax -= NLATRACK_STEP(snla))
-  {
+  for (bAnimListElem *ale = anim_data.first(); ale; ale = ale->next, ymax -= NLATRACK_STEP(snla)) {
     float ymin = ymax - NLATRACK_HEIGHT(snla);
     float ycenter = (ymax + ymin + 2 * NLATRACK_SKIP - 1) / 2.0f;
 
@@ -984,7 +986,7 @@ void draw_nla_track_list(const bContext *C,
     size_t track_index = 0;
     float ymax = NLATRACK_FIRST_TOP(ac);
 
-    for (bAnimListElem *ale = static_cast<bAnimListElem *>(anim_data.first); ale;
+    for (bAnimListElem *ale = anim_data.first(); ale;
          ale = ale->next, ymax -= NLATRACK_STEP(snla), track_index++)
     {
       float ymin = ymax - NLATRACK_HEIGHT(snla);
@@ -1007,7 +1009,7 @@ void draw_nla_track_list(const bContext *C,
     GPU_blend(GPU_BLEND_ALPHA);
 
     /* Loop through tracks, and set up drawing depending on their type. */
-    for (bAnimListElem *ale = static_cast<bAnimListElem *>(anim_data.first); ale;
+    for (bAnimListElem *ale = anim_data.first(); ale;
          ale = ale->next, ymax -= NLATRACK_STEP(snla), track_index++)
     {
       float ymin = ymax - NLATRACK_HEIGHT(snla);

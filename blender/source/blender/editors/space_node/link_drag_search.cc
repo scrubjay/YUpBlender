@@ -2,11 +2,15 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup spnode
+ */
+
 #include "AS_asset_library.hh"
 #include "AS_asset_representation.hh"
 
-#include "BLI_listbase.h"
-#include "BLI_string_utf8.h"
+#include "BLI_listbase.hh"
+#include "BLI_string_utf8.hh"
 
 #include "DNA_space_types.h"
 
@@ -78,18 +82,12 @@ static void add_reroute_node_fn(nodes::LinkSearchOpParams &params)
 {
   bNode &reroute = params.add_node("NodeReroute"_ustr);
   if (params.socket.in_out == SOCK_IN) {
-    bke::node_add_link(params.node_tree,
-                       reroute,
-                       *static_cast<bNodeSocket *>(reroute.outputs.first),
-                       params.node,
-                       params.socket);
+    bke::node_add_link(
+        params.node_tree, reroute, *reroute.outputs.first(), params.node, params.socket);
   }
   else {
-    bke::node_add_link(params.node_tree,
-                       params.node,
-                       params.socket,
-                       reroute,
-                       *static_cast<bNodeSocket *>(reroute.inputs.first));
+    bke::node_add_link(
+        params.node_tree, params.node, params.socket, reroute, *reroute.inputs.first());
   }
 }
 
@@ -98,6 +96,12 @@ static void add_group_input_node_fn(nodes::LinkSearchOpParams &params)
   /* Add a group input based on the connected socket, and add a new group input node. */
   bNodeTreeInterfaceSocket *socket_iface = bke::node_interface::add_interface_socket_from_node(
       params.node_tree, params.node, params.socket, params.socket.name);
+
+  params.node_tree.tree_interface.foreach_item([&](bNodeTreeInterfaceItem &item) {
+    item.set_selected(false);
+    return true;
+  });
+
   params.node_tree.tree_interface.active_item_set(&socket_iface->item);
 
   bNode &group_input = params.add_node("NodeGroupInput"_ustr);
@@ -109,7 +113,7 @@ static void add_group_input_node_fn(nodes::LinkSearchOpParams &params)
   for (bNode *node : params.node_tree.all_nodes()) {
     if (node->is_group_input()) {
       bNodeSocket *new_group_input_socket = bke::node_find_socket(
-          *node, SOCK_OUT, socket_iface->identifier);
+          *node, SOCK_OUT, UString(socket_iface->identifier));
       if (new_group_input_socket) {
         new_group_input_socket->flag |= SOCK_HIDDEN;
       }
@@ -121,7 +125,8 @@ static void add_group_input_node_fn(nodes::LinkSearchOpParams &params)
     socket.flag |= SOCK_HIDDEN;
   }
 
-  bNodeSocket *socket = bke::node_find_socket(group_input, SOCK_OUT, socket_iface->identifier);
+  bNodeSocket *socket = bke::node_find_socket(
+      group_input, SOCK_OUT, UString(socket_iface->identifier));
   if (socket) {
     /* Unhide the socket for the new input in the new node and make a connection to it. */
     socket->flag &= ~SOCK_HIDDEN;
@@ -146,7 +151,8 @@ static void add_existing_group_input_fn(nodes::LinkSearchOpParams &params,
     socket.flag |= SOCK_HIDDEN;
   }
 
-  bNodeSocket *socket = bke::node_find_socket(group_input, SOCK_OUT, interface_socket.identifier);
+  bNodeSocket *socket = bke::node_find_socket(
+      group_input, SOCK_OUT, UString(interface_socket.identifier));
   if (socket != nullptr) {
     socket->flag &= ~SOCK_HIDDEN;
     bke::node_add_link(params.node_tree, group_input, *socket, params.node, params.socket);
@@ -154,7 +160,7 @@ static void add_existing_group_input_fn(nodes::LinkSearchOpParams &params,
 }
 
 /**
- * \note This could use #search_link_ops_for_socket_templates, but we have to store the inputs and
+ * \note This could use #search_link_ops_for_declarations, but we have to store the inputs and
  * outputs as IDProperties for assets because of asset indexing, so that's all we have without
  * loading the file.
  */
@@ -164,6 +170,7 @@ static void search_link_ops_for_asset_metadata(const bNodeTree &node_tree,
                                                Vector<SocketLinkOperation> &search_link_ops)
 {
   const AssetMetaData &asset_data = asset.get_metadata();
+  const StringRef asset_name = asset.get_name();
   const IDProperty *tree_type = BKE_asset_metadata_idprop_find(&asset_data, "type");
   if (tree_type == nullptr || IDP_int_get(tree_type) != node_tree.type) {
     return;
@@ -176,8 +183,8 @@ static void search_link_ops_for_asset_metadata(const bNodeTree &node_tree,
   if (!properties || properties->type != IDP_GROUP) {
     return;
   }
-  const IDProperty *sockets = IDP_GetPropertyFromGroup(properties,
-                                                       in_out == SOCK_IN ? "inputs" : "outputs");
+  const IDProperty *sockets = IDP_GetPropertyFromGroup(
+      properties, in_out == SOCK_IN ? "inputs" : "output_sockets");
   if (!sockets || sockets->type != IDP_GROUP) {
     return;
   }
@@ -185,33 +192,32 @@ static void search_link_ops_for_asset_metadata(const bNodeTree &node_tree,
   int weight = -1;
   Set<StringRef> socket_names;
   for (IDProperty &socket_property : sockets->data.group) {
-    if (socket_property.type != IDP_STRING) {
+    if (socket_property.type != IDP_GROUP) {
       continue;
     }
-    const char *socket_idname = IDP_string_get(&socket_property);
-    const bke::bNodeSocketType *socket_type = bke::node_socket_type_find(socket_idname);
-    if (socket_type == nullptr) {
+    const std::optional<int> type = IDP_group_lookup_int(socket_property, "type");
+    if (!type) {
       continue;
     }
-    eNodeSocketDatatype from = eNodeSocketDatatype(socket.type);
-    eNodeSocketDatatype to = socket_type->type;
+    eNodeSocketDatatype from = socket.type;
+    eNodeSocketDatatype to = eNodeSocketDatatype(*type);
     if (socket.in_out == SOCK_OUT) {
       std::swap(from, to);
     }
     if (node_tree_type.validate_link && !node_tree_type.validate_link(from, to)) {
       continue;
     }
-    if (!socket_names.add(socket_property.name)) {
+    const StringRefNull identifier = socket_property.name;
+    const StringRefNull name =
+        IDP_group_lookup_string(socket_property, "name").value_or(identifier);
+    if (!socket_names.add(name)) {
       /* See comment in #search_link_ops_for_declarations. */
       continue;
     }
 
-    const StringRef asset_name = asset.get_name();
-    const StringRef socket_name = socket_property.name;
-
     search_link_ops.append(
-        {asset_name + " " + UI_MENU_ARROW_SEP + socket_name,
-         [&asset, &socket_property, in_out](nodes::LinkSearchOpParams &params) {
+        {asset_name + " " + UI_MENU_ARROW_SEP + name,
+         [&asset, name, in_out](nodes::LinkSearchOpParams &params) {
            Main &bmain = *CTX_data_main(&params.C);
 
            bNodeTree *group = reinterpret_cast<bNodeTree *>(
@@ -220,6 +226,8 @@ static void search_link_ops_for_asset_metadata(const bNodeTree &node_tree,
              return;
            }
            bNode &node = params.add_node(params.node_tree.typeinfo->group_idname);
+           STRNCPY_UTF8(node.name, BKE_id_name(group->id));
+           bke::node_unique_name(params.node_tree, node);
            node.id = &group->id;
            id_us_plus(node.id);
            BKE_ntree_update_tag_node_property(&params.node_tree, &node);
@@ -231,8 +239,7 @@ static void search_link_ops_for_asset_metadata(const bNodeTree &node_tree,
            /* Create the inputs and outputs on the new node. */
            nodes::update_node_declaration_and_sockets(params.node_tree, node);
 
-           bNodeSocket *new_node_socket = bke::node_find_enabled_socket(
-               node, in_out, socket_property.name);
+           bNodeSocket *new_node_socket = bke::node_find_enabled_socket(node, in_out, name);
            if (new_node_socket != nullptr) {
              /* Rely on the way #node_add_link switches in/out if necessary. */
              bke::node_add_link(
@@ -302,7 +309,7 @@ static void gather_socket_link_operations(const bContext &C,
 
     int weight = -1;
     node_tree.tree_interface.foreach_item([&](const bNodeTreeInterfaceItem &item) {
-      if (item.item_type != NODE_INTERFACE_SOCKET) {
+      if (item.item_type != NodeTreeInterfaceItemType::Socket) {
         return true;
       }
       const bNodeTreeInterfaceSocket &interface_socket =
@@ -319,12 +326,12 @@ static void gather_socket_link_operations(const bContext &C,
           return true;
         }
       }
-      search_link_ops.append({std::string(IFACE_("Group Input")) + " " + UI_MENU_ARROW_SEP +
-                                  (interface_socket.name ? interface_socket.name : ""),
-                              [interface_socket](nodes::LinkSearchOpParams &params) {
-                                add_existing_group_input_fn(params, interface_socket);
-                              },
-                              weight});
+      search_link_ops.append(
+          {std::string(IFACE_("Group Input")) + " " + UI_MENU_ARROW_SEP + interface_socket.name(),
+           [interface_socket](nodes::LinkSearchOpParams &params) {
+             add_existing_group_input_fn(params, interface_socket);
+           },
+           weight});
       weight--;
       return true;
     });
@@ -500,7 +507,7 @@ static bool link_drag_operation_test_poll(bContext *C)
     return false;
   }
   PointerRNA socket_ptr = CTX_data_pointer_get_type(C, "socket", RNA_NodeSocket);
-  if (!socket_ptr.data) {
+  if (!socket_ptr) {
     return false;
   }
   return true;
@@ -514,7 +521,7 @@ static wmOperatorStatus link_drag_operation_test_exec(bContext *C, wmOperator *o
   }
   bNodeTree &ntree = *snode.edittree;
   PointerRNA socket_ptr = CTX_data_pointer_get_type(C, "socket", RNA_NodeSocket);
-  if (!socket_ptr.data) {
+  if (!socket_ptr) {
     return OPERATOR_CANCELLED;
   }
   bNodeSocket &socket = *socket_ptr.data_as<bNodeSocket>();

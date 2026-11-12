@@ -33,12 +33,14 @@ HdCyclesPlugin::HdCyclesPlugin()
 
 HdCyclesPlugin::~HdCyclesPlugin() {}
 
-#if PXR_VERSION < 2302
-bool HdCyclesPlugin::IsSupported() const
+#if PXR_VERSION >= 2511
+bool HdCyclesPlugin::IsSupported(HdRendererCreateArgs const & /*rendererCreateArgs*/,
+                                 std::string * /*reasonWhyNot*/) const
 {
   return true;
 }
-#else
+#endif
+#if PXR_VERSION < 2608
 bool HdCyclesPlugin::IsSupported(bool /*gpuEnabled*/) const
 {
   return true;

@@ -2,8 +2,6 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
-#include "BLI_string_utf8.h"
-
 #include "UI_interface_layout.hh"
 #include "UI_resources.hh"
 
@@ -33,8 +31,9 @@ static void node_declare(NodeDeclarationBuilder &b)
 static void node_init(bNodeTree * /*ntree*/, bNode *node)
 {
   NodeConvertColorSpace *ncs = MEM_new<NodeConvertColorSpace>("node colorspace");
-  STRNCPY_UTF8(ncs->from_color_space, "scene_linear");
-  STRNCPY_UTF8(ncs->to_color_space, "scene_linear");
+  IMB_colormanagement_colorspace_name_set(
+      ncs->from_color_space, ncs->from_interop_id, "scene_linear");
+  IMB_colormanagement_colorspace_name_set(ncs->to_color_space, ncs->to_interop_id, "scene_linear");
   node->storage = ncs;
 }
 
@@ -62,6 +61,8 @@ class ConvertColorSpaceOperation : public NodeOperation {
 
   void execute() override
   {
+    BLI_SCOPED_DEFER([&]() { this->populate_meta_data(); });
+
     const Result &input_image = this->get_input("Image");
     if (this->is_identity()) {
       Result &output_image = this->get_result("Image");
@@ -70,15 +71,16 @@ class ConvertColorSpaceOperation : public NodeOperation {
     }
 
     if (input_image.is_single_value()) {
-      execute_single();
+      this->execute_single();
       return;
     }
+
     if (this->context().use_gpu()) {
-      execute_gpu();
+      this->execute_gpu();
+      return;
     }
-    else {
-      execute_cpu();
-    }
+
+    this->execute_cpu();
   }
 
   void execute_gpu()
@@ -157,6 +159,14 @@ class ConvertColorSpaceOperation : public NodeOperation {
     output_image.set_single_value(color);
   }
 
+  void populate_meta_data()
+  {
+    Result &output_image = this->get_result("Image");
+    if (IMB_colormanagement_space_name_is_data(node_storage(this->node()).to_color_space)) {
+      output_image.meta_data.is_non_color_data = true;
+    }
+  }
+
   bool is_identity()
   {
     const char *source = node_storage(node()).from_color_space;
@@ -191,12 +201,12 @@ static void node_register()
   ntype.nclass = NODE_CLASS_CONVERTER;
   ntype.declare = node_declare;
   ntype.draw_buttons = node_draw_buttons;
-  bke::node_type_size_preset(ntype, bke::eNodeSizePreset::Middle);
+  ntype.default_width = bke::NodeWidth::_160;
   ntype.initfunc = node_init;
   bke::node_type_storage(
       ntype, "NodeConvertColorSpace", node_free_standard_storage, node_copy_standard_storage);
   ntype.get_compositor_operation = get_compositor_operation;
-  bke::node_type_size(ntype, 160, 150, NODE_DEFAULT_MAX_WIDTH);
+  ntype.default_width = bke::NodeWidth::_160;
 
   bke::node_register_type(ntype);
 }

@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup nodes
+ */
+
 #pragma once
 
 #include <string>
@@ -50,6 +54,10 @@ void sync_sockets_closure(SpaceNode &snode,
                           bNode &closure_output_node,
                           ReportList *reports,
                           const bNodeSocket *src_closure_socket = nullptr);
+void sync_sockets_closure_to_list(SpaceNode &snode,
+                                  bNode &closure_to_list_node,
+                                  ReportList *reports,
+                                  const bNodeSocket *src_closure_socket = nullptr);
 
 }  // namespace nodes
 }  // namespace blender

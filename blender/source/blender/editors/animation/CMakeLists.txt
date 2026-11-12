@@ -19,6 +19,7 @@ set(SRC
   anim_asset_ops.cc
   anim_channels_defines.cc
   anim_channels_edit.cc
+  anim_convert.cc
   anim_deps.cc
   anim_draw.cc
   anim_filter.cc
@@ -35,6 +36,8 @@ set(SRC
   keyframing.cc
   keyingsets.cc
   time_scrub_ui.cc
+  transformable.cc
+  world_space_copy.cc
 
   anim_intern.hh
   keyframes_general_intern.hh
@@ -70,6 +73,7 @@ if(WITH_GTESTS)
     anim_filter_test.cc
     keyframes_general_test.cc
     keyframes_keylist_test.cc
+    transformable_test.cc
   )
   set(TEST_INC
   )

@@ -17,7 +17,7 @@
 
 #include "../generic/python_compat.hh" /* IWYU pragma: keep. */
 
-#include "BLI_utildefines.h"
+#include "BLI_utildefines.hh"
 
 #include "BPY_extern.hh"
 #include "bpy_app_translations.hh"
@@ -32,7 +32,7 @@
 #ifdef WITH_INTERNATIONAL
 #  include "BLI_map.hh"
 #  include "BLI_string_ref.hh"
-#  include "BLI_string_utf8.h"
+#  include "BLI_string_utf8.hh"
 #endif
 
 namespace blender {
@@ -299,7 +299,7 @@ std::optional<StringRefNull> BPY_app_translations_py_pgettext(const StringRef ms
 PyDoc_STRVAR(
     /* Wrap. */
     app_translations_py_messages_register_doc,
-    ".. method:: register(module_name, translations_dict)\n"
+    ".. function:: register(module_name, translations_dict)\n"
     "\n"
     "   Registers an addon's UI translations.\n"
     "\n"
@@ -322,7 +322,9 @@ static PyObject *app_translations_py_messages_register(BlenderAppTranslations *s
 
   if (!PyArg_ParseTupleAndKeywords(args,
                                    kw,
-                                   "O!O!:bpy.app.translations.register",
+                                   "O!" /* `module_name` */
+                                   "O!" /* `translations_dict` */
+                                   ":bpy.app.translations.register",
                                    (char **)kwlist,
                                    &PyUnicode_Type,
                                    &module_name,
@@ -358,7 +360,7 @@ static PyObject *app_translations_py_messages_register(BlenderAppTranslations *s
 PyDoc_STRVAR(
     /* Wrap. */
     app_translations_py_messages_unregister_doc,
-    ".. method:: unregister(module_name)\n"
+    ".. function:: unregister(module_name)\n"
     "\n"
     "   Unregisters an addon's UI translations.\n"
     "\n"
@@ -378,7 +380,8 @@ static PyObject *app_translations_py_messages_unregister(BlenderAppTranslations 
 
   if (!PyArg_ParseTupleAndKeywords(args,
                                    kw,
-                                   "O!:bpy.app.translations.unregister",
+                                   "O!" /* `module_name` */
+                                   ":bpy.app.translations.unregister",
                                    (char **)kwlist,
                                    &PyUnicode_Type,
                                    &module_name))
@@ -495,7 +498,9 @@ PyDoc_STRVAR(
     app_translations_locale_doc,
     "The actual locale currently in use (will always return an empty string when Blender "
     "is built without "
-    "internationalization support).");
+    "internationalization support).\n"
+    "\n"
+    ":type: str\n");
 static PyObject *app_translations_locale_get(PyObject * /*self*/, void * /*userdata*/)
 {
   return PyUnicode_FromString(BLT_lang_get());
@@ -505,7 +510,9 @@ static PyObject *app_translations_locale_get(PyObject * /*self*/, void * /*userd
 PyDoc_STRVAR(
     /* Wrap. */
     app_translations_locales_doc,
-    "All locales currently known by Blender (i.e. available as translations).");
+    "All locales currently known by Blender (i.e. available as translations).\n"
+    "\n"
+    ":type: list[str]\n");
 static PyObject *app_translations_locales_get(PyObject * /*self*/, void * /*userdata*/)
 {
   PyObject *ret;
@@ -549,9 +556,23 @@ static PyGetSetDef app_translations_getseters[] = {
     {nullptr},
 };
 
+/* Argument format for #_py_pgettext. */
+#ifdef WITH_INTERNATIONAL
+#  define PY_PGETTEXT_FORMAT \
+    "s" /* `msgid` */ \
+    "|" /* Optional arguments. */ \
+    "z" /* `msgctxt` */
+#else
+#  define PY_PGETTEXT_FORMAT \
+    "O" /* `msgid` */ \
+    "|" /* Optional arguments. */ \
+    "O" /* `msgctxt` */
+#endif
+
 /* pgettext helper. */
 static PyObject *_py_pgettext(PyObject *args,
                               PyObject *kw,
+                              const char *format,
                               const char *(*_pgettext)(const char *, const char *))
 {
   static const char *kwlist[] = {"msgid", "msgctxt", nullptr};
@@ -559,9 +580,7 @@ static PyObject *_py_pgettext(PyObject *args,
 #ifdef WITH_INTERNATIONAL
   char *msgid, *msgctxt = nullptr;
 
-  if (!PyArg_ParseTupleAndKeywords(
-          args, kw, "s|z:bpy.app.translations.pgettext", (char **)kwlist, &msgid, &msgctxt))
-  {
+  if (!PyArg_ParseTupleAndKeywords(args, kw, format, (char **)kwlist, &msgid, &msgctxt)) {
     return nullptr;
   }
 
@@ -570,12 +589,8 @@ static PyObject *_py_pgettext(PyObject *args,
   PyObject *msgid, *msgctxt;
   (void)_pgettext;
 
-  if (!PyArg_ParseTupleAndKeywords(args,
-                                   kw,
-                                   "O|O:bpy.app.translations.pgettext",
-                                   const_cast<char **>(kwlist),
-                                   &msgid,
-                                   &msgctxt))
+  if (!PyArg_ParseTupleAndKeywords(
+          args, kw, format, const_cast<char **>(kwlist), &msgid, &msgctxt))
   {
     return nullptr;
   }
@@ -587,7 +602,7 @@ static PyObject *_py_pgettext(PyObject *args,
 PyDoc_STRVAR(
     /* Wrap. */
     app_translations_pgettext_doc,
-    ".. method:: pgettext(msgid, msgctxt=None)\n"
+    ".. function:: pgettext(msgid, msgctxt=None)\n"
     "\n"
     "   Try to translate the given msgid (with optional msgctxt).\n"
     "\n"
@@ -619,13 +634,13 @@ static PyObject *app_translations_pgettext(BlenderAppTranslations * /*self*/,
                                            PyObject *args,
                                            PyObject *kw)
 {
-  return _py_pgettext(args, kw, BLT_pgettext);
+  return _py_pgettext(args, kw, PY_PGETTEXT_FORMAT ":bpy.app.translations.pgettext", BLT_pgettext);
 }
 
 PyDoc_STRVAR(
     /* Wrap. */
     app_translations_pgettext_n_doc,
-    ".. method:: pgettext_n(msgid, msgctxt=None)\n"
+    ".. function:: pgettext_n(msgid, msgctxt=None)\n"
     "\n"
     "   Extract the given msgid to translation files. This is a no-op function that will "
     "only mark the string to extract, but not perform the actual translation.\n"
@@ -650,7 +665,10 @@ static PyObject *app_translations_pgettext_n(BlenderAppTranslations * /*self*/,
 
   if (!PyArg_ParseTupleAndKeywords(args,
                                    kw,
-                                   "O|O:bpy.app.translations.pgettext",
+                                   "O" /* `msgid` */
+                                   "|" /* Optional arguments. */
+                                   "O" /* `msgctxt` */
+                                   ":bpy.app.translations.pgettext_n",
                                    const_cast<char **>(kwlist),
                                    &msgid,
                                    &msgctxt))
@@ -664,7 +682,7 @@ static PyObject *app_translations_pgettext_n(BlenderAppTranslations * /*self*/,
 PyDoc_STRVAR(
     /* Wrap. */
     app_translations_pgettext_iface_doc,
-    ".. method:: pgettext_iface(msgid, msgctxt=None)\n"
+    ".. function:: pgettext_iface(msgid, msgctxt=None)\n"
     "\n"
     "   Try to translate the given msgid (with optional msgctxt), if labels' translation "
     "is enabled.\n"
@@ -683,13 +701,14 @@ static PyObject *app_translations_pgettext_iface(BlenderAppTranslations * /*self
                                                  PyObject *args,
                                                  PyObject *kw)
 {
-  return _py_pgettext(args, kw, BLT_translate_do_iface);
+  return _py_pgettext(
+      args, kw, PY_PGETTEXT_FORMAT ":bpy.app.translations.pgettext_iface", BLT_translate_do_iface);
 }
 
 PyDoc_STRVAR(
     /* Wrap. */
     app_translations_pgettext_tip_doc,
-    ".. method:: pgettext_tip(msgid, msgctxt=None)\n"
+    ".. function:: pgettext_tip(msgid, msgctxt=None)\n"
     "\n"
     "   Try to translate the given msgid (with optional msgctxt), if tooltips' "
     "translation is enabled.\n"
@@ -708,13 +727,14 @@ static PyObject *app_translations_pgettext_tip(BlenderAppTranslations * /*self*/
                                                PyObject *args,
                                                PyObject *kw)
 {
-  return _py_pgettext(args, kw, BLT_translate_do_tooltip);
+  return _py_pgettext(
+      args, kw, PY_PGETTEXT_FORMAT ":bpy.app.translations.pgettext_tip", BLT_translate_do_tooltip);
 }
 
 PyDoc_STRVAR(
     /* Wrap. */
     app_translations_pgettext_rpt_doc,
-    ".. method:: pgettext_rpt(msgid, msgctxt=None)\n"
+    ".. function:: pgettext_rpt(msgid, msgctxt=None)\n"
     "\n"
     "   Try to translate the given msgid (with optional msgctxt), if reports' translation "
     "is enabled.\n"
@@ -733,13 +753,14 @@ static PyObject *app_translations_pgettext_rpt(BlenderAppTranslations * /*self*/
                                                PyObject *args,
                                                PyObject *kw)
 {
-  return _py_pgettext(args, kw, BLT_translate_do_report);
+  return _py_pgettext(
+      args, kw, PY_PGETTEXT_FORMAT ":bpy.app.translations.pgettext_rpt", BLT_translate_do_report);
 }
 
 PyDoc_STRVAR(
     /* Wrap. */
     app_translations_pgettext_data_doc,
-    ".. method:: pgettext_data(msgid, msgctxt=None)\n"
+    ".. function:: pgettext_data(msgid, msgctxt=None)\n"
     "\n"
     "   Try to translate the given msgid (with optional msgctxt), if new data name's "
     "translation is enabled.\n"
@@ -758,13 +779,16 @@ static PyObject *app_translations_pgettext_data(BlenderAppTranslations * /*self*
                                                 PyObject *args,
                                                 PyObject *kw)
 {
-  return _py_pgettext(args, kw, BLT_translate_do_new_dataname);
+  return _py_pgettext(args,
+                      kw,
+                      PY_PGETTEXT_FORMAT ":bpy.app.translations.pgettext_data",
+                      BLT_translate_do_new_dataname);
 }
 
 PyDoc_STRVAR(
     /* Wrap. */
     app_translations_locale_explode_doc,
-    ".. method:: locale_explode(locale)\n"
+    ".. function:: locale_explode(locale)\n"
     "\n"
     "   Return all components and their combinations of the given ISO locale string.\n"
     "\n"
@@ -787,8 +811,12 @@ static PyObject *app_translations_locale_explode(BlenderAppTranslations * /*self
   const char *locale;
   char *language, *country, *variant, *language_country, *language_variant;
 
-  if (!PyArg_ParseTupleAndKeywords(
-          args, kw, "s:bpy.app.translations.locale_explode", const_cast<char **>(kwlist), &locale))
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kw,
+                                   "s" /* `locale` */
+                                   ":bpy.app.translations.locale_explode",
+                                   const_cast<char **>(kwlist),
+                                   &locale))
   {
     return nullptr;
   }

@@ -114,7 +114,7 @@ PyDoc_STRVAR(
     "   Returns the FEdge that lies between this 0D element and the 0D\n"
     "   element given as the argument.\n"
     "\n"
-    "   :arg inter: A 0D element.\n"
+    "   :param inter: A 0D element.\n"
     "   :type inter: :class:`Interface0D`\n"
     "   :return: The FEdge lying between the two 0D elements.\n"
     "   :rtype: :class:`FEdge`\n");
@@ -123,7 +123,13 @@ static PyObject *Interface0D_get_fedge(BPy_Interface0D *self, PyObject *args, Py
   static const char *kwlist[] = {"inter", nullptr};
   PyObject *py_if0D;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!", (char **)kwlist, &Interface0D_Type, &py_if0D))
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "O!" /* `inter` */
+                                   ":get_fedge",
+                                   (char **)kwlist,
+                                   &Interface0D_Type,
+                                   &py_if0D))
   {
     return nullptr;
   }

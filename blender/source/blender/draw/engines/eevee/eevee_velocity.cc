@@ -158,6 +158,8 @@ bool VelocityModule::step_object_sync(const ObjectHandle &ob_handle,
         case OB_MESH:
           data.pos_buf = DRW_cache_mesh_surface_get(ob_handle.object);
           break;
+        default:
+          break;
       }
       return data;
     };
@@ -176,7 +178,13 @@ bool VelocityModule::step_object_sync(const ObjectHandle &ob_handle,
      * We live with that until we have a correct way of identifying new objects. */
     VelocityObjectData &vel = velocity_map.lookup_or_add_default(ObjectKey(ob_handle, i));
     vel.obj.ofs[step_] = object_steps_usage[step_]++;
-    vel.obj.resource_index = ob_handle.res_handle.sub_handle(i).index();
+    if (ob_handle.res_handle.is_valid()) {
+      vel.obj.resource_index = ob_handle.res_handle.sub_handle(i).index();
+    }
+    else {
+      /* Called from `step_object_sync_render`. */
+      vel.obj.resource_index = 0;
+    }
     vel.id = velocity_id;
     object_steps[step_]->get_or_resize(vel.obj.ofs[step_]) = ob_handle.object_to_world(i);
     if (step_ == STEP_CURRENT) {

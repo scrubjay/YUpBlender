@@ -9,14 +9,14 @@
 #include <cstdlib>
 #include <cstring>
 
-#include "BLI_fnmatch.h"
+#include "BLI_fnmatch.hh"
 #include "BLI_function_ref.hh"
-#include "BLI_listbase.h"
-#include "BLI_math_base.h"
-#include "BLI_string.h"
+#include "BLI_listbase.hh"
+#include "BLI_math_base_c.hh"
+#include "BLI_string.hh"
 #include "BLI_string_ref.hh"
-#include "BLI_string_utf8.h"
-#include "BLI_utildefines.h"
+#include "BLI_string_utf8.hh"
+#include "BLI_utildefines.hh"
 #include "BLI_vector.hh"
 
 #include "BKE_screen.hh"
@@ -373,13 +373,13 @@ static bool template_uilist_data_retrieve(const StringRef listtype_name,
     return false;
   }
 
-  if (!active_dataptr->data) {
+  if (!*active_dataptr) {
     RNA_warning("No active data");
     return false;
   }
 
   r_input_data->dataptr = *dataptr;
-  if (dataptr->data) {
+  if (*dataptr) {
     r_input_data->prop = RNA_struct_find_property(dataptr, propname.c_str());
     if (!r_input_data->prop) {
       RNA_warning(
@@ -496,7 +496,7 @@ static void template_uilist_collect_display_items(const bContext *C,
   uiListDyn *dyn_data = ui_list->dyn_data;
 
   /* Filter list items! (not for compact layout, though) */
-  if (input_data->dataptr.data && input_data->prop) {
+  if (input_data->dataptr && input_data->prop) {
     int items_shown;
 #if 0
     int prev_ii = -1, prev_i;
@@ -600,7 +600,7 @@ static void uilist_resize_update(bContext *C, uiList *ui_list)
 
 static void *uilist_item_use_dynamic_tooltip(PointerRNA *itemptr, const char *propname)
 {
-  if (propname && propname[0] && itemptr && itemptr->data) {
+  if (propname && propname[0] && itemptr && *itemptr) {
     PropertyRNA *prop = RNA_struct_find_property(itemptr, propname);
 
     if (prop && (RNA_property_type(prop) == PROP_STRING)) {
@@ -627,7 +627,7 @@ static std::string uilist_item_tooltip_func(bContext * /*C*/, void *argN, const 
 static uiList *uilist_ensure(const bContext *C,
                              uiListType *ui_list_type,
                              const char *list_id,
-                             int layout_type,
+                             euiList_LayoutType layout_type,
                              bool sort_reverse,
                              bool sort_lock)
 {
@@ -697,7 +697,7 @@ static void template_uilist_layout_draw(const bContext *C,
   Block *block = layout.block();
 
   /* get icon */
-  if (input_data->dataptr.data && input_data->prop) {
+  if (input_data->dataptr && input_data->prop) {
     StructRNA *ptype = RNA_property_pointer_type(&input_data->dataptr, input_data->prop);
     rnaicon = RNA_struct_ui_icon(ptype);
   }
@@ -716,7 +716,7 @@ static void template_uilist_layout_draw(const bContext *C,
       uilist_prepare(ui_list, items, &adjusted_layout_data, &visual_info);
 
       int i = 0;
-      if (input_data->dataptr.data && input_data->prop) {
+      if (input_data->dataptr && input_data->prop) {
 
         const bool editable = (RNA_property_flag(input_data->prop) & PROP_EDITABLE);
 
@@ -799,7 +799,7 @@ static void template_uilist_layout_draw(const bContext *C,
       /* Add scroll-bar. */
       if (items->item_vec.size() > visual_info.visual_items) {
         row->column(false);
-        but = uiDefButI(block,
+        but = uiDefButV(block,
                         ButtonType::Scroll,
                         "",
                         0,
@@ -818,7 +818,7 @@ static void template_uilist_layout_draw(const bContext *C,
     case UILST_LAYOUT_COMPACT:
       row = &layout.row(true);
 
-      if ((input_data->dataptr.data && input_data->prop) && (dyn_data->items_shown > 0) &&
+      if ((input_data->dataptr && input_data->prop) && (dyn_data->items_shown > 0) &&
           (items->active_item_idx >= 0) && (items->active_item_idx < dyn_data->items_shown))
       {
         PointerRNA *itemptr = &items->item_vec[items->active_item_idx].item;
@@ -890,22 +890,22 @@ static void template_uilist_layout_draw(const bContext *C,
     block_emboss_set(subblock, EmbossType::None);
 
     if (ui_list->filter_flag & UILST_FLT_SHOW) {
-      but = uiDefIconButBitI(subblock,
-                             ButtonType::Toggle,
-                             UILST_FLT_SHOW,
-                             ICON_DISCLOSURE_TRI_DOWN,
-                             0,
-                             0,
-                             UI_UNIT_X,
-                             UI_UNIT_Y * 0.5f,
-                             &(ui_list->filter_flag),
-                             0,
-                             0,
-                             TIP_("Hide filtering options"));
+      but = uiDefIconButBit(subblock,
+                            ButtonType::Toggle,
+                            UILST_FLT_SHOW,
+                            ICON_DISCLOSURE_TRI_DOWN,
+                            0,
+                            0,
+                            UI_UNIT_X,
+                            UI_UNIT_Y * 0.5f,
+                            &ui_list->filter_flag,
+                            0,
+                            0,
+                            TIP_("Hide filtering options"));
       button_flag_disable(but, BUT_UNDO); /* skip undo on screen buttons */
 
       if (add_grip_but) {
-        but = uiDefIconButI(subblock,
+        but = uiDefIconButV(subblock,
                             ButtonType::Grip,
                             ICON_GRIP,
                             0,
@@ -938,22 +938,22 @@ static void template_uilist_layout_draw(const bContext *C,
       layout_data->draw_filter(ui_list, C, *col);
     }
     else {
-      but = uiDefIconButBitI(subblock,
-                             ButtonType::Toggle,
-                             UILST_FLT_SHOW,
-                             ICON_DISCLOSURE_TRI_RIGHT,
-                             0,
-                             0,
-                             UI_UNIT_X,
-                             UI_UNIT_Y * 0.5f,
-                             &(ui_list->filter_flag),
-                             0,
-                             0,
-                             TIP_("Show filtering options"));
+      but = uiDefIconButBit(subblock,
+                            ButtonType::Toggle,
+                            UILST_FLT_SHOW,
+                            ICON_DISCLOSURE_TRI_RIGHT,
+                            0,
+                            0,
+                            UI_UNIT_X,
+                            UI_UNIT_Y * 0.5f,
+                            &ui_list->filter_flag,
+                            0,
+                            0,
+                            TIP_("Show filtering options"));
       button_flag_disable(but, BUT_UNDO); /* skip undo on screen buttons */
 
       if (add_grip_but) {
-        but = uiDefIconButI(subblock,
+        but = uiDefIconButV(subblock,
                             ButtonType::Grip,
                             ICON_GRIP,
                             0,
@@ -1011,7 +1011,7 @@ void template_uilist(Layout *layout,
   uiList *ui_list = uilist_ensure(C,
                                   ui_list_type,
                                   list_id,
-                                  layout_type,
+                                  euiList_LayoutType(layout_type),
                                   flags & TEMPLATE_LIST_SORT_REVERSE,
                                   flags & TEMPLATE_LIST_SORT_LOCK);
 
@@ -1034,7 +1034,6 @@ void template_uilist(Layout *layout,
 }
 
 /* -------------------------------------------------------------------- */
-
 /** \name List-types Registration
  * \{ */
 

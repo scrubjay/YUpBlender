@@ -11,28 +11,29 @@ CCL_NAMESPACE_BEGIN
 
 /* Light Path Node */
 
-template<uint node_feature_mask, typename ConstIntegratorGenericState>
+template<uint64_t node_feature_mask, typename ConstIntegratorGenericState>
 ccl_device_noinline void svm_node_light_path(KernelGlobals kg,
                                              ConstIntegratorGenericState state,
                                              const ccl_private ShaderData *sd,
                                              ccl_private float *ccl_restrict stack,
                                              const ccl_global SVMNodeLightPath &ccl_restrict node,
+                                             const PathRayVisibility path_visibility,
                                              const uint32_t path_flag)
 {
   float info = 0.0f;
 
   switch (node.path_type) {
     case NODE_LP_camera:
-      info = (path_flag & PATH_RAY_CAMERA) ? 1.0f : 0.0f;
+      info = (path_visibility & PATH_RAY_VISIBILITY_CAMERA) ? 1.0f : 0.0f;
       break;
     case NODE_LP_shadow:
-      info = (path_flag & PATH_RAY_SHADOW) ? 1.0f : 0.0f;
+      info = (path_visibility & PATH_RAY_VISIBILITY_SHADOW) ? 1.0f : 0.0f;
       break;
     case NODE_LP_diffuse:
-      info = (path_flag & PATH_RAY_DIFFUSE) ? 1.0f : 0.0f;
+      info = (path_visibility & PATH_RAY_VISIBILITY_DIFFUSE) ? 1.0f : 0.0f;
       break;
     case NODE_LP_glossy:
-      info = (path_flag & PATH_RAY_GLOSSY) ? 1.0f : 0.0f;
+      info = (path_visibility & PATH_RAY_VISIBILITY_GLOSSY) ? 1.0f : 0.0f;
       break;
     case NODE_LP_singular:
       info = (path_flag & PATH_RAY_SINGULAR) ? 1.0f : 0.0f;
@@ -41,13 +42,13 @@ ccl_device_noinline void svm_node_light_path(KernelGlobals kg,
       info = (path_flag & PATH_RAY_REFLECT) ? 1.0f : 0.0f;
       break;
     case NODE_LP_transmission:
-      info = (path_flag & PATH_RAY_TRANSMIT) ? 1.0f : 0.0f;
+      info = (path_visibility & PATH_RAY_VISIBILITY_TRANSMIT) ? 1.0f : 0.0f;
       break;
     case NODE_LP_volume_scatter:
-      info = (path_flag & PATH_RAY_VOLUME_SCATTER) ? 1.0f : 0.0f;
+      info = (path_visibility & PATH_RAY_VISIBILITY_VOLUME_SCATTER) ? 1.0f : 0.0f;
       break;
     case NODE_LP_backfacing:
-      info = (sd->flag & SD_BACKFACING) ? 1.0f : 0.0f;
+      info = (sd->runtime_flag & SR_BACKFACING) ? 1.0f : 0.0f;
       break;
     case NODE_LP_ray_length:
       info = sd->ray_length;
@@ -56,46 +57,40 @@ ccl_device_noinline void svm_node_light_path(KernelGlobals kg,
       /* Read bounce from different locations depending on if this is a shadow
        * path. It's a bit dubious to have integrate state details leak into
        * this function but hard to avoid currently. */
-      IF_KERNEL_NODES_FEATURE(LIGHT_PATH)
-      {
+      IF_KERNEL_NODES_FEATURE (LIGHT_PATH) {
         info = (float)integrator_state_bounce(state, path_flag);
       }
 
       /* For background, light emission and shadow evaluation from a
        * surface or volume we are effectively one bounce further. */
-      if (path_flag & (PATH_RAY_SHADOW | PATH_RAY_EMISSION)) {
+      if ((path_visibility & PATH_RAY_VISIBILITY_SHADOW) || (path_flag & PATH_RAY_EMISSION)) {
         info += 1.0f;
       }
       break;
     }
     case NODE_LP_ray_transparent: {
-      IF_KERNEL_NODES_FEATURE(LIGHT_PATH)
-      {
+      IF_KERNEL_NODES_FEATURE (LIGHT_PATH) {
         info = (float)integrator_state_transparent_bounce(state, path_flag);
       }
       break;
     }
     case NODE_LP_ray_diffuse:
-      IF_KERNEL_NODES_FEATURE(LIGHT_PATH)
-      {
+      IF_KERNEL_NODES_FEATURE (LIGHT_PATH) {
         info = (float)integrator_state_diffuse_bounce(state, path_flag);
       }
       break;
     case NODE_LP_ray_glossy:
-      IF_KERNEL_NODES_FEATURE(LIGHT_PATH)
-      {
+      IF_KERNEL_NODES_FEATURE (LIGHT_PATH) {
         info = (float)integrator_state_glossy_bounce(state, path_flag);
       }
       break;
     case NODE_LP_ray_transmission:
-      IF_KERNEL_NODES_FEATURE(LIGHT_PATH)
-      {
+      IF_KERNEL_NODES_FEATURE (LIGHT_PATH) {
         info = (float)integrator_state_transmission_bounce(state, path_flag);
       }
       break;
     case NODE_LP_ray_portal:
-      IF_KERNEL_NODES_FEATURE(LIGHT_PATH)
-      {
+      IF_KERNEL_NODES_FEATURE (LIGHT_PATH) {
         info = (float)integrator_state_portal_bounce(kg, state, path_flag);
       }
       break;

@@ -27,21 +27,27 @@ PyDoc_STRVAR(
     "\n"
     "   Builds a SamplingShader object.\n"
     "\n"
-    "   :arg sampling: The sampling to use for the stroke resampling.\n"
+    "   :param sampling: The sampling to use for the stroke resampling.\n"
     "   :type sampling: float\n"
     "\n"
     ".. method:: shade(stroke)\n"
     "\n"
     "   Resamples the stroke.\n"
     "\n"
-    "   :arg stroke: A Stroke object.\n"
+    "   :param stroke: A Stroke object.\n"
     "   :type stroke: :class:`freestyle.types.Stroke`\n");
 static int SamplingShader___init__(BPy_SamplingShader *self, PyObject *args, PyObject *kwds)
 {
   static const char *kwlist[] = {"sampling", nullptr};
   float f;
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "f", (char **)kwlist, &f)) {
+  if (!PyArg_ParseTupleAndKeywords(args,
+                                   kwds,
+                                   "f" /* `sampling` */
+                                   ":__init__",
+                                   (char **)kwlist,
+                                   &f))
+  {
     return -1;
   }
   self->py_ss.ss = new StrokeShaders::SamplingShader(f);
